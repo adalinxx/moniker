@@ -37,8 +37,15 @@ An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
 One import, no key handling: reads come from Moniker's nodes and are checked by
 CID; writes go to the person's Lattice Wallet, which shows and signs them.
 
+Import a release, never the live site: code your users run should change only
+when you choose to upgrade. A tag through jsDelivr's GitHub mirror is fixed
+(`@v0.1.0`; a commit hash pins harder still), or vendor a copy of `lib/`,
+`client/` and `app/vendor/` and review upgrades like any dependency.
+`https://adalinxx.github.io/moniker/lib/browser.mjs` follows `main` and is for
+trying things out.
+
 ```js
-import { createMoniker, defineMonikerName } from "https://adalinxx.github.io/moniker/lib/browser.mjs";
+import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker@v0.1.0/lib/browser.mjs";
 
 const moniker = createMoniker();                 // testnet trial by default; or { nodes, chain }
 const p = await moniker.profile(address);        // { address, name?, description?, avatar?, url?, handle?, links? }
