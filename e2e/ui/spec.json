@@ -1,0 +1,18 @@
+{
+  "maxNumberOfTransactionsPerBlock": 1000,
+  "maxStateGrowth": 1000000,
+  "maxBlockSize": 1000000,
+  "premine": 0,
+  "targetBlockTime": 2000,
+  "initialReward": 1000,
+  "halvingInterval": 1000000,
+  "halfLife": 100,
+  "wasmPolicies": [
+    {
+      "moduleCID": "bafyreihbwjt5uuw2se5rcc4hdmbooo7wcixzsfg6geddutb6rgmbzaenxe",
+      "abiVersion": 1,
+      "scope": "transaction",
+      "entrypoint": "lattice_validate_transaction"
+    }
+  ]
+}

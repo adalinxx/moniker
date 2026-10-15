@@ -32,6 +32,33 @@ account address, optionally with an asking price.
 An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
 `handle: "h"` and `name/h` is held by `<a>`.
 
+## The app
+
+`app/` is a static page: one page per account, like a link page (photo,
+name, `@handle`, bio, a stack of links), plus Edit and Handles. It reads every
+record by CID from the nodes in Settings (by default the shared testnet hosts
+`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
+and asks the Lattice Wallet extension to approve each write: a save is one
+transaction, a buy pays the holder in the same one. Reading needs no wallet.
+A photo is kept by your own node: set its URL and cookie in Settings (the node
+must list the page's origin in `rpcAllowedOrigins`). Fonts ship in
+`app/fonts/` (SIL Open Font License) and the SDK in `app/vendor/` (see Stoa's
+`app/vendor/README.md` for the bundle command).
+
+```sh
+python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/
+```
+
+`e2e/ui/` runs the page in headless Chromium with the real wallet extension
+against a private stack:
+
+```sh
+cd e2e/ui && npm install
+LATTICE=<lattice-node>/.build/debug/lattice \
+  LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
+  LATTICE_WALLET=<lattice-wallet>/dist npm test
+```
+
 ## Layout
 
 - `rules/`: `lattice-policy-rules`, the parts Lattice policies share: reading
