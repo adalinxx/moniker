@@ -9,7 +9,7 @@ Any app reads and writes it; no app keeps its own profile.
 | --- | --- | --- |
 | `user/<a>/profile` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url`, `handle`; all optional strings | `<a>` |
 | `user/<a>/com.github`, `com.twitter`, … | A linked account's name, as the owner states it | `<a>` |
-| `user/<a>/key.x25519` | A public encryption key | `<a>` |
+| `user/<a>/key.x25519` | A public encryption key the owner manages directly (a key an app derives for its own origin goes under `app.<name>.*`, e.g. Fanfare's `app.fanfare.x25519`) | `<a>` |
 | `user/<a>/app.<name>.<field>` | An app's own data | `<a>` |
 | `name/<handle>` | `<holder>` or `<holder>@<price>` | see below |
 
