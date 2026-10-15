@@ -19,6 +19,7 @@ import { mediaVolume, operator, readMedia } from "../client/media.mjs";
 import * as profile from "../client/profile.mjs";
 import { chainSpec, tip, view, volumeLoader } from "../client/state.mjs";
 import * as wallet from "../client/wallet.mjs";
+import { createMoniker } from "../lib/index.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
@@ -206,6 +207,34 @@ try {
   await until("Alice holds @alice again", async () => (await shown(alice)) === "alice");
   assert.equal(await shown(bob), undefined);
   console.log(`Bob released @alice and Alice claimed it again; her card shows it once more`);
+
+  // The library, as another app uses it: reads, and writes through a wallet.
+  const moniker = createMoniker({ sdk, nodes: [node], chain: CHAIN, freshFor: 0 });
+  /** A stand-in for window.lattice holding `who`'s key: it signs what a wallet would. */
+  const walletOf = (who) => ({
+    address: async () => who.address,
+    connect: async () => who.address,
+    async writeRecords(request) {
+      const payments = (request.payments ?? []).map(({ to, amount }) => ({ to, amount: BigInt(amount) }));
+      const body = wallet.transaction({ owner: who.address, actions: request.actions, payments, fee: BigInt(request.fee), nonce: await nonce(who), chainPath: request.chainPath });
+      const result = await submit(who, body);
+      if (!result.ok) throw new Error(`refused: ${result.text}`);
+      return JSON.parse(result.text);
+    },
+  });
+  assert.equal(await moniker.resolve("@alice"), alice.address);
+  assert.equal((await moniker.profile(alice.address)).name, "Alice");
+  assert.deepEqual((await moniker.profiles([bob.address, alice.address])).map((p) => p.handle), [undefined, "alice"]);
+  assert.equal(moniker.label(await moniker.profile(bob.address)), "Bob");
+  await moniker.save({ name: "Bob B.", links: [{ label: "Bob's site", url: "https://bob.example" }] }, { wallet: walletOf(bob) });
+  await until("Bob's save through the library", async () => (await moniker.profile(bob.address)).name === "Bob B.");
+  assert.deepEqual((await moniker.profile(bob.address)).links, [{ label: "Bob's site", url: "https://bob.example" }]);
+  await moniker.sell("@alice", 7n, { wallet: walletOf(alice) });
+  await until("the library's listing", async () => (await moniker.forSale()).some((e) => e.handle === "alice" && e.price === 7n));
+  await moniker.buy("alice", { wallet: walletOf(bob) });
+  await until("the library's buy", async () => (await moniker.resolve("alice")) === bob.address);
+  await assert.rejects(moniker.save({ name: "x" }, {}), /needs the Lattice Wallet/);
+  console.log("the library reads profiles and handles, saves a card, and sells and buys a handle through a wallet");
 } finally {
   try { lattice("mine", "stop"); } catch {}
   try { lattice("down"); } catch {}

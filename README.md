@@ -32,6 +32,39 @@ account address, optionally with an asking price.
 An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
 `handle: "h"` and `name/h` is held by `<a>`.
 
+## Use Moniker in your app
+
+One import, no key handling: reads come from Moniker's nodes and are checked by
+CID; writes go to the person's Lattice Wallet, which shows and signs them.
+
+```js
+import { createMoniker, defineMonikerName } from "https://adalinxx.github.io/moniker/lib/browser.mjs";
+
+const moniker = createMoniker();                 // testnet trial by default; or { nodes, chain }
+const p = await moniker.profile(address);        // { address, name?, description?, avatar?, url?, handle?, links? }
+const people = await moniker.profiles(authors);  // a feed's bylines, in order, from one read
+const who = await moniker.resolve("@alice");     // the holder's address, or undefined
+img.src = await moniker.photo(p.avatar);         // an object URL, or null
+moniker.label(p);                                // name, else @handle, else a short address
+moniker.pageURL(address);                        // their Moniker page
+
+const wallet = window.lattice;                   // the Lattice Wallet extension
+await moniker.save({ name: "Alice", links: [{ label: "Site", url: "https://alice.example" }] }, { wallet });
+await moniker.setField("app.myapp.theme", "dark", { wallet });
+await moniker.claim("alice", { wallet });        // also sell, unlist, buy, give, release
+
+defineMonikerName(moniker);                      // <moniker-name address="bafyrei…" size="24"></moniker-name>
+```
+
+`save` keeps card fields it does not know and retries when another app saved
+the card first. Store your app's own data in fields named `app.<your app>.*`.
+`<moniker-name>` shows the photo, name and `@handle`, linked to the page
+(`plain` drops the link); restyle it with `--moniker-ink`, `--moniker-muted`,
+`--moniker-accent` and `--moniker-avatar`. See `lib/demo.html`.
+
+In Node or a bundler, import `lib/index.mjs` and pass the SDK:
+`createMoniker({ sdk })`.
+
 ## The app
 
 `app/` is a static page: one page per account, like a link page (photo,
@@ -69,7 +102,8 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 - `client/`: `profile.mjs` (reads and writes), `state.mjs` (reads state by
   descending the trie, checked by CID), `media.mjs`, `wallet.mjs` (the request
   the Lattice wallet signs).
-- `e2e/moniker.mjs`: the whole flow against a real node.
+- `lib/`: the library for other apps (`index.mjs`, `browser.mjs`, the `<moniker-name>` element, `demo.html`).
+- `e2e/moniker.mjs`: the whole flow against a real node, the library included.
 
 ## Build and test
 
