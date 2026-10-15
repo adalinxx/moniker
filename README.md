@@ -7,15 +7,15 @@ Any app reads and writes it; no app keeps its own profile.
 
 | Key | Value | Who may write |
 | --- | --- | --- |
-| `user/<a>/profile` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url`, `handle`; all optional strings | `<a>` |
-| `user/<a>/com.github`, `com.twitter`, … | A linked account's name, as the owner states it | `<a>` |
+| `user/<a>/profile` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url`, `handle` (strings) and `links` (`[{ label, url }]`, in order); all optional | `<a>` |
 | `user/<a>/key.x25519` | A public encryption key the owner manages directly (a key an app derives for its own origin goes under `app.<name>.*`, e.g. Fanfare's `app.fanfare.x25519`) | `<a>` |
 | `user/<a>/app.<name>.<field>` | An app's own data | `<a>` |
 | `name/<handle>` | `<holder>` or `<holder>@<price>` | see below |
 
 The card holds what a feed shows, so one read is enough per author. A card
 may carry fields this list does not name; clients keep them when they save.
-Display names are not unique. Media is a CID of a one-block Volume
+Display names are not unique. `url` and every link are http or https
+addresses; clients show nothing else. Media is a CID of a one-block Volume
 `{ type, bytes }` that the author pins; never a URL.
 
 ## Handles

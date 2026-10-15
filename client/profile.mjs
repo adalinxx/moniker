@@ -3,8 +3,8 @@
 // `{ actions, payments? }` for the wallet (see wallet.mjs).
 //
 // Keys:
-//   user/<a>/profile   the card: JSON { name, description, avatar, header, url, handle }
-//   user/<a>/<field>   anything else: com.github, key.x25519, app.<name>.<field>
+//   user/<a>/profile   the card: JSON { name, description, avatar, header, url, handle, links }
+//   user/<a>/<field>   anything else: key.x25519, app.<name>.<field>
 //   name/<handle>      <holder> or <holder>@<price>
 //
 // Records are written by anyone the policy lets through, so every value is
@@ -16,8 +16,28 @@ export const MONIKER_POLICY = "bafyreihbwjt5uuw2se5rcc4hdmbooo7wcixzsfg6geddutb6
 /** Where Moniker lives. */
 export const MONIKER_CHAIN = ["Nexus", "moniker"];
 
-/** The card fields every app shows. A card may carry others; they are kept. */
+/** The card's text fields every app shows. A card may carry others; they are kept. */
 export const CARD_FIELDS = ["name", "description", "avatar", "header", "url", "handle"];
+
+/** Whether `url` is a web address a client may link to: http or https only. */
+export function isWebURL(url) {
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The card's `links`, in the owner's order, as `[{ label, url }]`: entries
+ * that are not a label and a web address are left out.
+ */
+const readLinks = (links) =>
+  Array.isArray(links)
+    ? links
+        .filter((link) => typeof link?.label === "string" && link.label !== "" && typeof link.url === "string" && isWebURL(link.url))
+        .map(({ label, url }) => ({ label, url }))
+    : [];
 
 /**
  * Whether a chain spec (see state.mjs `chainSpec`) runs the Moniker policy.
@@ -88,14 +108,17 @@ export function holdingValue(holder, price) {
 // Reading.
 
 /**
- * `address`'s profile: the card's string fields, with `handle` kept only when
- * `name/<handle>` names `address` as its holder, so a sold or never-held
- * handle is not shown. Fields that are not strings are left out.
+ * `address`'s profile: the card's text fields and its links, with `handle`
+ * kept only when `name/<handle>` names `address` as its holder, so a sold or
+ * never-held handle is not shown. What does not parse is left out.
  */
 export async function getProfile(state, address) {
   const card = parseObject(await state.get(cardKey(address))) ?? {};
   const profile = { address };
   for (const field of CARD_FIELDS) if (typeof card[field] === "string" && card[field] !== "") profile[field] = card[field];
+  if (profile.url !== undefined && !isWebURL(profile.url)) delete profile.url;
+  const links = readLinks(card.links);
+  if (links.length > 0) profile.links = links;
   if (profile.handle !== undefined) {
     const entry = isHandle(profile.handle) ? await resolve(state, profile.handle) : undefined;
     if (entry?.holder !== address) delete profile.handle;
@@ -164,21 +187,33 @@ export const combine = (...writes) =>
 
 /**
  * A change to `address`'s card: each of `changes` sets a field, or removes it
- * when undefined, null or "". Fields the client does not know are kept. An
- * empty card is deleted. Nothing to write when nothing changes.
+ * when undefined, null, "" or an empty `links`. Text fields are strings;
+ * `links` is `[{ label, url }]` with web addresses. Fields the client does not
+ * know are kept. An empty card is deleted. Nothing to write when nothing
+ * changes.
  */
 export async function editCard(state, address, changes) {
   const key = cardKey(address);
   const oldValue = await state.get(key);
   const card = { ...(parseObject(oldValue) ?? {}) };
   for (const [field, value] of Object.entries(changes)) {
-    if (value === undefined || value === null || value === "") delete card[field];
+    if (value === undefined || value === null || value === "" || (field === "links" && value.length === 0)) delete card[field];
+    else if (field === "links") card.links = checkedLinks(value);
     else if (typeof value === "string") card[field] = value;
     else throw new Error(`${field}: card fields are strings`);
   }
   const newValue = Object.keys(card).length > 0 ? JSON.stringify(card) : undefined;
   if (newValue === oldValue) return write([]);
   return write([{ key, ...(oldValue !== undefined && { oldValue }), ...(newValue !== undefined && { newValue }) }]);
+}
+
+function checkedLinks(links) {
+  if (!Array.isArray(links)) throw new Error("links: a list of { label, url }");
+  return links.map(({ label, url }) => {
+    if (typeof label !== "string" || label === "") throw new Error("links: every link needs a label");
+    if (!isWebURL(url)) throw new Error(`links: ${url} is not an http or https address`);
+    return { label, url };
+  });
 }
 
 /** Sets `address`'s field outside the card, or removes it when undefined. */

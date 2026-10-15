@@ -1,7 +1,7 @@
 // Moniker against a real node: a private host mines Nexus and a Moniker
 // chain launched from chain/spec.json with the built policy, whose
 // genesis pays the premine to Alice. Alice funds Bob, pins an avatar, writes
-// her card and a linked account, and claims a handle that her card shows.
+// her card with links and an encryption key, and claims a handle that her card shows.
 // Every way of taking or forging a profile or handle without the right is
 // refused. Alice lists her handle; Bob's buy at a price that went stale is
 // refused, and his buy at the current price, with the handle on his card in
@@ -123,18 +123,19 @@ try {
   await admitted("Alice funds Bob", alice, { actions: [], payments: [{ to: bob.address, amount: 2000n }] });
   await until("Bob is funded", async () => (await balance(bob)) === 2000n);
 
-  // A card with a pinned avatar, a linked account, and a claimed handle shown on the card.
+  // A card with a pinned avatar, links, and a claimed handle shown on the card.
+  const links = [{ label: "Website", url: "https://alice.example" }, { label: "GitHub", url: "https://github.com/alice" }];
   const avatar = mediaVolume(sdk, "image/png", Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
   const host = operator(`http://127.0.0.1:${rpc}`, readFileSync(`${root}/chains/Nexus/.cookie`, "utf8"));
   assert.ok((await host.pin(avatar)).pins.includes(avatar.cid));
   {
     const s = await state();
     await admitted(
-      "Alice's card, GitHub and handle",
+      "Alice's card, key and handle",
       alice,
       profile.combine(
-        await profile.editCard(s, alice.address, { name: "Alice", description: "Builds things", avatar: avatar.cid, handle: "alice" }),
-        await profile.setField(s, alice.address, "com.github", "alice-gh"),
+        await profile.editCard(s, alice.address, { name: "Alice", description: "Builds things", avatar: avatar.cid, handle: "alice", links }),
+        await profile.setField(s, alice.address, "key.x25519", "alice-public-key"),
         await profile.claim(s, alice.address, "alice"),
       ),
     );
@@ -148,12 +149,13 @@ try {
       description: "Builds things",
       avatar: avatar.cid,
       handle: "alice",
+      links,
     });
-    assert.deepEqual(await profile.getFields(s, alice.address), { "com.github": "alice-gh" });
+    assert.deepEqual(await profile.getFields(s, alice.address), { "key.x25519": "alice-public-key" });
     const file = readMedia(sdk, await host.fetch(avatar.cid), { accept: (type) => type.startsWith("image/"), maxBytes: 1 << 20 });
     assert.equal(file?.type, "image/png");
   }
-  console.log("Alice's card, avatar, linked account and @alice read back through the client");
+  console.log("Alice's card, avatar, links, key and @alice read back through the client");
 
   // Ways of forging a profile or taking a handle.
   const s = await state();

@@ -86,7 +86,7 @@ test("an unreadable card shows nothing and is replaced on the next save", async 
 test("nobody edits another account's card or fields", async () => {
   const { state, submit } = chain({ [ALICE]: 100, [BOB]: 100 });
   assert.ok(!submit(BOB, await profile.editCard(state, ALICE, { name: "Not Alice" })));
-  assert.ok(!submit(BOB, await profile.setField(state, ALICE, "com.github", "bob")));
+  assert.ok(!submit(BOB, await profile.setField(state, ALICE, "app.demo.color", "red")));
 });
 
 test("a stale edit is refused, and saveCard retries it on the new card", async () => {
@@ -122,14 +122,41 @@ test("a stale edit is refused, and saveCard retries it on the new card", async (
   assert.equal(calls, 1);
 });
 
+test("links are kept in order, and only web addresses are shown", async () => {
+  const { state, submit, map } = chain({ [ALICE]: 100 });
+  const links = [
+    { label: "Website", url: "https://alice.example" },
+    { label: "GitHub", url: "https://github.com/alice" },
+  ];
+  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice", links })));
+  assert.deepEqual((await profile.getProfile(state, ALICE)).links, links);
+  // Reordered and trimmed in one save; an empty list removes the field.
+  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { links: [links[1]] })));
+  assert.deepEqual((await profile.getProfile(state, ALICE)).links, [links[1]]);
+  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { links: [] })));
+  assert.equal("links" in JSON.parse(map.get(profile.cardKey(ALICE))), false);
+  // The client refuses to write a link that is not a web address.
+  await assert.rejects(profile.editCard(state, ALICE, { links: [{ label: "x", url: "javascript:alert(1)" }] }), /not an http/);
+  await assert.rejects(profile.editCard(state, ALICE, { links: [{ label: "", url: "https://a.example" }] }), /label/);
+  // A card written by another client is read the same careful way.
+  map.set(
+    profile.cardKey(ALICE),
+    JSON.stringify({
+      url: "javascript:alert(1)",
+      links: [{ label: "ok", url: "https://ok.example", extra: 1 }, { label: "bad", url: "data:text/html,x" }, { url: "https://no-label.example" }, "nonsense"],
+    }),
+  );
+  assert.deepEqual(await profile.getProfile(state, ALICE), { address: ALICE, links: [{ label: "ok", url: "https://ok.example" }] });
+});
+
 test("fields outside the card are set, listed and removed", async () => {
   const { state, submit } = chain({ [ALICE]: 100 });
-  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "com.github", "alice")));
+  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "app.demo.color", "teal")));
   assert.ok(submit(ALICE, await profile.setField(state, ALICE, "key.x25519", "abcd")));
   assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice" })));
-  assert.deepEqual(await profile.getFields(state, ALICE), { "com.github": "alice", "key.x25519": "abcd" });
-  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "com.github", undefined)));
-  assert.equal(await profile.getField(state, ALICE, "com.github"), undefined);
+  assert.deepEqual(await profile.getFields(state, ALICE), { "app.demo.color": "teal", "key.x25519": "abcd" });
+  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "app.demo.color", undefined)));
+  assert.equal(await profile.getField(state, ALICE, "app.demo.color"), undefined);
   await assert.rejects(profile.setField(state, ALICE, "profile", "x"), /not a field name/);
 });
 
