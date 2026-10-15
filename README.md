@@ -1,6 +1,6 @@
-# Lattice profiles
+# Moniker
 
-One chain, `Nexus/profile`, holds every account's profile and every handle.
+One chain, Moniker (`Nexus/moniker`), holds every account's profile and every handle.
 Any app reads and writes it; no app keeps its own profile.
 
 ## Records
@@ -38,11 +38,11 @@ An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
   the context and body, and the token rule. The Fanfare policy builds on it
   too.
 - `policy/`: the chain's policy. `chain/spec.json` names the built module;
-  `chain/profile_policy.wasm` is that module.
+  `chain/moniker_policy.wasm` is that module.
 - `client/`: `profile.mjs` (reads and writes), `state.mjs` (reads state by
   descending the trie, checked by CID), `media.mjs`, `wallet.mjs` (the request
   the Lattice wallet signs).
-- `e2e/profile.mjs`: the whole flow against a real node.
+- `e2e/moniker.mjs`: the whole flow against a real node.
 
 ## Build and test
 
@@ -53,9 +53,9 @@ LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/poli
 cd ..
 LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node --test client/*.test.mjs
 LATTICE=<lattice-node>/.build/debug/lattice \
-  LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/profile.mjs
+  LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
 ```
 
 To replay every policy test context through Lattice's own host, run the policy
 tests with `CONTEXT_DIR=<dir>`, then
-`swift run --package-path policy/host-check host-check policy/target/wasm32-unknown-unknown/release/profile_policy.wasm <dir>`.
+`swift run --package-path policy/host-check host-check policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm <dir>`.

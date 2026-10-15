@@ -16,7 +16,7 @@ const address = (seed) => core.addressFromPublicKey(core.publicKeyFromPrivate(ne
 const ALICE = address(1);
 const BOB = address(2);
 const CAROL = address(3);
-const PATH = ["Nexus", "profile"];
+const PATH = ["Nexus", "moniker"];
 
 const context = (bodyBytes, options = {}) => hostContext(bodyBytes, { path: PATH, ...options });
 

@@ -1,5 +1,5 @@
-// The profile chain against a real node: a private host mines Nexus and a
-// profile chain launched from chain/spec.json with the built policy, whose
+// Moniker against a real node: a private host mines Nexus and a Moniker
+// chain launched from chain/spec.json with the built policy, whose
 // genesis pays the premine to Alice. Alice funds Bob, pins an avatar, writes
 // her card and a linked account, and claims a handle that her card shows.
 // Every way of taking or forging a profile or handle without the right is
@@ -9,7 +9,7 @@
 // and no longer on Alice's. Last, Bob releases it and Alice claims it again.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
-//   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/profile.mjs
+//   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -22,13 +22,13 @@ import * as wallet from "../client/wallet.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
-const CHAIN = profile.PROFILE_CHAIN;
+const CHAIN = profile.MONIKER_CHAIN;
 const [listen, rpc, publicRead] = [25021, 29190, 29191];
 const node = `http://127.0.0.1:${publicRead}`;
-const MODULE = here("../policy/target/wasm32-unknown-unknown/release/profile_policy.wasm");
+const MODULE = here("../policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm");
 const SPEC = here("../chain/spec.json");
 
-const root = mkdtempSync(`${tmpdir()}/profile-e2e-`);
+const root = mkdtempSync(`${tmpdir()}/moniker-e2e-`);
 const lattice = (...args) => execFileSync(process.env.LATTICE, [...args, "--root", root], { encoding: "utf8" });
 function configure(change) {
   const file = `${root}/lattice.json`;
@@ -114,11 +114,11 @@ try {
   lattice("up");
   lattice("mine", "start");
 
-  await until("the profile chain's genesis is mined", async () => (await balance(alice)) > 0n);
+  await until("the Moniker genesis is mined", async () => (await balance(alice)) > 0n);
   {
     const client = volumes();
-    assert.ok(profile.runsProfile(await chainSpec(sdk, client, (await tip(sdk, node, CHAIN, client)).specCID)));
-    console.log(`profile chain launched; the client finds the profile policy in its spec; Alice holds ${await balance(alice)}`);
+    assert.ok(profile.runsMoniker(await chainSpec(sdk, client, (await tip(sdk, node, CHAIN, client)).specCID)));
+    console.log(`Moniker launched; the client finds the Moniker policy in its spec; Alice holds ${await balance(alice)}`);
   }
   await admitted("Alice funds Bob", alice, { actions: [], payments: [{ to: bob.address, amount: 2000n }] });
   await until("Bob is funded", async () => (await balance(bob)) === 2000n);

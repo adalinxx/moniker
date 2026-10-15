@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 
 export const module = new WebAssembly.Module(
-  readFileSync(new URL("../target/wasm32-unknown-unknown/release/profile_policy.wasm", import.meta.url)),
+  readFileSync(new URL("../target/wasm32-unknown-unknown/release/moniker_policy.wasm", import.meta.url)),
 );
 
 function u32(value) {

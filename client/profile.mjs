@@ -1,4 +1,4 @@
-// Profiles and handles on the profile chain, read from a state view
+// Profiles and handles on Moniker, the profile chain, read from a state view
 // `{ get(key), list(prefix) }` (see state.mjs) and written as
 // `{ actions, payments? }` for the wallet (see wallet.mjs).
 //
@@ -11,24 +11,24 @@
 // parsed as untrusted: what does not parse is left out, never fatal.
 
 /** The CID of the profile policy module built from `policy/`. */
-export const PROFILE_POLICY = "bafyreihbwjt5uuw2se5rcc4hdmbooo7wcixzsfg6geddutb6rgmbzaenxe";
+export const MONIKER_POLICY = "bafyreihbwjt5uuw2se5rcc4hdmbooo7wcixzsfg6geddutb6rgmbzaenxe";
 
-/** Where the shared profile chain lives. */
-export const PROFILE_CHAIN = ["Nexus", "profile"];
+/** Where Moniker lives. */
+export const MONIKER_CHAIN = ["Nexus", "moniker"];
 
 /** The card fields every app shows. A card may carry others; they are kept. */
 export const CARD_FIELDS = ["name", "description", "avatar", "header", "url", "handle"];
 
 /**
- * Whether a chain spec (see state.mjs `chainSpec`) runs the profile policy.
+ * Whether a chain spec (see state.mjs `chainSpec`) runs the Moniker policy.
  * Every policy in a spec must accept a transaction, so further policies may
  * refuse more but never let through what this one refuses.
  */
-export const runsProfile = (spec) =>
+export const runsMoniker = (spec) =>
   Array.isArray(spec?.wasmPolicies) &&
   spec.wasmPolicies.some(
     (policy) =>
-      policy?.moduleCID === PROFILE_POLICY &&
+      policy?.moduleCID === MONIKER_POLICY &&
       policy.scope === "transaction" &&
       policy.entrypoint === "lattice_validate_transaction",
   );

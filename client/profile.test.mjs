@@ -7,7 +7,7 @@ import * as profile from "./profile.mjs";
 import * as wallet from "./wallet.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
-const PATH = profile.PROFILE_CHAIN;
+const PATH = profile.MONIKER_CHAIN;
 const address = (seed) => sdk.addressFromPublicKey(sdk.publicKeyFromPrivate(new Uint8Array(32).fill(seed)));
 const [ALICE, BOB, CAROL] = [address(1), address(2), address(3)];
 
@@ -201,7 +201,7 @@ test("the wallet request carries the buy's payment", async () => {
   const { state, submit } = chain({ [ALICE]: 100 });
   assert.ok(submit(ALICE, await profile.claim(state, ALICE, "w", 25n)));
   const request = wallet.writeRequest(PATH, profile.buy(await profile.resolve(state, "w"), BOB), 2n);
-  assert.deepEqual(request.chainPath, ["Nexus", "profile"]);
+  assert.deepEqual(request.chainPath, ["Nexus", "moniker"]);
   assert.deepEqual(request.payments, [{ to: ALICE, amount: "25" }]);
   assert.equal(request.fee, "2");
 });
@@ -215,9 +215,9 @@ test("the client's address and handle checks match the policy's", () => {
   for (const bad of ["", "A", "a-b", "a.b", "é"]) assert.ok(!profile.isHandle(bad), bad);
 });
 
-test("runsProfile recognises the chain spec", () => {
-  const policy = { moduleCID: profile.PROFILE_POLICY, scope: "transaction", entrypoint: "lattice_validate_transaction" };
-  assert.ok(profile.runsProfile({ wasmPolicies: [policy] }));
-  assert.ok(!profile.runsProfile({ wasmPolicies: [{ ...policy, moduleCID: "bafyreiother" }] }));
-  assert.ok(!profile.runsProfile({}));
+test("runsMoniker recognises the chain spec", () => {
+  const policy = { moduleCID: profile.MONIKER_POLICY, scope: "transaction", entrypoint: "lattice_validate_transaction" };
+  assert.ok(profile.runsMoniker({ wasmPolicies: [policy] }));
+  assert.ok(!profile.runsMoniker({ wasmPolicies: [{ ...policy, moduleCID: "bafyreiother" }] }));
+  assert.ok(!profile.runsMoniker({}));
 });

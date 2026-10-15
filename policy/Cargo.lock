@@ -7,7 +7,7 @@ name = "lattice-policy-rules"
 version = "0.1.0"
 
 [[package]]
-name = "profile-policy"
+name = "moniker-policy"
 version = "0.1.0"
 dependencies = [
  "lattice-policy-rules",

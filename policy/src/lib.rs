@@ -1,4 +1,4 @@
-//! Transaction-scope validity policy for the profile chain.
+//! Transaction-scope validity policy for Moniker, the profile chain.
 //!
 //! Two shapes of key:
 //!
