@@ -421,6 +421,19 @@ async function render() {
 
 // ---------------------------------------------------------------- events
 
+/**
+ * Just connected: from the start screen, go to your page, or straight to
+ * Edit when you have none yet. On someone else's page or the handles, stay.
+ */
+async function arrive() {
+  const r = route();
+  if (r !== "" && r !== "find") return render();
+  const p = await profile.getProfile(await readState(), connected).catch(() => null);
+  const target = p && Object.keys(p).length > 1 ? "#/" : "#/edit";
+  if (location.hash === target) render();
+  else location.hash = target;
+}
+
 function readDraftLinks() {
   return [...document.querySelectorAll("[data-link]")].map((row) => ({
     label: $('[data-field="label"]', row).value.trim(),
@@ -436,7 +449,7 @@ document.addEventListener("click", async (event) => {
   if (!el) return;
   const d = el.dataset;
   if ("connect" in d) {
-    connect().then(render, (error) => toast(walletMessage(error), { bad: true }));
+    connect().then(arrive, (error) => toast(walletMessage(error), { bad: true }));
   } else if ("retry" in d) {
     render();
   } else if (d.copy) {

@@ -145,9 +145,11 @@ async function openApp(page, who, hash = "#/") {
   await page.goto(stack.app + "#/find");
   if (who) {
     await page.getByRole("button", { name: "Connect wallet" }).click();
-    await expect(page.getByRole("button", { name: "Connect wallet" })).toHaveCount(0);
+    // Connecting from the start screen goes to your page, or to Edit.
+    await expect(page).toHaveURL(/#\/(edit)?$/);
   }
-  await page.goto(stack.app + hash);
+  // null: stay where connecting landed.
+  if (hash !== null) await page.goto(stack.app + hash);
 }
 
 /** A test with a fresh browser and page; on failure, what the page showed. */
@@ -290,3 +292,19 @@ test("links another client wrote are shown only when they are web addresses", as
   await expect(page.locator("h1")).toHaveText("Carol");
   await expect(page.locator(".links a")).toHaveText(["Fine"]);
 }, { wallet: false });
+
+test("tapping Connect wallet takes a new account to Edit, and one with a page to it", async ({ page }) => {
+  const dave = newAccount();
+  await openApp(page, dave, null);
+  await expect(page).toHaveURL(/#\/edit$/);
+  await expect(page.locator("h1")).toHaveText("Edit your page");
+  const context = await walletBrowser();
+  try {
+    const alicePage = context.pages()[0] ?? (await context.newPage());
+    await openApp(alicePage, alice, null);
+    await expect(alicePage).toHaveURL(/#\/$/);
+    await expect(alicePage.locator("h1")).toHaveText("Alice Rivera");
+  } finally {
+    await context.close();
+  }
+});
