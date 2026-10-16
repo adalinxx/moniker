@@ -2,8 +2,8 @@
 
 Register your name on the internet. Moniker gives you an `@handle` that
 belongs to you, not to an app: no company can take it back, rename it or
-hand it to someone else, and only your key can change what it says. Every
-Lattice app knows you by it.
+hand it to someone else, and only your key can change what it says. Any
+app can know you by it.
 
 One chain, Moniker (`Nexus/moniker`), holds every account's profile and every handle.
 Any app reads and writes it; no app keeps its own profile.

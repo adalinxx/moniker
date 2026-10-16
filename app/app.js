@@ -259,7 +259,7 @@ function viewStart(message = "") {
     <div class="col top">${connected ? "" : `<button class="pill" type="button" data-connect>Log in</button>`}</div>
     <main class="col start">
       <h1 class="hero">Register your name on the internet.</h1>
-      <p class="lede">An @handle that belongs to you, not to an app. Every Lattice app knows you by it.</p>
+      <p class="lede">An @handle that belongs to you, not to an app. Any app can know you by it.</p>
       <form class="stack" id="join" style="margin-top: 20px">
         <label for="want" class="label">Find your name</label>
         <div class="box"><span class="mono" aria-hidden="true" style="color: var(--muted)">@</span><input id="want" value="${esc(joining())}" placeholder="yourname" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
@@ -269,7 +269,7 @@ function viewStart(message = "") {
       <ul class="promises">
         <li><b>Yours to keep.</b> No company can take it back, rename it or hand it to someone else.</li>
         <li><b>Proof it's you.</b> Only your key can change what your name says, so an app showing your @handle is showing you.</li>
-        <li><b>One name everywhere.</b> Set it up once and every Lattice app shows your name, photo and links.</li>
+        <li><b>One name everywhere.</b> Set it up once, and any app can show your name, photo and links.</li>
       </ul>
       <p class="start-links">
         <a href="#/find">Find someone</a>
@@ -337,7 +337,7 @@ async function viewWelcome(state) {
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(p.name ?? short(connected))}</h1>
       ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
-      <p class="bio" role="status">${p.handle ? `@${esc(p.handle)} is registered to you. ` : ""}Every Lattice app now shows you this way.</p>
+      <p class="bio" role="status">${p.handle ? `@${esc(p.handle)} is registered to you. ` : ""}Any app can now show you this way.</p>
     </main>
     <div class="col stack" style="margin-top: 20px">
       <button class="pill big" type="button" data-copy="${esc(link)}" style="justify-content: space-between"><span class="mono">${esc(link.replace(/^https?:\/\//, ""))}</span><span>Copy link</span></button>
