@@ -9,6 +9,7 @@ import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { after, before, test as nodeTest } from "node:test";
+import assert from "node:assert/strict";
 import { chromium, expect as baseExpect } from "@playwright/test";
 import * as profile from "../../sdk/src/records/profile.mjs";
 import { tip, view, volumeLoader } from "../../sdk/src/records/state.mjs";
@@ -223,7 +224,7 @@ test("Alice claims @alice and puts it on her page; a visitor finds her by it", a
   await page.locator("#want").fill("Alice");
   await expect(page.locator("#want-status")).toHaveText("Only lowercase letters, digits and _.");
   await page.locator("#want").fill("alice");
-  await expect(page.locator("#want-status")).toHaveText("@alice is free. Claiming costs a fee of 1.");
+  await expect(page.locator("#want-status")).toHaveText("@alice is free to claim.");
   await page.getByRole("button", { name: "Claim" }).click();
   await page.locator("#sheet").getByRole("button", { name: "Claim" }).click();
   await expect(page.locator(".row", { hasText: "@alice" })).toBeVisible();
@@ -301,6 +302,39 @@ test("links another client wrote are shown only when they are web addresses", as
   await expect(page.locator("h1")).toHaveText("Carol");
   await expect(page.locator(".links a")).toHaveText(["Fine"]);
 }, { wallet: false });
+
+test("a newcomer with no coins claims @erin at the front door, approves once, and is live", async ({ page }) => {
+  const erin = newAccount();
+  assert.equal(BigInt((await account(erin.address)).balance ?? 0), 0n);
+  await walletHolds(page.context(), erin);
+  await openApp(page, null, "#/");
+  await expect(page.locator("h1")).toHaveText("One page for you, on every Lattice app.");
+  await page.locator("#want").fill("erin");
+  await expect(page.locator("#want-status")).toHaveText("@erin is free to claim.");
+  await page.getByRole("button", { name: "Claim @erin" }).click();
+
+  await expect(page).toHaveURL(/#\/join\/erin$/);
+  await expect(page.locator("main")).toContainText("Your account lives in the Lattice Wallet");
+  await page.getByRole("button", { name: "Connect your wallet" }).click();
+  await expect(page.locator("h1")).toHaveText("Make @erin yours");
+  await page.locator("#name").fill("Erin Vale");
+  await page.getByRole("button", { name: "Approve in wallet" }).click();
+
+  await expect(page).toHaveURL(/#\/welcome$/);
+  await expect(page.locator("h1")).toHaveText("Erin Vale");
+  await expect(page.locator(".handle")).toHaveText("@erin");
+  await expect(page.locator("#app")).toContainText("Your page is live");
+  await expect(page.locator("#app")).toContainText("Finish your page · 2 of 4");
+  // Connecting, and one write that claimed the handle and wrote the card.
+  assert.equal(page.context().approvals, 2);
+
+  const visitor = await browser.newPage();
+  await openApp(visitor, null, "#/");
+  await visitor.locator("#want").fill("erin");
+  await visitor.getByRole("button", { name: "See @erin's page" }).click();
+  await expect(visitor.locator("h1")).toHaveText("Erin Vale");
+  await visitor.close();
+});
 
 test("tapping Connect wallet takes a new account to Edit, and one with a page to it", async ({ page }) => {
   const dave = newAccount();

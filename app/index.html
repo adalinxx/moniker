@@ -77,6 +77,17 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
 .toast.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
 .toast button { border: 0; background: transparent; color: inherit; min-width: 32px; min-height: 32px; cursor: pointer; font-size: 18px; }
 .empty { color: var(--muted); text-align: center; margin-top: 48px; }
+.start { margin-top: 12vh; }
+.hero { margin: 0; font-size: clamp(30px, 7vw, 40px); line-height: 1.12; letter-spacing: -0.02em; }
+.lede { margin: 0; color: var(--soft); }
+.start .lede { margin-top: 14px; }
+.pill.big { min-height: 56px; width: 100%; box-sizing: border-box; font-size: 16px; }
+.start-links { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 40px; }
+.start-links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 500; color: var(--ink); text-decoration: none; }
+.start-links .quiet { border: 0; background: none; cursor: pointer; font-size: 14px; }
+.progress { height: 6px; border-radius: 999px; background: var(--hair); overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--accent); }
+.row.next { justify-content: space-between; color: var(--ink); text-decoration: none; font-weight: 500; padding-right: 22px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>

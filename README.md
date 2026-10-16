@@ -39,7 +39,7 @@ Other apps read and write Moniker through
 handling, writes signed in the person's Lattice Wallet.
 
 ```js
-import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@v0.1.1/src/browser.mjs";
+import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@v0.1.2/src/browser.mjs";
 ```
 
 moniker-sdk is also where the record code lives (cards, fields, handles,
@@ -50,7 +50,12 @@ pinned to a release; clone with `--recurse-submodules`, or run
 ## The app
 
 `app/` is a static page: one page per account, like a link page (photo,
-name, `@handle`, bio, a stack of links), plus Edit and Handles. It reads every
+name, `@handle`, bio, a stack of links), plus Edit and Handles. The front
+door is a claim box: type a handle and it says whether it is free, taken or
+for sale. Claiming it is the sign-up: connect the Lattice Wallet, give a
+name, and one approval claims the handle and writes the page with it. Writes
+are free on the trial chain (its hosts admit 0-fee transactions), so a new
+account needs no coins. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
 `lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
 and asks the Lattice Wallet extension to approve each write: a save is one

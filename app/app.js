@@ -32,7 +32,10 @@ function saveSettings(next) {
   reader = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
-const FEE = 1n;
+// Writes are free on the trial chain: its hosts admit 0-fee transactions.
+const FEE = 0n;
+// Where a newcomer gets the Lattice Wallet.
+const WALLET_URL = "https://github.com/adalinxx/lattice-wallet/releases";
 
 // ---------------------------------------------------------------- reading
 
@@ -113,7 +116,7 @@ function send(write) {
  * Sends a write, then waits until the chain shows it (`landed(state)`), so
  * the page redraws from what the chain holds, not from what was asked.
  */
-async function act(label, build, landed) {
+async function act(label, build, landed, done = render) {
   const progress = toast(`${label}: approve it in your wallet.`);
   try {
     await send(await build());
@@ -128,7 +131,7 @@ async function act(label, build, landed) {
     }
     progress.update(`${label}: done.`);
     setTimeout(progress.close, 2500);
-    render();
+    done();
   } catch (error) {
     progress.update(walletMessage(error), { bad: true });
   }
@@ -239,6 +242,107 @@ async function viewProfile(address, state) {
     </main>`;
 }
 
+// The handle someone is signing up for, kept if they leave to set up a wallet.
+const JOINING = "moniker.joining";
+function joining(handle) {
+  try {
+    if (handle === undefined) return localStorage.getItem(JOINING) ?? "";
+    if (handle) localStorage.setItem(JOINING, handle);
+    else localStorage.removeItem(JOINING);
+  } catch {}
+  return "";
+}
+
+/** The front door: claim a handle, which is how you sign up. */
+function viewStart(message = "") {
+  return `
+    <div class="col top">${connected ? "" : `<button class="pill" type="button" data-connect>Log in</button>`}</div>
+    <main class="col start">
+      <h1 class="hero">One page for you, on every Lattice app.</h1>
+      <p class="lede">Your name, photo and links, under an @handle you own.</p>
+      <form class="stack" id="join" style="margin-top: 20px">
+        <label for="want" class="label">Claim your handle</label>
+        <div class="box"><span class="mono" aria-hidden="true" style="color: var(--muted)">@</span><input id="want" value="${esc(joining())}" placeholder="yourname" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
+        <p class="note" id="want-status" aria-live="polite">${esc(message)}</p>
+        <button class="pill accent big" id="claim-go" type="submit" hidden>Claim</button>
+      </form>
+      <p class="start-links">
+        <a href="#/find">Find someone</a>
+        <button class="quiet" type="button" data-connect>Make a page without a handle</button>
+      </p>
+    </main>`;
+}
+
+const stepBar = (handle, step) => `
+  <div class="col top" style="justify-content: flex-start; align-items: center; gap: 12px">
+    <a class="pill icon" href="#/" aria-label="Back">‹</a>
+    <span class="label">Claiming <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
+  </div>`;
+
+/** Sign-up, step 1: the wallet holds the account. */
+function viewJoinWallet(handle) {
+  return `
+    ${stepBar(handle, 1)}
+    <main class="col stack" style="margin-top: 48px">
+      <h1 style="margin: 0">Your account lives in the Lattice Wallet</h1>
+      <p class="lede">It keeps your key on your device and asks you before anything is sent. Moniker never sees your key.</p>
+      <div class="stack" style="margin-top: 24px">
+        ${wallet()
+          ? `<button class="pill accent big" type="button" data-connect>Connect your wallet</button>`
+          : `<a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener">Add the Lattice Wallet</a>
+             <p class="note" style="text-align: center">A browser extension. Once it's set up, reload this page.</p>
+             <button class="pill big" type="button" data-connect>I have it · Connect</button>`}
+      </div>
+    </main>`;
+}
+
+/** Sign-up, step 2: say who you are; one approval claims the handle and starts the page. */
+async function viewJoinApprove(handle, state) {
+  const entry = await profile.resolve(state, handle);
+  if (entry?.holder === connected) return viewWelcome(state);
+  if (entry) return viewStart(`@${handle} was just taken. Try another.`);
+  const p = await profile.getProfile(state, connected);
+  return `
+    ${stepBar(handle, 2)}
+    <main class="col stack" style="margin-top: 24px">
+      <h1 style="margin: 0">Make <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> yours</h1>
+      <p class="lede">Say who you are. One approval claims the handle and puts this on your page.</p>
+      <form id="join-approve" class="stack" data-handle="${esc(handle)}" style="margin-top: 8px">
+        <div class="field"><label for="name">Name</label><input id="name" value="${esc(p.name ?? "")}" autocomplete="name" required></div>
+        <div class="field"><label for="bio">Bio · optional</label><textarea id="bio" rows="2">${esc(p.description ?? "")}</textarea></div>
+        <button class="pill accent big" type="submit" style="margin-top: 12px">Approve in wallet</button>
+        <p class="note" style="text-align: center">The handle is yours to keep, sell or give away.</p>
+      </form>
+    </main>`;
+}
+
+/** Just signed up: your page is live; share it, then finish it. */
+async function viewWelcome(state) {
+  const p = await profile.getProfile(state, connected);
+  const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : connected}`;
+  const todo = [
+    ["Add your name", !p.name],
+    ["Add a photo", !p.avatar],
+    ["Add your links", !(p.links?.length || p.url)],
+  ];
+  const done = 1 + todo.filter(([, missing]) => !missing).length;
+  return `
+    <div class="col top"><a class="pill" href="#/">View page</a></div>
+    <main class="col card">
+      ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
+      <h1>${esc(p.name ?? short(connected))}</h1>
+      ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
+      <p class="bio" role="status">Your page is live, and every Lattice app shows you this way.</p>
+    </main>
+    <div class="col stack" style="margin-top: 20px">
+      <button class="pill big" type="button" data-copy="${esc(link)}" style="justify-content: space-between"><span class="mono">${esc(link.replace(/^https?:\/\//, ""))}</span><span>Copy link</span></button>
+      ${done < 4 ? `
+      <h2 class="label" style="margin: 16px 0 0; color: var(--ink); font-weight: 600">Finish your page · ${done} of 4</h2>
+      <div class="progress" role="progressbar" aria-label="Page set up" aria-valuemin="0" aria-valuemax="4" aria-valuenow="${done}"><span style="width: ${done * 25}%"></span></div>
+      ${todo.filter(([, missing]) => missing).map(([label]) => `<a class="row next" href="#/edit">${label}<span aria-hidden="true">›</span></a>`).join("")}` : ""}
+    </div>`;
+}
+
 function viewFind(message = "") {
   return `
     <div class="col top">${connectButton()}</div>
@@ -291,7 +395,7 @@ async function viewEdit(state) {
         <button class="pill accent" type="button" data-add-link style="min-height: 52px">+ Add link</button>
         <div id="links" class="stack">${draft.links.map((l, i) => linkRow(l, i)).join("")}</div>
         <div class="bar">
-          <span class="label">One change, a fee of ${FEE}, approved in your wallet.</span>
+          <span class="label">One change, approved in your wallet.</span>
           <div class="end"><button class="pill dark" type="submit">Save</button></div>
         </div>
       </form>
@@ -399,15 +503,22 @@ async function render() {
         if (!connected) await connect();
         html = await viewEdit(state);
       } else if (r === "handles") html = await viewHandles(state);
+      else if (r.startsWith("join/") && profile.isHandle(r.slice(5))) {
+        html = connected ? await viewJoinApprove(r.slice(5), state) : viewJoinWallet(r.slice(5));
+      } else if (r === "welcome" && connected) html = await viewWelcome(state);
       else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
         html = entry ? await viewProfile(entry.holder, state) : viewFind(`No one holds ${r}.`);
       } else if (profile.isAddress(r)) html = await viewProfile(r, state);
-      else if (r === "" && connected) html = await viewProfile(connected, state);
-      else html = viewFind(r ? `“${r}” is not a handle or an address.` : "");
+      else if (r === "" && connected && Object.keys(await profile.getProfile(state, connected)).length > 1) {
+        html = await viewProfile(connected, state);
+      } else if (r === "") html = viewStart();
+      else html = viewFind(`“${r}” is not a handle or an address.`);
     }
     if (ticket !== drawing) return;
     app.innerHTML = html + footer();
+    // A handle remembered from an unfinished sign-up: check it again.
+    if ($("#join #want")?.value) $("#want").dispatchEvent(new Event("input", { bubbles: true }));
     for (const img of app.querySelectorAll("[data-photo]")) {
       photo(img.dataset.photo).then((url) => {
         if (url) img.src = url;
@@ -449,11 +560,13 @@ document.addEventListener("click", async (event) => {
   if (!el) return;
   const d = el.dataset;
   if ("connect" in d) {
+    // The extension shows itself to pages loaded after it was added.
+    if (!wallet()) return toast("Add the Lattice Wallet, then reload this page.", { bad: true });
     connect().then(arrive, (error) => toast(walletMessage(error), { bad: true }));
   } else if ("retry" in d) {
     render();
   } else if (d.copy) {
-    navigator.clipboard?.writeText(d.copy).then(() => toast("Address copied."), () => toast(d.copy));
+    navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("addLink" in d) {
     draft.links = [...readDraftLinks(), { label: "", url: "" }];
     redrawLinks();
@@ -499,7 +612,7 @@ async function buy(handle) {
   const ok = await sheet({
     title: `Buy @${handle}`,
     body: "The holder is paid in the same transaction. If they change the price before it lands, nothing is taken.",
-    rows: [["Price", coins(entry.price)], ["Fee", String(FEE)]],
+    rows: [["Price", coins(entry.price)]],
     confirm: `Buy for ${coins(entry.price)}`,
   });
   if (!ok) return;
@@ -517,7 +630,6 @@ async function listHandle(handle) {
       attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
       check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
     },
-    rows: [["Fee", String(FEE)]],
     confirm: "List it",
   });
   if (price === null) return;
@@ -531,7 +643,6 @@ async function giveHandle(handle) {
     title: `Give @${handle}`,
     body: "It becomes theirs at once, and you can't take it back.",
     input: { label: "Their address", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account address.") },
-    rows: [["Fee", String(FEE)]],
     confirm: "Give it",
   });
   if (to === null) return;
@@ -544,7 +655,6 @@ async function releaseHandle(handle) {
   const ok = await sheet({
     title: `Release @${handle}`,
     body: "It stops being yours, and anyone may claim it next.",
-    rows: [["Fee", String(FEE)]],
     confirm: "Release it",
   });
   if (!ok) return;
@@ -565,10 +675,11 @@ document.addEventListener("input", (event) => {
   wantTimer = setTimeout(async () => {
     const entry = await profile.resolve(await readState(), want).catch(() => null);
     if ($("#want")?.value.trim().replace(/^@/, "") !== want) return;
+    const front = event.target.form?.id === "join";
     if (!entry) {
-      status.textContent = `@${want} is free. Claiming costs a fee of ${FEE}.`;
+      status.textContent = `@${want} is free to claim.`;
       go.hidden = false;
-      go.textContent = "Claim";
+      go.textContent = front ? `Claim @${want}` : "Claim";
       go.dataset.mode = "claim";
     } else if (entry.holder === connected) {
       status.textContent = `@${want} is yours.`;
@@ -579,6 +690,11 @@ document.addEventListener("input", (event) => {
       go.dataset.mode = "buy";
     } else {
       status.textContent = `@${want} is taken and not for sale.`;
+      if (front) {
+        go.hidden = false;
+        go.textContent = `See @${want}'s page`;
+        go.dataset.mode = "see";
+      }
     }
   }, 300);
 });
@@ -610,6 +726,33 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const q = $("#q").value.trim();
     location.hash = `#/${q.startsWith("@") || profile.isAddress(q) ? q : `@${q}`}`;
+  } else if (form.id === "join") {
+    event.preventDefault();
+    const want = $("#want").value.trim().replace(/^@/, "");
+    const mode = $("#claim-go").dataset.mode;
+    if (mode === "see") location.hash = `#/@${want}`;
+    else if (mode === "buy") buy(want);
+    else if (mode === "claim") {
+      joining(want);
+      location.hash = `#/join/${want}`;
+    }
+  } else if (form.id === "join-approve") {
+    event.preventDefault();
+    const want = form.dataset.handle;
+    const me = connected;
+    const card = { handle: want, name: $("#name").value.trim(), description: $("#bio").value.trim() };
+    act(
+      `Claiming @${want}`,
+      async () => {
+        const state = await readState();
+        return profile.combine(await profile.claim(state, me, want), await profile.editCard(state, me, card));
+      },
+      async (s) => (await profile.resolve(s, want))?.holder === me && (await profile.getProfile(s, me)).handle === want,
+      () => {
+        joining(null);
+        location.hash = "#/welcome";
+      },
+    );
   } else if (form.id === "claim") {
     event.preventDefault();
     const want = $("#want").value.trim().replace(/^@/, "");
@@ -619,8 +762,7 @@ document.addEventListener("submit", async (event) => {
     const ok = await sheet({
       title: `Claim @${want}`,
       body: "It becomes yours to keep, sell or give away.",
-      rows: [["Fee", String(FEE)]],
-      confirm: "Claim",
+        confirm: "Claim",
     });
     if (!ok) return;
     const me = connected;

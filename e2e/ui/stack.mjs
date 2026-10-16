@@ -59,8 +59,8 @@ export async function start() {
   lattice("init");
   configure((t) => {
     Object.assign(t, { listen: ports.listen, rpc: ports.rpc, publicRead: ports.publicRead, webSocket: 0, publicSubmit: true });
-    // As the testnet hosts: a fee of 1 per transaction.
-    t.minRelayFee = 1;
+    // As the testnet hosts: any fee, 0 included.
+    t.minRelayFee = 0;
     // Reads are many (one per trie node): no rate ceilings in the way.
     t.publicReadExpensiveRate = 10000;
     t.publicReadRate = 10000;
