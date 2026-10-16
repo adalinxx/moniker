@@ -1,9 +1,11 @@
 // A private Moniker stack for the UI tests: one Lattice host mining Nexus and
 // a Moniker chain from a fast test spec, with public reads and submits, and a
-// static server for the repository so the real app/ page runs against it.
+// static server for the repository so the real app/ page runs against it,
+// with moniker-sdk under /sdk/ for its demo page.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js
+//   MONIKER_SDK=<moniker-sdk>   (by default ../moniker-sdk beside this checkout)
 import { execFileSync } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -14,17 +16,19 @@ import { fileURLToPath } from "node:url";
 export const CHAIN = ["Nexus", "moniker"];
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const repo = here("../../");
+const sdkRepo = process.env.MONIKER_SDK ? `${normalize(process.env.MONIKER_SDK)}/` : here("../../../moniker-sdk/");
 const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190 };
 
 const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2" };
 
-/** Serves the repository root, as a static host does. */
+/** Serves the repository root, and moniker-sdk under /sdk/, as a static host does. */
 function serve(port) {
   const server = createServer((request, response) => {
     const path = normalize(decodeURIComponent(new URL(request.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
-    let file = join(repo, path);
+    const base = path.startsWith("/sdk/") ? sdkRepo : repo;
+    let file = join(base, base === sdkRepo ? path.slice("/sdk".length) : path);
     if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
-    if (!file.startsWith(repo) || !existsSync(file)) {
+    if (!file.startsWith(base) || !existsSync(file)) {
       response.writeHead(404).end();
       return;
     }

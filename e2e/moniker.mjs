@@ -9,7 +9,8 @@
 // and no longer on Alice's. Last, Bob releases it and Alice claims it again.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
-//   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
+//   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
+//   MONIKER_SDK=<moniker-sdk> node e2e/moniker.mjs   (by default ../moniker-sdk)
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -19,9 +20,9 @@ import { mediaVolume, operator, readMedia } from "../client/media.mjs";
 import * as profile from "../client/profile.mjs";
 import { chainSpec, tip, view, volumeLoader } from "../client/state.mjs";
 import * as wallet from "../client/wallet.mjs";
-import { createMoniker } from "../lib/index.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
+const { createMoniker } = await import(process.env.MONIKER_SDK ? `${process.env.MONIKER_SDK}/src/index.mjs` : "../../moniker-sdk/src/index.mjs");
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const CHAIN = profile.MONIKER_CHAIN;
 const [listen, rpc, publicRead] = [25021, 29190, 29191];

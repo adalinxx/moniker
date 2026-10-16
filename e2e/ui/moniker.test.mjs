@@ -245,7 +245,7 @@ test("Alice claims @alice and puts it on her page; a visitor finds her by it", a
 
 test("another app shows Alice with <moniker-name>, linked to her page", async ({ page }) => {
   const query = new URLSearchParams({ address: alice.address, node: stack.node, chain: stack.chain });
-  await page.goto(`${stack.app.replace(/app\/$/, "lib/")}demo.html?${query}`);
+  await page.goto(`${stack.app.replace(/app\/$/, "sdk/")}demo.html?${query}`);
   const byline = page.locator("moniker-name");
   await expect(byline.locator(".name")).toHaveText("Alice Rivera");
   await expect(byline.locator(".handle")).toHaveText("@alice");
