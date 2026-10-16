@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { context, validate } from "../policy/test/host.mjs";
-import * as profile from "./profile.mjs";
-import * as wallet from "./wallet.mjs";
+import * as profile from "../sdk/src/records/profile.mjs";
+import * as wallet from "../sdk/src/records/wallet.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
 const PATH = profile.MONIKER_CHAIN;

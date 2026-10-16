@@ -1,11 +1,11 @@
 // Moniker: one page per account, like a link page, read from the profile
 // chain by CID and written through the Lattice Wallet, which asks the owner to
 // approve every change. Reading needs no wallet.
-import * as sdk from "./vendor/lattice-sdk.js";
+import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { mediaVolume, operator } from "../client/media.mjs";
-import * as profile from "../client/profile.mjs";
-import { anyHost, tip, view, volumeLoader } from "../client/state.mjs";
-import { writeRequest } from "../client/wallet.mjs";
+import * as profile from "../sdk/src/records/profile.mjs";
+import { anyHost, tip, view, volumeLoader } from "../sdk/src/records/state.mjs";
+import { writeRequest } from "../sdk/src/records/wallet.mjs";
 
 // ---------------------------------------------------------------- settings
 

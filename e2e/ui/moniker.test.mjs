@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { after, before, test as nodeTest } from "node:test";
 import { chromium, expect as baseExpect } from "@playwright/test";
-import * as profile from "../../client/profile.mjs";
-import { tip, view, volumeLoader } from "../../client/state.mjs";
-import { transaction } from "../../client/wallet.mjs";
+import * as profile from "../../sdk/src/records/profile.mjs";
+import { tip, view, volumeLoader } from "../../sdk/src/records/state.mjs";
+import { transaction } from "../../sdk/src/records/wallet.mjs";
 import { CHAIN, start } from "./stack.mjs";
 
 const wallet = process.env.LATTICE_WALLET && fileURLToPath(new URL(process.env.LATTICE_WALLET, `file://${process.cwd()}/`));

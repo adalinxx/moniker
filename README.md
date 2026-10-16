@@ -39,10 +39,13 @@ Other apps read and write Moniker through
 handling, writes signed in the person's Lattice Wallet.
 
 ```js
-import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@v0.1.0/src/browser.mjs";
+import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@v0.1.1/src/browser.mjs";
 ```
 
-Its `src/records/` is a copy of `client/` here: change them together.
+moniker-sdk is also where the record code lives (cards, fields, handles,
+reading state, the wallet request). This repo holds it as the submodule `sdk/`,
+pinned to a release; clone with `--recurse-submodules`, or run
+`git submodule update --init`.
 
 ## The app
 
@@ -54,8 +57,8 @@ and asks the Lattice Wallet extension to approve each write: a save is one
 transaction, a buy pays the holder in the same one. Reading needs no wallet.
 A photo is kept by your own node: set its URL and cookie in Settings (the node
 must list the page's origin in `rpcAllowedOrigins`). Fonts ship in
-`app/fonts/` (SIL Open Font License) and the SDK in `app/vendor/` (see Stoa's
-`app/vendor/README.md` for the bundle command).
+`app/fonts/` (SIL Open Font License); the app reads and writes through
+`sdk/src/records/` and the Lattice SDK bundle in `sdk/vendor/`.
 
 ```sh
 python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/
@@ -78,11 +81,12 @@ LATTICE=<lattice-node>/.build/debug/lattice \
   too.
 - `policy/`: the chain's policy. `chain/spec.json` names the built module;
   `chain/moniker_policy.wasm` is that module.
-- `client/`: `profile.mjs` (reads and writes), `state.mjs` (reads state by
-  descending the trie, checked by CID), `media.mjs`, `wallet.mjs` (the request
-  the Lattice wallet signs).
-- `e2e/moniker.mjs`: the whole flow against a real node, moniker-sdk included
-  (`MONIKER_SDK`, by default `../moniker-sdk` beside this checkout).
+- `sdk/`: [moniker-sdk](https://github.com/adalinxx/moniker-sdk), a submodule:
+  the record code (`sdk/src/records/`), the library for other apps, and the
+  Lattice SDK bundle.
+- `client/`: `media.mjs` (photos as one-block Volumes), and
+  `profile.test.mjs`, which checks the records in `sdk/` against the policy.
+- `e2e/moniker.mjs`: the whole flow against a real node, moniker-sdk included.
 
 ## Build and test
 
