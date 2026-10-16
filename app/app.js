@@ -253,22 +253,27 @@ function joining(handle) {
   return "";
 }
 
-/** The front door: claim a handle, which is how you sign up. */
+/** The front door: register a name, which is how you sign up. */
 function viewStart(message = "") {
   return `
     <div class="col top">${connected ? "" : `<button class="pill" type="button" data-connect>Log in</button>`}</div>
     <main class="col start">
-      <h1 class="hero">One page for you, on every Lattice app.</h1>
-      <p class="lede">Your name, photo and links, under an @handle you own.</p>
+      <h1 class="hero">Register your name on the internet.</h1>
+      <p class="lede">An @handle that belongs to you, not to an app. Every Lattice app knows you by it.</p>
       <form class="stack" id="join" style="margin-top: 20px">
-        <label for="want" class="label">Claim your handle</label>
+        <label for="want" class="label">Find your name</label>
         <div class="box"><span class="mono" aria-hidden="true" style="color: var(--muted)">@</span><input id="want" value="${esc(joining())}" placeholder="yourname" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
         <p class="note" id="want-status" aria-live="polite">${esc(message)}</p>
-        <button class="pill accent big" id="claim-go" type="submit" hidden>Claim</button>
+        <button class="pill accent big" id="claim-go" type="submit" hidden>Register</button>
       </form>
+      <ul class="promises">
+        <li><b>Yours to keep.</b> No company can take it back, rename it or hand it to someone else.</li>
+        <li><b>Proof it's you.</b> Only your key can change what your name says, so an app showing your @handle is showing you.</li>
+        <li><b>One name everywhere.</b> Set it up once and every Lattice app shows your name, photo and links.</li>
+      </ul>
       <p class="start-links">
         <a href="#/find">Find someone</a>
-        <button class="quiet" type="button" data-connect>Make a page without a handle</button>
+        <button class="quiet" type="button" data-connect>Set up a profile without a handle</button>
       </p>
     </main>`;
 }
@@ -276,7 +281,7 @@ function viewStart(message = "") {
 const stepBar = (handle, step) => `
   <div class="col top" style="justify-content: flex-start; align-items: center; gap: 12px">
     <a class="pill icon" href="#/" aria-label="Back">‹</a>
-    <span class="label">Claiming <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
+    <span class="label">Registering <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
   </div>`;
 
 /** Sign-up, step 1: the wallet holds the account. */
@@ -284,8 +289,8 @@ function viewJoinWallet(handle) {
   return `
     ${stepBar(handle, 1)}
     <main class="col stack" style="margin-top: 48px">
-      <h1 style="margin: 0">Your account lives in the Lattice Wallet</h1>
-      <p class="lede">It keeps your key on your device and asks you before anything is sent. Moniker never sees your key.</p>
+      <h1 style="margin: 0">Your key proves it's you</h1>
+      <p class="lede">The Lattice Wallet holds the key that makes <span class="mono">@${esc(handle)}</span> yours. It stays on your device and asks you before anything is sent. Moniker never sees it.</p>
       <div class="stack" style="margin-top: 24px">
         ${wallet()
           ? `<button class="pill accent big" type="button" data-connect>Connect your wallet</button>`
@@ -296,7 +301,7 @@ function viewJoinWallet(handle) {
     </main>`;
 }
 
-/** Sign-up, step 2: say who you are; one approval claims the handle and starts the page. */
+/** Sign-up, step 2: say who you are; one approval registers the handle and starts the profile. */
 async function viewJoinApprove(handle, state) {
   const entry = await profile.resolve(state, handle);
   if (entry?.holder === connected) return viewWelcome(state);
@@ -305,13 +310,13 @@ async function viewJoinApprove(handle, state) {
   return `
     ${stepBar(handle, 2)}
     <main class="col stack" style="margin-top: 24px">
-      <h1 style="margin: 0">Make <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> yours</h1>
-      <p class="lede">Say who you are. One approval claims the handle and puts this on your page.</p>
+      <h1 style="margin: 0">Register <span class="mono" style="color: var(--accent)">@${esc(handle)}</span></h1>
+      <p class="lede">Add the name people will see. One approval registers the handle to you and sets up your profile.</p>
       <form id="join-approve" class="stack" data-handle="${esc(handle)}" style="margin-top: 8px">
         <div class="field"><label for="name">Name</label><input id="name" value="${esc(p.name ?? "")}" autocomplete="name" required></div>
         <div class="field"><label for="bio">Bio · optional</label><textarea id="bio" rows="2">${esc(p.description ?? "")}</textarea></div>
         <button class="pill accent big" type="submit" style="margin-top: 12px">Approve in wallet</button>
-        <p class="note" style="text-align: center">The handle is yours to keep, sell or give away.</p>
+        <p class="note" style="text-align: center">It stays yours until you sell it or give it away.</p>
       </form>
     </main>`;
 }
@@ -332,7 +337,7 @@ async function viewWelcome(state) {
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(p.name ?? short(connected))}</h1>
       ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
-      <p class="bio" role="status">Your page is live, and every Lattice app shows you this way.</p>
+      <p class="bio" role="status">${p.handle ? `@${esc(p.handle)} is registered to you. ` : ""}Every Lattice app now shows you this way.</p>
     </main>
     <div class="col stack" style="margin-top: 20px">
       <button class="pill big" type="button" data-copy="${esc(link)}" style="justify-content: space-between"><span class="mono">${esc(link.replace(/^https?:\/\//, ""))}</span><span>Copy link</span></button>
@@ -353,8 +358,8 @@ function viewFind(message = "") {
         <input id="q" placeholder="@handle or address" autocomplete="off" spellcheck="false">
         <button class="pill dark" type="submit">Go</button>
       </form>
-      <p class="note" style="margin-top: 12px">${esc(message) || "One page for your account, used by every Lattice app."}</p>
-      ${connected ? "" : `<p class="note">Connect your wallet to make yours.</p>`}
+      <p class="note" style="margin-top: 12px">${esc(message) || "Look anyone up by their registered @handle."}</p>
+      ${connected ? "" : `<p class="note">Connect your wallet to register yours.</p>`}
     </main>`;
 }
 
@@ -677,9 +682,9 @@ document.addEventListener("input", (event) => {
     if ($("#want")?.value.trim().replace(/^@/, "") !== want) return;
     const front = event.target.form?.id === "join";
     if (!entry) {
-      status.textContent = `@${want} is free to claim.`;
+      status.textContent = front ? `@${want} is available.` : `@${want} is free to claim.`;
       go.hidden = false;
-      go.textContent = front ? `Claim @${want}` : "Claim";
+      go.textContent = front ? `Register @${want}` : "Claim";
       go.dataset.mode = "claim";
     } else if (entry.holder === connected) {
       status.textContent = `@${want} is yours.`;
@@ -742,7 +747,7 @@ document.addEventListener("submit", async (event) => {
     const me = connected;
     const card = { handle: want, name: $("#name").value.trim(), description: $("#bio").value.trim() };
     act(
-      `Claiming @${want}`,
+      `Registering @${want}`,
       async () => {
         const state = await readState();
         return profile.combine(await profile.claim(state, me, want), await profile.editCard(state, me, card));

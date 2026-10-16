@@ -303,27 +303,27 @@ test("links another client wrote are shown only when they are web addresses", as
   await expect(page.locator(".links a")).toHaveText(["Fine"]);
 }, { wallet: false });
 
-test("a newcomer with no coins claims @erin at the front door, approves once, and is live", async ({ page }) => {
+test("a newcomer with no coins registers @erin at the front door, approves once, and is live", async ({ page }) => {
   const erin = newAccount();
   assert.equal(BigInt((await account(erin.address)).balance ?? 0), 0n);
   await walletHolds(page.context(), erin);
   await openApp(page, null, "#/");
-  await expect(page.locator("h1")).toHaveText("One page for you, on every Lattice app.");
+  await expect(page.locator("h1")).toHaveText("Register your name on the internet.");
   await page.locator("#want").fill("erin");
-  await expect(page.locator("#want-status")).toHaveText("@erin is free to claim.");
-  await page.getByRole("button", { name: "Claim @erin" }).click();
+  await expect(page.locator("#want-status")).toHaveText("@erin is available.");
+  await page.getByRole("button", { name: "Register @erin" }).click();
 
   await expect(page).toHaveURL(/#\/join\/erin$/);
-  await expect(page.locator("main")).toContainText("Your account lives in the Lattice Wallet");
+  await expect(page.locator("main")).toContainText("Your key proves it's you");
   await page.getByRole("button", { name: "Connect your wallet" }).click();
-  await expect(page.locator("h1")).toHaveText("Make @erin yours");
+  await expect(page.locator("h1")).toHaveText("Register @erin");
   await page.locator("#name").fill("Erin Vale");
   await page.getByRole("button", { name: "Approve in wallet" }).click();
 
   await expect(page).toHaveURL(/#\/welcome$/);
   await expect(page.locator("h1")).toHaveText("Erin Vale");
   await expect(page.locator(".handle")).toHaveText("@erin");
-  await expect(page.locator("#app")).toContainText("Your page is live");
+  await expect(page.locator("#app")).toContainText("@erin is registered to you.");
   await expect(page.locator("#app")).toContainText("Finish your page · 2 of 4");
   // Connecting, and one write that claimed the handle and wrote the card.
   assert.equal(page.context().approvals, 2);

@@ -1,5 +1,10 @@
 # Moniker
 
+Register your name on the internet. Moniker gives you an `@handle` that
+belongs to you, not to an app: no company can take it back, rename it or
+hand it to someone else, and only your key can change what it says. Every
+Lattice app knows you by it.
+
 One chain, Moniker (`Nexus/moniker`), holds every account's profile and every handle.
 Any app reads and writes it; no app keeps its own profile.
 
@@ -51,8 +56,8 @@ pinned to a release; clone with `--recurse-submodules`, or run
 
 `app/` is a static page: one page per account, like a link page (photo,
 name, `@handle`, bio, a stack of links), plus Edit and Handles. The front
-door is a claim box: type a handle and it says whether it is free, taken or
-for sale. Claiming it is the sign-up: connect the Lattice Wallet, give a
+door is a name search: type a handle and it says whether it is available, taken or
+for sale. Registering it is the sign-up: connect the Lattice Wallet, give a
 name, and one approval claims the handle and writes the page with it. Writes
 are free on the trial chain (its hosts admit 0-fee transactions), so a new
 account needs no coins. It reads every
