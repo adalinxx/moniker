@@ -1,5 +1,5 @@
 // Moniker: one page per account, like a link page, read from the profile
-// chain by CID and written through the Lattice Wallet, which asks the owner to
+// chain by CID and written through the Selfhold wallet, which asks the owner to
 // approve every change. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { mediaVolume, operator } from "../client/media.mjs";
@@ -34,8 +34,11 @@ function saveSettings(next) {
 const chainPath = () => settings.chain.split("/").filter(Boolean);
 // Writes are free on the trial chain: its hosts admit 0-fee transactions.
 const FEE = 0n;
-// Where a newcomer gets the Lattice Wallet.
+// Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://github.com/adalinxx/lattice-wallet/releases";
+// Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
+const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand)));
 
 // ---------------------------------------------------------------- reading
 
@@ -91,7 +94,7 @@ let connected = null;
 const wallet = () => window.lattice ?? null;
 
 async function connect() {
-  if (!wallet()) throw new Error("This needs the Lattice Wallet extension.");
+  if (!wallet()) throw new Error("This needs the Selfhold wallet.");
   connected = await wallet().connect();
   return connected;
 }
@@ -100,7 +103,7 @@ function walletMessage(error) {
   const text = String(error?.message ?? error);
   if (/just declined|ask again in a moment/i.test(text)) return "The wallet waits a few seconds after a decline. Try again in a moment.";
   if (/declined|rejected|denied/i.test(text)) return "You declined it in the wallet. Nothing was sent.";
-  if (/locked/i.test(text)) return "Unlock the Lattice Wallet, then try again.";
+  if (/locked/i.test(text)) return "Unlock Selfhold, then try again.";
   return text;
 }
 
@@ -353,18 +356,39 @@ const backBar = (href, label) => `
     <span class="label">${label}</span>
   </div>`;
 
-/** Checkout without a wallet: the wallet holds the key that will own the name. */
-function viewBuyWallet(handle) {
+// Set once someone leaves for the wallet's store page; on their return the
+// page reloads (Selfhold reaches only pages loaded after it was added), on the
+// same address, so they carry on where they were.
+const AWAITING = "moniker.awaitingWallet";
+const awaiting = (on) => {
+  try {
+    if (on === undefined) return sessionStorage.getItem(AWAITING) === "1";
+    if (on) sessionStorage.setItem(AWAITING, "1");
+    else sessionStorage.removeItem(AWAITING);
+  } catch {}
+  return false;
+};
+
+/** Where a key is needed and there is no wallet: what it is, and how to get one. */
+function walletPanel(why) {
+  const steps = phone ? "" : `
+    <ol class="steps">
+      <li>Add Selfhold to your browser. It's free.</li>
+      <li>Create your key in it: about a minute.</li>
+      <li>Come back to this tab. Moniker picks up right here.</li>
+    </ol>
+    <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? " to your browser" : " for Chrome"}</a>
+    ${chromium ? "" : `<p class="note" style="margin: 0">Selfhold runs in Chrome, Brave, Edge and Arc.</p>`}
+    <p class="note" id="wallet-wait" aria-live="polite" style="margin: 0"${awaiting() ? "" : " hidden"}>Waiting for Selfhold… When it's set up, come back to this tab.</p>`;
+  const elsewhere = phone ? `
+    <p style="margin: 0">Selfhold runs in a computer's browser, so finish this on a computer: open this page there.</p>
+    <button class="pill accent big" type="button" data-share="${esc(location.href)}">Copy this page's link</button>` : "";
   return `
-    ${backBar(`#/search/${esc(handle)}`, `Buying <span class="mono" style="color: var(--accent)">@${esc(handle)}</span>`)}
-    <main class="col stack" style="margin-top: 48px">
-      <h1 style="margin: 0">Your key proves it's you</h1>
-      <p class="lede">The Lattice Wallet holds the key that makes <span class="mono">@${esc(handle)}</span> yours. It stays on your device and asks you before anything is sent. Moniker never sees it.</p>
-      <div class="stack" style="margin-top: 24px">
-        <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener">Add the Lattice Wallet</a>
-        <p class="note" style="text-align: center">A browser extension. Once it's set up, reload this page.</p>
-      </div>
-    </main>`;
+    <section class="panel stack" aria-labelledby="get-wallet">
+      <h2 id="get-wallet">${why}</h2>
+      <p class="lede" style="margin: 0">Selfhold is a wallet in your browser. It keeps the key that proves a name is yours, on your device, and asks you before anything is sent. Moniker never sees it.</p>
+      ${steps}${elsewhere}
+    </section>`;
 }
 
 /**
@@ -373,9 +397,10 @@ function viewBuyWallet(handle) {
  */
 async function viewBuy(handle, state) {
   const entry = await profile.resolve(state, handle);
-  if (entry?.holder === connected) return viewBought(handle, state);
+  if (connected && entry?.holder === connected) return viewBought(handle, state);
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
+  const ready = Boolean(connected);
   return `
     ${backBar(`#/search/${esc(handle)}`, "Back to results")}
     <main class="col stack" style="margin-top: 12px">
@@ -388,8 +413,9 @@ async function viewBuy(handle, state) {
           <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>
         </div>
         <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " If the owner changes the price before it lands, nothing is taken." : ""}</p>
-        <button class="pill accent big" type="submit">Buy for ${coins(price + FEE)}</button>
+        ${ready ? `<button class="pill accent big" type="submit">Buy for ${coins(price + FEE)}</button>` : ""}
       </form>
+      ${ready ? "" : walletPanel(`To buy @${esc(handle)}, add Selfhold`)}
     </main>`;
 }
 
@@ -552,7 +578,9 @@ async function render() {
       const state = await readState();
       // Your key is asked for only where it is needed.
       const [page, arg = ""] = r.split(/\/(.*)/s);
-      if (r === "edit" || r === "me" || r === "names") {
+      if ((r === "edit" || r === "me" || r === "names") && !wallet()) {
+        html = `<main class="col stack" style="margin-top: 24px">${walletPanel(r === "names" ? "Your names live in your wallet" : "Your page belongs to your wallet's key")}</main>`;
+      } else if (r === "edit" || r === "me" || r === "names") {
         if (!connected) await connect();
         html = r === "edit" ? await viewEdit(state) : r === "me" ? await viewProfile(connected, state) : await viewNames(state);
       } else if (r === "market") html = await viewMarket(state);
@@ -561,7 +589,7 @@ async function render() {
         html = profile.isHandle(q) ? await viewSearch(q, state) : viewStart(q ? `“${arg}”: a name is lowercase letters, digits and _.` : "");
       } else if (page === "buy" && profile.isHandle(arg)) {
         if (!connected && wallet()) await connect();
-        html = connected ? await viewBuy(arg, state) : viewBuyWallet(arg);
+        html = await viewBuy(arg, state);
       } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
       else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
@@ -601,6 +629,12 @@ document.addEventListener("click", async (event) => {
   const d = el.dataset;
   if ("retry" in d) {
     render();
+  } else if ("getWallet" in d) {
+    awaiting(true);
+    $("#wallet-wait")?.removeAttribute("hidden");
+  } else if (d.share) {
+    if (navigator.share) navigator.share({ title: "Moniker", url: d.share }).catch(() => {});
+    else navigator.clipboard?.writeText(d.share).then(() => toast("Link copied. Open it on a computer."), () => toast(d.share));
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("addLink" in d) {
@@ -785,10 +819,20 @@ document.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("hashchange", render);
+// Back from adding Selfhold: reload, on the same address, so it reaches the page.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && awaiting() && !wallet()) location.reload();
+});
+// Selfhold announces itself when it reaches a page.
+window.addEventListener("lattice#initialized", () => {
+  awaiting(false);
+  render();
+});
 // A wallet already connected to this site answers without asking.
 (async () => {
   try {
     connected = (await wallet()?.address?.()) ?? null;
   } catch {}
+  if (wallet()) awaiting(false);
   render();
 })();

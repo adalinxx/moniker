@@ -46,7 +46,7 @@ An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
 
 Other apps read and write Moniker through
 [moniker-sdk](https://github.com/adalinxx/moniker-sdk): one import, no key
-handling, writes signed in the person's Lattice Wallet.
+handling, writes signed in the person's Selfhold wallet.
 
 ```js
 import { createMoniker, defineMonikerName } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@v0.1.2/src/browser.mjs";
@@ -71,11 +71,14 @@ sell it, give it away or release it. Each account also has one page, like a
 link page (photo, name, `@handle`, bio, a stack of links), and Edit. Your first
 name goes on your page in the same approval that buys it. There is no log in:
 the page asks the wallet only where a key is needed (Your page, My names, Edit,
-checkout). The network fee is 0 on the trial chain (its hosts admit 0-fee
+checkout). Without a wallet, the checkout still shows the order, with how to
+add Selfhold in place of Buy; back on the tab after adding it, the page reloads
+at the same checkout (Selfhold reaches only pages loaded after it), and on a
+phone it offers the link to finish on a computer. The network fee is 0 on the trial chain (its hosts admit 0-fee
 transactions), so a new account needs no coins to buy a name no one owns. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
 `lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
-and asks the Lattice Wallet extension to approve each write: a save is one
+and asks the Selfhold wallet extension to approve each write: a save is one
 transaction, a buy pays the holder in the same one. Reading needs no wallet.
 A photo is kept by your own node: set its URL and cookie in Settings (the node
 must list the page's origin in `rpcAllowedOrigins`). Fonts ship in
