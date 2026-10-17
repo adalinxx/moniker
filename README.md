@@ -5,7 +5,7 @@
   <img src="app/brand/moniker-lockup-light.svg" alt="Moniker" width="393" height="100">
 </picture>
 
-Register your name on the internet. Moniker gives you an `@handle` that
+Own your name on the internet. Moniker sells you an `@handle` that
 belongs to you, not to an app: no company can take it back, rename it or
 hand it to someone else, and only your key can change what it says. Any
 app can know you by it.
@@ -64,13 +64,15 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
 `app/` is a static page: one page per account, like a link page (photo,
 name, `@handle`, bio, a stack of links), plus Edit and Handles. The front
-door is a name search: type a handle and it says whether it is available, taken or
-for sale. Registering it is the sign-up: the Lattice Wallet connects, you give a
-name, and one approval claims the handle and writes the page with it. There is
-no log in: the page asks the wallet only where a key is needed (Your page,
-Edit, Register, buying and selling). Writes
-are free on the trial chain (its hosts admit 0-fee transactions), so a new
-account needs no coins. It reads every
+door is a name search: type a handle and it shows its price, as a domain
+search does. A handle no one owns costs 0; one its owner lists costs their
+asking price, paid to them; any other is taken. Buying one is the sign-up: the
+Lattice Wallet connects, you give a name, and the checkout shows the price, the
+network fee and the total before one approval buys the handle and writes the
+page with it. There is no log in: the page asks the wallet only where a key is
+needed (Your page, Edit, buying and selling). The network fee is 0 on the trial
+chain (its hosts admit 0-fee transactions), so a new account needs no coins to
+take a handle no one owns. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
 `lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
 and asks the Lattice Wallet extension to approve each write: a save is one

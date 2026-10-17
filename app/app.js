@@ -253,7 +253,7 @@ async function viewProfile(address, state) {
     </main>`;
 }
 
-// The handle someone is signing up for, kept if they leave to set up a wallet.
+// The handle someone is buying, kept if they leave to set up a wallet.
 const JOINING = "moniker.joining";
 function joining(handle) {
   try {
@@ -264,17 +264,17 @@ function joining(handle) {
   return "";
 }
 
-/** The front door: register a name, which is how you sign up. */
+/** The front door: find a name and buy it, which is how you sign up. */
 function viewStart(message = "") {
   return `
     <main class="col start">
-      <h1 class="hero">Register your name on the internet.</h1>
+      <h1 class="hero">Own your name on the internet.</h1>
       <p class="lede">An @handle that belongs to you, not to an app. Any app can know you by it.</p>
       <form class="stack" id="join" style="margin-top: 20px">
         <label for="want" class="label">Find your name</label>
         <div class="box"><span class="mono" aria-hidden="true" style="color: var(--muted)">@</span><input id="want" value="${esc(joining())}" placeholder="yourname" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
         <p class="note" id="want-status" aria-live="polite">${esc(message)}</p>
-        <button class="pill accent big" id="claim-go" type="submit" hidden>Register</button>
+        <button class="pill accent big" id="claim-go" type="submit" hidden>Buy</button>
       </form>
       <ul class="promises">
         <li><b>Yours to keep.</b> No company can take it back, rename it or hand it to someone else.</li>
@@ -287,11 +287,11 @@ function viewStart(message = "") {
 const stepBar = (handle, step) => `
   <div class="col top" style="justify-content: flex-start; align-items: center; gap: 12px">
     <a class="pill icon" href="#/" aria-label="Back">‹</a>
-    <span class="label">Registering <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
+    <span class="label">Buying <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
   </div>`;
 
-/** Sign-up, step 1, without a wallet: add one. */
-function viewJoinWallet(handle) {
+/** Buying, step 1, without a wallet: add one. */
+function viewBuyWallet(handle) {
   return `
     ${stepBar(handle, 1)}
     <main class="col stack" style="margin-top: 48px">
@@ -304,22 +304,32 @@ function viewJoinWallet(handle) {
     </main>`;
 }
 
-/** Sign-up, step 2: say who you are; one approval registers the handle and starts the profile. */
-async function viewJoinApprove(handle, state) {
+/**
+ * Checkout, step 2: a handle no one owns costs 0, a listed one its asking
+ * price, paid to its owner; one approval buys it and puts it on your page.
+ */
+async function viewBuy(handle, state) {
   const entry = await profile.resolve(state, handle);
   if (entry?.holder === connected) return viewProfile(connected, state);
-  if (entry) return viewStart(`@${handle} was just taken. Try another.`);
+  if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
+  const price = entry?.price ?? 0n;
   const p = await profile.getProfile(state, connected);
   return `
     ${stepBar(handle, 2)}
     <main class="col stack" style="margin-top: 24px">
-      <h1 style="margin: 0">Register <span class="mono" style="color: var(--accent)">@${esc(handle)}</span></h1>
-      <p class="lede">Add the name people will see. One approval registers the handle to you and sets up your profile.</p>
-      <form id="join-approve" class="stack" data-handle="${esc(handle)}" style="margin-top: 8px">
+      <h1 style="margin: 0">Buy <span class="mono" style="color: var(--accent)">@${esc(handle)}</span></h1>
+      <p class="lede">Add the name people will see. One approval buys the handle and sets up your page with it.</p>
+      <form id="buy" class="stack" data-handle="${esc(handle)}" data-price="${price}" style="margin-top: 8px">
         <div class="field"><label for="name">Name</label><input id="name" value="${esc(p.name ?? "")}" autocomplete="name" required></div>
         <div class="field"><label for="bio">Bio · optional</label><textarea id="bio" rows="2">${esc(p.description ?? "")}</textarea></div>
-        <button class="pill accent big" type="submit" style="margin-top: 12px">Approve in wallet</button>
-        <p class="note" style="text-align: center">It stays yours until you sell it or give it away.</p>
+        <div class="sum">
+          <span class="label">Price · ${entry ? "paid to its owner" : "no one owns it yet"}</span><span>${coins(price)}</span>
+          <span class="label">Network fee</span><span>${coins(FEE)}</span>
+          <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>
+        </div>
+        ${entry ? `<p class="note">If the owner changes the price before it lands, nothing is taken.</p>` : ""}
+        <button class="pill accent big" type="submit" style="margin-top: 4px">Buy for ${coins(price + FEE)}</button>
+        <p class="note" style="text-align: center">It stays yours until you sell it or give it away. No renewals.</p>
       </form>
     </main>`;
 }
@@ -354,7 +364,7 @@ async function viewEdit(state) {
               <option value="">None</option>
               ${held.map((h) => `<option value="${esc(h.handle)}"${h.handle === p.handle ? " selected" : ""}>@${esc(h.handle)}</option>`).join("")}
             </select>
-            <span class="label">Only handles you hold. <a href="#/">Register one</a></span>
+            <span class="label">Only handles you hold. <a href="#/">Buy one</a></span>
           </div>
           <div class="field"><label for="url">Website</label><input id="url" type="url" inputmode="url" value="${esc(p.url ?? "")}" placeholder="https://"></div>
         </section>
@@ -408,14 +418,14 @@ async function viewHandles(state) {
               <button class="pill" type="button" data-give="${esc(h.handle)}">Give</button>
               <button class="pill" type="button" data-release="${esc(h.handle)}">Release</button>
             </div>
-          </div>`).join("") : `<p class="note">None yet. <a href="#/">Register one</a>.</p>`}
+          </div>`).join("") : `<p class="note">None yet. <a href="#/">Buy one</a>.</p>`}
       </section>` : ""}
       <section class="section stack" aria-labelledby="sale">
         <h2 id="sale">For sale</h2>
         ${sale.filter((h) => h.holder !== connected).map((h) => `
           <div class="row">
             <span class="mono">@${esc(h.handle)}</span>
-            <div class="end"><button class="pill dark" type="button" data-buy="${esc(h.handle)}">Buy · ${coins(h.price)}</button></div>
+            <div class="end"><a class="pill dark" href="#/buy/${esc(h.handle)}">Buy · ${coins(h.price)}</a></div>
           </div>`).join("") || `<p class="note">Nothing for sale right now.</p>`}
       </section>
     </main>`;
@@ -459,9 +469,9 @@ async function render() {
         if (!connected) await connect();
         html = r === "edit" ? await viewEdit(state) : await viewProfile(connected, state);
       } else if (r === "handles") html = await viewHandles(state);
-      else if (r.startsWith("join/") && profile.isHandle(r.slice(5))) {
+      else if (r.startsWith("buy/") && profile.isHandle(r.slice(4))) {
         if (!connected && wallet()) await connect();
-        html = connected ? await viewJoinApprove(r.slice(5), state) : viewJoinWallet(r.slice(5));
+        html = connected ? await viewBuy(r.slice(4), state) : viewBuyWallet(r.slice(4));
       } else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
         html = entry ? await viewProfile(entry.holder, state) : viewStart(`No one holds ${r}.`);
@@ -526,8 +536,6 @@ document.addEventListener("click", async (event) => {
   } else if ("reset" in d) {
     saveSettings({});
     render();
-  } else if (d.buy) {
-    await buy(d.buy);
   } else if (d.list) {
     await listHandle(d.list);
   } else if (d.unlist) {
@@ -540,21 +548,6 @@ document.addEventListener("click", async (event) => {
     await releaseHandle(d.release);
   }
 });
-
-async function buy(handle) {
-  if (!connected) await connect().catch((error) => toast(walletMessage(error), { bad: true }));
-  if (!connected) return;
-  const entry = await profile.resolve(await readState(), handle);
-  if (!entry || entry.price === undefined) return toast(`@${handle} is no longer for sale.`, { bad: true });
-  const ok = await sheet({
-    title: `Buy @${handle}`,
-    body: "The holder is paid in the same transaction. If they change the price before it lands, nothing is taken.",
-    rows: [["Price", coins(entry.price)]],
-    confirm: `Buy for ${coins(entry.price)}`,
-  });
-  if (!ok) return;
-  act(`Buying @${handle}`, () => profile.buy(entry, connected), async (s) => (await profile.resolve(s, handle))?.holder === connected);
-}
 
 async function listHandle(handle) {
   const entry = await profile.resolve(await readState(), handle);
@@ -591,7 +584,7 @@ async function releaseHandle(handle) {
   if (!entry) return;
   const ok = await sheet({
     title: `Release @${handle}`,
-    body: "It stops being yours, and anyone may claim it next.",
+    body: "It stops being yours, and anyone may buy it next, for 0.",
     confirm: "Release it",
   });
   if (!ok) return;
@@ -613,16 +606,16 @@ document.addEventListener("input", (event) => {
     const entry = await profile.resolve(await readState(), want).catch(() => null);
     if ($("#want")?.value.trim().replace(/^@/, "") !== want) return;
     if (!entry) {
-      status.textContent = `@${want} is available.`;
+      status.textContent = `No one owns @${want} yet, so it costs 0.`;
       go.hidden = false;
-      go.textContent = `Register @${want}`;
-      go.dataset.mode = "claim";
+      go.textContent = `Buy @${want} · 0`;
+      go.dataset.mode = "buy";
     } else if (entry.holder === connected) {
       status.textContent = `@${want} is yours.`;
     } else if (entry.price !== undefined) {
-      status.textContent = `@${want} is for sale. Anyone who pays the price gets it.`;
+      status.textContent = `@${want} is for sale by its owner.`;
       go.hidden = false;
-      go.textContent = `Buy · ${coins(entry.price)}`;
+      go.textContent = `Buy @${want} · ${coins(entry.price)}`;
       go.dataset.mode = "buy";
     } else {
       status.textContent = `@${want} is taken and not for sale.`;
@@ -661,21 +654,24 @@ document.addEventListener("submit", async (event) => {
     const want = $("#want").value.trim().replace(/^@/, "");
     const mode = $("#claim-go").dataset.mode;
     if (mode === "see") location.hash = `#/@${want}`;
-    else if (mode === "buy") buy(want);
-    else if (mode === "claim") {
+    else if (mode === "buy") {
       joining(want);
-      location.hash = `#/join/${want}`;
+      location.hash = `#/buy/${want}`;
     }
-  } else if (form.id === "join-approve") {
+  } else if (form.id === "buy") {
     event.preventDefault();
     const want = form.dataset.handle;
     const me = connected;
     const card = { handle: want, name: $("#name").value.trim(), description: $("#bio").value.trim() };
     act(
-      `Registering @${want}`,
+      `Buying @${want}`,
       async () => {
         const state = await readState();
-        return profile.combine(await profile.claim(state, me, want), await profile.editCard(state, me, card));
+        const entry = await profile.resolve(state, want);
+        // Bought at the price shown, or not at all.
+        if (entry && entry.price !== BigInt(form.dataset.price)) throw new Error(`The price of @${want} just changed. Look again.`);
+        const take = entry ? profile.buy(entry, me) : await profile.claim(state, me, want);
+        return profile.combine(take, await profile.editCard(state, me, card));
       },
       async (s) => (await profile.resolve(s, want))?.holder === me && (await profile.getProfile(s, me)).handle === want,
       () => {
