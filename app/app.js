@@ -213,7 +213,7 @@ function sheet({ title, body, rows = [], confirm, input }) {
 }
 
 const brandAsset = (name) => new URL(`./brand/${name}`, import.meta.url).href;
-const header = (actions = "") => `
+const header = () => `
   <header class="col brand-header">
     <a class="brand-home" href="#/" aria-label="Moniker home">
       <picture>
@@ -221,18 +221,14 @@ const header = (actions = "") => `
         <img src="${brandAsset("moniker-lockup-light.svg")}" alt="Moniker" width="393" height="100">
       </picture>
     </a>
-    ${actions}
   </header>`;
 
 const footer = () => `
   <footer class="col">
     <nav aria-label="Moniker">
-      <a href="#/">Moniker</a><a href="#/find">Find</a><a href="#/handles">Handles</a><a href="#/settings">Settings</a>
+      <a href="#/">Moniker</a><a href="#/me">Your page</a><a href="#/handles">Handles</a><a href="#/settings">Settings</a>
     </nav>
   </footer>`;
-
-const connectButton = () =>
-  connected ? "" : `<button class="pill" type="button" data-connect>Connect wallet</button>`;
 
 // ---------------------------------------------------------------- views
 
@@ -241,8 +237,9 @@ async function viewProfile(address, state) {
   const mine = connected === address;
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
+  const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : address}`;
   return `
-    <div class="col top">${mine ? `<a class="pill" href="#/edit">Edit</a>` : connectButton()}</div>
+    <div class="col top">${mine ? `<a class="pill" href="#/edit">Edit</a>` : ""}</div>
     <main class="col card">
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(p.name ?? short(address))}</h1>
@@ -250,7 +247,9 @@ async function viewProfile(address, state) {
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
       ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit">Make your page</a>.` : "This account hasn't made a page yet."}</p>` : ""}
-      <button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy this address" style="margin-top: 24px">${esc(short(address))} ⧉</button>
+      ${mine
+        ? `<button class="copy" type="button" data-copy="${esc(link)}" style="margin-top: 24px">Copy your link ⧉</button>`
+        : `<button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy this address" style="margin-top: 24px">${esc(short(address))} ⧉</button>`}
     </main>`;
 }
 
@@ -282,10 +281,6 @@ function viewStart(message = "") {
         <li><b>Proof it's you.</b> Only your key can change what your name says, so an app showing your @handle is showing you.</li>
         <li><b>One name everywhere.</b> Set it up once, and any app can show your name, photo and links.</li>
       </ul>
-      <p class="start-links">
-        <a href="#/find">Find someone</a>
-        <button class="quiet" type="button" data-connect>Set up a profile without a handle</button>
-      </p>
     </main>`;
 }
 
@@ -295,7 +290,7 @@ const stepBar = (handle, step) => `
     <span class="label">Registering <span class="mono" style="color: var(--accent)">@${esc(handle)}</span> · step ${step} of 2</span>
   </div>`;
 
-/** Sign-up, step 1: the wallet holds the account. */
+/** Sign-up, step 1, without a wallet: add one. */
 function viewJoinWallet(handle) {
   return `
     ${stepBar(handle, 1)}
@@ -303,11 +298,8 @@ function viewJoinWallet(handle) {
       <h1 style="margin: 0">Your key proves it's you</h1>
       <p class="lede">The Lattice Wallet holds the key that makes <span class="mono">@${esc(handle)}</span> yours. It stays on your device and asks you before anything is sent. Moniker never sees it.</p>
       <div class="stack" style="margin-top: 24px">
-        ${wallet()
-          ? `<button class="pill accent big" type="button" data-connect>Connect your wallet</button>`
-          : `<a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener">Add the Lattice Wallet</a>
-             <p class="note" style="text-align: center">A browser extension. Once it's set up, reload this page.</p>
-             <button class="pill big" type="button" data-connect>I have it · Connect</button>`}
+        <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener">Add the Lattice Wallet</a>
+        <p class="note" style="text-align: center">A browser extension. Once it's set up, reload this page.</p>
       </div>
     </main>`;
 }
@@ -315,7 +307,7 @@ function viewJoinWallet(handle) {
 /** Sign-up, step 2: say who you are; one approval registers the handle and starts the profile. */
 async function viewJoinApprove(handle, state) {
   const entry = await profile.resolve(state, handle);
-  if (entry?.holder === connected) return viewWelcome(state);
+  if (entry?.holder === connected) return viewProfile(connected, state);
   if (entry) return viewStart(`@${handle} was just taken. Try another.`);
   const p = await profile.getProfile(state, connected);
   return `
@@ -332,48 +324,6 @@ async function viewJoinApprove(handle, state) {
     </main>`;
 }
 
-/** Just signed up: your page is live; share it, then finish it. */
-async function viewWelcome(state) {
-  const p = await profile.getProfile(state, connected);
-  const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : connected}`;
-  const todo = [
-    ["Add your name", !p.name],
-    ["Add a photo", !p.avatar],
-    ["Add your links", !(p.links?.length || p.url)],
-  ];
-  const done = 1 + todo.filter(([, missing]) => !missing).length;
-  return `
-    <div class="col top"><a class="pill" href="#/">View page</a></div>
-    <main class="col card">
-      ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
-      <h1>${esc(p.name ?? short(connected))}</h1>
-      ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
-      <p class="bio" role="status">${p.handle ? `@${esc(p.handle)} is registered to you. ` : ""}Any app can now show you this way.</p>
-    </main>
-    <div class="col stack" style="margin-top: 20px">
-      <button class="pill big" type="button" data-copy="${esc(link)}" style="justify-content: space-between"><span class="mono">${esc(link.replace(/^https?:\/\//, ""))}</span><span>Copy link</span></button>
-      ${done < 4 ? `
-      <h2 class="label" style="margin: 16px 0 0; color: var(--ink); font-weight: 600">Finish your page · ${done} of 4</h2>
-      <div class="progress" role="progressbar" aria-label="Page set up" aria-valuemin="0" aria-valuemax="4" aria-valuenow="${done}"><span style="width: ${done * 25}%"></span></div>
-      ${todo.filter(([, missing]) => missing).map(([label]) => `<a class="row next" href="#/edit">${label}<span aria-hidden="true">›</span></a>`).join("")}` : ""}
-    </div>`;
-}
-
-function viewFind(message = "") {
-  return `
-    <div class="col top">${connectButton()}</div>
-    <main class="col" style="margin-top: 15vh">
-      <h1 style="text-align: center; margin-bottom: 24px">Moniker</h1>
-      <form class="box" id="find" role="search">
-        <label for="q" class="sr">Find a page by @handle or address</label>
-        <input id="q" placeholder="@handle or address" autocomplete="off" spellcheck="false">
-        <button class="pill dark" type="submit">Go</button>
-      </form>
-      <p class="note" style="margin-top: 12px">${esc(message) || "Look anyone up by their registered @handle."}</p>
-      ${connected ? "" : `<p class="note">Connect your wallet to register yours.</p>`}
-    </main>`;
-}
-
 async function viewEdit(state) {
   const p = await profile.getProfile(state, connected);
   const held = await profile.heldBy(state, connected);
@@ -381,7 +331,7 @@ async function viewEdit(state) {
   draft = draft?.address === connected ? draft : { address: connected, links: [...(p.links ?? [])], avatar: p.avatar };
   return `
     <div class="col top" style="justify-content: space-between; align-items: center">
-      <a class="pill icon" href="#/" aria-label="Back to your page">‹</a>
+      <a class="pill icon" href="#/me" aria-label="Back to your page">‹</a>
       <a class="pill" href="#/handles">Handles</a>
     </div>
     <main class="col stack" style="margin-top: 12px">
@@ -404,7 +354,7 @@ async function viewEdit(state) {
               <option value="">None</option>
               ${held.map((h) => `<option value="${esc(h.handle)}"${h.handle === p.handle ? " selected" : ""}>@${esc(h.handle)}</option>`).join("")}
             </select>
-            <span class="label">Only handles you hold. <a href="#/handles">Get one</a></span>
+            <span class="label">Only handles you hold. <a href="#/">Register one</a></span>
           </div>
           <div class="field"><label for="url">Website</label><input id="url" type="url" inputmode="url" value="${esc(p.url ?? "")}" placeholder="https://"></div>
         </section>
@@ -441,19 +391,9 @@ async function viewHandles(state) {
   return `
     <div class="col top" style="justify-content: space-between; align-items: center">
       <a class="pill icon" href="#/" aria-label="Back">‹</a>
-      ${connectButton()}
     </div>
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0">Handles</h1>
-      <section class="section stack" aria-labelledby="get">
-        <h2 id="get">Get a handle</h2>
-        <form class="box" id="claim">
-          <label for="want" class="mono" style="font-size: 17px; color: var(--muted)">@</label>
-          <input id="want" placeholder="yourname" autocomplete="off" spellcheck="false" autocapitalize="none">
-          <button class="pill accent" type="submit" id="claim-go" hidden>Claim</button>
-        </form>
-        <p class="note" id="want-status" aria-live="polite">Lowercase letters, digits and _.</p>
-      </section>
       ${connected ? `
       <section class="section stack" aria-labelledby="yours">
         <h2 id="yours">Yours</h2>
@@ -468,7 +408,7 @@ async function viewHandles(state) {
               <button class="pill" type="button" data-give="${esc(h.handle)}">Give</button>
               <button class="pill" type="button" data-release="${esc(h.handle)}">Release</button>
             </div>
-          </div>`).join("") : `<p class="note">None yet.</p>`}
+          </div>`).join("") : `<p class="note">None yet. <a href="#/">Register one</a>.</p>`}
       </section>` : ""}
       <section class="section stack" aria-labelledby="sale">
         <h2 id="sale">For sale</h2>
@@ -512,29 +452,25 @@ async function render() {
   try {
     let html;
     if (r === "settings") html = viewSettings();
-    else if (r === "find") html = viewFind();
     else {
       const state = await readState();
-      if (r === "edit") {
+      // Your key is asked for only where it is needed.
+      if (r === "edit" || r === "me") {
         if (!connected) await connect();
-        html = await viewEdit(state);
+        html = r === "edit" ? await viewEdit(state) : await viewProfile(connected, state);
       } else if (r === "handles") html = await viewHandles(state);
       else if (r.startsWith("join/") && profile.isHandle(r.slice(5))) {
+        if (!connected && wallet()) await connect();
         html = connected ? await viewJoinApprove(r.slice(5), state) : viewJoinWallet(r.slice(5));
-      } else if (r === "welcome" && connected) html = await viewWelcome(state);
-      else if (r.startsWith("@")) {
+      } else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
-        html = entry ? await viewProfile(entry.holder, state) : viewFind(`No one holds ${r}.`);
+        html = entry ? await viewProfile(entry.holder, state) : viewStart(`No one holds ${r}.`);
       } else if (profile.isAddress(r)) html = await viewProfile(r, state);
-      else if (r === "" && connected && Object.keys(await profile.getProfile(state, connected)).length > 1) {
-        html = await viewProfile(connected, state);
-      } else if (r === "") html = viewStart();
-      else html = viewFind(`“${r}” is not a handle or an address.`);
+      else if (r === "") html = viewStart();
+      else html = viewStart(`“${r}” is not a handle or an address.`);
     }
     if (ticket !== drawing) return;
-    const headerActions = r === "" && !connected
-      ? `<button class="pill" type="button" data-connect>Log in</button>` : "";
-    app.innerHTML = header(headerActions) + html + footer();
+    app.innerHTML = header() + html + footer();
     // A handle remembered from an unfinished sign-up: check it again.
     if ($("#join #want")?.value) $("#want").dispatchEvent(new Event("input", { bubbles: true }));
     for (const img of app.querySelectorAll("[data-photo]")) {
@@ -550,19 +486,6 @@ async function render() {
 
 // ---------------------------------------------------------------- events
 
-/**
- * Just connected: from the start screen, go to your page, or straight to
- * Edit when you have none yet. On someone else's page or the handles, stay.
- */
-async function arrive() {
-  const r = route();
-  if (r !== "" && r !== "find") return render();
-  const p = await profile.getProfile(await readState(), connected).catch(() => null);
-  const target = p && Object.keys(p).length > 1 ? "#/" : "#/edit";
-  if (location.hash === target) render();
-  else location.hash = target;
-}
-
 function readDraftLinks() {
   return [...document.querySelectorAll("[data-link]")].map((row) => ({
     label: $('[data-field="label"]', row).value.trim(),
@@ -577,11 +500,7 @@ document.addEventListener("click", async (event) => {
   const el = event.target.closest("button, a");
   if (!el) return;
   const d = el.dataset;
-  if ("connect" in d) {
-    // The extension shows itself to pages loaded after it was added.
-    if (!wallet()) return toast("Add the Lattice Wallet, then reload this page.", { bad: true });
-    connect().then(arrive, (error) => toast(walletMessage(error), { bad: true }));
-  } else if ("retry" in d) {
+  if ("retry" in d) {
     render();
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
@@ -693,11 +612,10 @@ document.addEventListener("input", (event) => {
   wantTimer = setTimeout(async () => {
     const entry = await profile.resolve(await readState(), want).catch(() => null);
     if ($("#want")?.value.trim().replace(/^@/, "") !== want) return;
-    const front = event.target.form?.id === "join";
     if (!entry) {
-      status.textContent = front ? `@${want} is available.` : `@${want} is free to claim.`;
+      status.textContent = `@${want} is available.`;
       go.hidden = false;
-      go.textContent = front ? `Register @${want}` : "Claim";
+      go.textContent = `Register @${want}`;
       go.dataset.mode = "claim";
     } else if (entry.holder === connected) {
       status.textContent = `@${want} is yours.`;
@@ -708,11 +626,9 @@ document.addEventListener("input", (event) => {
       go.dataset.mode = "buy";
     } else {
       status.textContent = `@${want} is taken and not for sale.`;
-      if (front) {
-        go.hidden = false;
-        go.textContent = `See @${want}'s page`;
-        go.dataset.mode = "see";
-      }
+      go.hidden = false;
+      go.textContent = `See @${want}'s page`;
+      go.dataset.mode = "see";
     }
   }, 300);
 });
@@ -740,11 +656,7 @@ document.addEventListener("change", async (event) => {
 
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (form.id === "find") {
-    event.preventDefault();
-    const q = $("#q").value.trim();
-    location.hash = `#/${q.startsWith("@") || profile.isAddress(q) ? q : `@${q}`}`;
-  } else if (form.id === "join") {
+  if (form.id === "join") {
     event.preventDefault();
     const want = $("#want").value.trim().replace(/^@/, "");
     const mode = $("#claim-go").dataset.mode;
@@ -768,23 +680,9 @@ document.addEventListener("submit", async (event) => {
       async (s) => (await profile.resolve(s, want))?.holder === me && (await profile.getProfile(s, me)).handle === want,
       () => {
         joining(null);
-        location.hash = "#/welcome";
+        location.hash = "#/me";
       },
     );
-  } else if (form.id === "claim") {
-    event.preventDefault();
-    const want = $("#want").value.trim().replace(/^@/, "");
-    if ($("#claim-go").dataset.mode === "buy") return buy(want);
-    if (!connected) await connect().catch((error) => toast(walletMessage(error), { bad: true }));
-    if (!connected) return;
-    const ok = await sheet({
-      title: `Claim @${want}`,
-      body: "It becomes yours to keep, sell or give away.",
-        confirm: "Claim",
-    });
-    if (!ok) return;
-    const me = connected;
-    act(`Claiming @${want}`, async () => profile.claim(await readState(), me, want), async (s) => (await profile.resolve(s, want))?.holder === me);
   } else if (form.id === "edit") {
     event.preventDefault();
     const links = readDraftLinks().filter((l) => l.label || l.url);
@@ -819,7 +717,7 @@ document.addEventListener("submit", async (event) => {
       draft = null;
       progress.update("Your page is updated.");
       setTimeout(progress.close, 2500);
-      location.hash = "#/";
+      location.hash = "#/me";
       render();
     } catch (error) {
       progress.update(walletMessage(error), { bad: true });
