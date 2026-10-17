@@ -196,6 +196,30 @@ test("a visitor searches: a name no one owns is for sale at 0, and reading needs
   await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
 }, { wallet: false });
 
+test("with no wallet, checkout still shows the order, with how to add Selfhold in place of Buy", async ({ page }) => {
+  await openApp(page, null, "#/search/nobody");
+  await page.getByRole("link", { name: "Buy @nobody", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("Checkout");
+  await expect(page.locator(".sum")).toContainText("no one owns it yet");
+  await expect(page.getByRole("button", { name: /^Buy for/ })).toHaveCount(0);
+  await expect(page.locator("#get-wallet")).toHaveText("To buy @nobody, add Selfhold");
+  const store = page.waitForEvent("popup");
+  await page.getByRole("link", { name: /^Add Selfhold/ }).click();
+  await (await store).close();
+  await expect(page.locator("#wallet-wait")).toBeVisible();
+  // Where a key is needed, the same panel instead of an error.
+  await page.goto(stack.app + "#/names");
+  await expect(page.locator("#get-wallet")).toHaveText("Your names live in your wallet");
+
+  // A phone can't add Selfhold: it is offered the link to finish on a computer.
+  const phone = await browser.newContext({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148" });
+  const p = await phone.newPage();
+  await openApp(p, null, "#/buy/nobody");
+  await expect(p.getByRole("button", { name: "Copy this page's link" })).toBeVisible();
+  await expect(p.getByRole("link", { name: /^Add Selfhold/ })).toHaveCount(0);
+  await phone.close();
+}, { wallet: false });
+
 test("Alice makes her page: name, bio, website and links in her order", async ({ page }) => {
   await fund(alice.address);
   await openApp(page, alice, "#/edit");
