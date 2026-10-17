@@ -1,5 +1,10 @@
 # Moniker
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="app/brand/moniker-lockup-dark.svg">
+  <img src="app/brand/moniker-lockup-light.svg" alt="Moniker" width="276" height="100">
+</picture>
+
 Register your name on the internet. Moniker gives you an `@handle` that
 belongs to you, not to an app: no company can take it back, rename it or
 hand it to someone else, and only your key can change what it says. Any
@@ -53,6 +58,9 @@ pinned to a release; clone with `--recurse-submodules`, or run
 `git submodule update --init`.
 
 ## The app
+
+Logo masters, transparent PNG exports, and favicons live in [`app/brand/`](app/brand/).
+See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
 `app/` is a static page: one page per account, like a link page (photo,
 name, `@handle`, bio, a stack of links), plus Edit and Handles. The front

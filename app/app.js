@@ -212,6 +212,17 @@ function sheet({ title, body, rows = [], confirm, input }) {
   });
 }
 
+const brandAsset = (name) => new URL(`./brand/${name}`, import.meta.url).href;
+const header = () => `
+  <header class="col brand-header">
+    <a class="brand-home" href="#/" aria-label="Moniker home">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="${brandAsset("moniker-lockup-dark.svg")}">
+        <img src="${brandAsset("moniker-lockup-light.svg")}" alt="Moniker" width="166" height="60">
+      </picture>
+    </a>
+  </header>`;
+
 const footer = () => `
   <footer class="col">
     <nav aria-label="Moniker">
@@ -521,7 +532,7 @@ async function render() {
       else html = viewFind(`“${r}” is not a handle or an address.`);
     }
     if (ticket !== drawing) return;
-    app.innerHTML = html + footer();
+    app.innerHTML = header() + html + footer();
     // A handle remembered from an unfinished sign-up: check it again.
     if ($("#join #want")?.value) $("#want").dispatchEvent(new Event("input", { bubbles: true }));
     for (const img of app.querySelectorAll("[data-photo]")) {

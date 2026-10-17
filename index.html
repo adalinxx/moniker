@@ -2,4 +2,4 @@
 layout: null
 ---
 {% capture app %}{% include_relative app/index.html %}{% endcapture %}
-{{ app | replace: './fonts/', './app/fonts/' | replace: 'src="./app.js"', 'src="./app/app.js"' }}
+{{ app | replace: './fonts/', './app/fonts/' | replace: './brand/', './app/brand/' | replace: 'src="./app.js"', 'src="./app/app.js"' }}
