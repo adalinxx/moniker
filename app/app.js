@@ -213,14 +213,15 @@ function sheet({ title, body, rows = [], confirm, input }) {
 }
 
 const brandAsset = (name) => new URL(`./brand/${name}`, import.meta.url).href;
-const header = () => `
+const header = (actions = "") => `
   <header class="col brand-header">
     <a class="brand-home" href="#/" aria-label="Moniker home">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="${brandAsset("moniker-lockup-dark.svg")}">
-        <img src="${brandAsset("moniker-lockup-light.svg")}" alt="Moniker" width="166" height="60">
+        <img src="${brandAsset("moniker-lockup-light.svg")}" alt="Moniker" width="393" height="100">
       </picture>
     </a>
+    ${actions}
   </header>`;
 
 const footer = () => `
@@ -267,7 +268,6 @@ function joining(handle) {
 /** The front door: register a name, which is how you sign up. */
 function viewStart(message = "") {
   return `
-    <div class="col top">${connected ? "" : `<button class="pill" type="button" data-connect>Log in</button>`}</div>
     <main class="col start">
       <h1 class="hero">Register your name on the internet.</h1>
       <p class="lede">An @handle that belongs to you, not to an app. Any app can know you by it.</p>
@@ -532,7 +532,9 @@ async function render() {
       else html = viewFind(`“${r}” is not a handle or an address.`);
     }
     if (ticket !== drawing) return;
-    app.innerHTML = header() + html + footer();
+    const headerActions = r === "" && !connected
+      ? `<button class="pill" type="button" data-connect>Log in</button>` : "";
+    app.innerHTML = header(headerActions) + html + footer();
     // A handle remembered from an unfinished sign-up: check it again.
     if ($("#join #want")?.value) $("#want").dispatchEvent(new Event("input", { bubbles: true }));
     for (const img of app.querySelectorAll("[data-photo]")) {

@@ -1,24 +1,9 @@
-MONIKER / HANDLE IDENTITY
+MONIKER / ROUNDED WORDMARK A
 
-Selected direction A, reconstructed as clean editable vector geometry.
-The lowercase m and open @ sweep preserve the approved concept.
+Selected custom-drawn lettering, paired with the approved unchanged @/m symbol.
+Replace the prior horizontal lockup assets with these files. Keep existing symbol-only and favicon assets unchanged.
 
-FILES
-- symbol and horizontal lockup: light, dark, black and white SVG + transparent PNG
-- favicon: 16, 32 and 48 px light/dark PNG; ICO; theme-aware SVG
-
-COLOUR
-Light: cobalt #1F3FBF; wordmark #16181D; suggested background #F3F1EC.
-Dark: periwinkle #8FA6FF; wordmark #F1F0EC; suggested background #15171B.
-Monochrome: pure black or white.
-
-USAGE
-Keep at least 10 percent of symbol width clear around the artwork.
-SVG symbols have a 100 x 100 viewBox; artwork spans approximately 5 to 95.
-Keep proportions. Do not add effects, stretch, rotate or close the @ aperture.
-Prefer symbol-only below 120 px total lockup width. Use supplied favicons at native size.
-PNG backgrounds are transparent. SVG wordmarks use outlines and have no font dependency.
-Wordmark derived from Public Sans Semibold; SIL Open Font License. Font file not included.
-
-STATUS
-Vector refinement for approval; not deployed. No trademark clearance implied.
+Light: #1F3FBF throughout. Dark: #8FA6FF throughout. Black and white are single-colour alternatives.
+SVG viewBox: 0 0 393 100. Set width and height proportionally. Suggested header display height: 40 px (157.2 px wide).
+All lettering is vector paths, with no font dependency or remote resources. PNGs are 1600 px wide with transparent backgrounds.
+Do not stretch, rotate, recolour individual letters or modify symbol geometry.
