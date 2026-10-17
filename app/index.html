@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Moniker</title>
 <meta name="description" content="Register your name on the internet: an @handle you own, that any app can recognize.">
-<link rel="icon" href="data:,">
+<link rel="icon" href="./brand/favicon.ico" sizes="any">
+<link rel="icon" href="./brand/favicon.svg" type="image/svg+xml">
 <style>
 @font-face { font-family: "Public Sans"; font-weight: 400 600; font-display: swap; src: url(./fonts/public-sans.woff2) format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url(./fonts/jetbrains-mono-400.woff2) format("woff2"); }
@@ -29,6 +30,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .mono { font-family: var(--mono); }
 .page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px 16px 40px; }
 .col { width: 100%; max-width: 560px; }
+.brand-header { margin-bottom: 8px; }
+.brand-home { display: inline-flex; align-items: center; min-height: 60px; }
+.brand-home img { display: block; width: 166px; height: 60px; }
 .top { display: flex; justify-content: flex-end; gap: 8px; min-height: 44px; }
 .pill { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); text-decoration: none; color: var(--ink); cursor: pointer; font-weight: 500; }
 .pill.dark { background: var(--ink); color: var(--bg); border-color: var(--ink); }
