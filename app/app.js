@@ -35,7 +35,7 @@ const chainPath = () => settings.chain.split("/").filter(Boolean);
 // Writes are free on the trial chain: its hosts admit 0-fee transactions.
 const FEE = 0n;
 // Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
-const WALLET_URL = "https://github.com/adalinxx/lattice-wallet/releases";
+const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
 const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand)));
