@@ -33,6 +33,20 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .brand-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
 .brand-home { display: inline-flex; align-items: center; flex-shrink: 0; min-height: 44px; }
 .brand-home img { display: block; width: 157.2px; height: 40px; }
+@media (max-width: 400px) { .brand-home img { width: 118px; height: 30px; } }
+.top-nav { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.top-nav a:not(.pill) { color: var(--ink); text-decoration: none; font-weight: 500; font-size: 15px; padding: 10px 10px; min-height: 44px; display: inline-flex; align-items: center; }
+.result { margin-top: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 24px; padding: 24px; display: flex; flex-direction: column; gap: 8px; }
+.result h1 { margin: 4px 0 0; font-size: clamp(26px, 6vw, 34px); font-weight: 400; }
+.result.available, .result.sale { border-color: var(--accent); }
+.result-end { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+.result-end .pill { min-height: 52px; padding: 0 24px; font-size: 16px; }
+.badge { align-self: flex-start; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--hair); color: var(--soft); }
+.result.available .badge, .result.sale .badge { background: var(--accent); color: var(--accent-ink); }
+.card .badge { align-self: center; }
+.price { font-weight: 600; font-variant-numeric: tabular-nums; }
+.price.big { font-size: 28px; }
+.order { margin: 0; font-size: 22px; }
 .top { display: flex; justify-content: flex-end; gap: 8px; min-height: 44px; }
 .pill { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); text-decoration: none; color: var(--ink); cursor: pointer; font-weight: 500; }
 .pill.dark { background: var(--ink); color: var(--bg); border-color: var(--ink); }
@@ -57,7 +71,7 @@ footer nav a, .quiet { color: var(--muted); font-size: 13px; text-decoration: no
 .box input { flex: 1; min-width: 0; height: 56px; border: 0; outline: none; background: transparent; font-family: var(--mono); font-size: 17px; }
 .box:focus-within { border-color: var(--ink); }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 60px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); padding: 8px 8px 8px 22px; }
-.row .end { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.row .end { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .section { margin-top: 32px; }
 .note { margin: 0 22px; font-size: 14px; color: var(--muted); }

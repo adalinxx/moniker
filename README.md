@@ -62,17 +62,17 @@ pinned to a release; clone with `--recurse-submodules`, or run
 Logo masters, transparent PNG exports, and favicons live in [`app/brand/`](app/brand/).
 See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
-`app/` is a static page: one page per account, like a link page (photo,
-name, `@handle`, bio, a stack of links), plus Edit and Handles. The front
-door is a name search: type a handle and it shows its price, as a domain
-search does. A handle no one owns costs 0; one its owner lists costs their
-asking price, paid to them; any other is taken. Buying one is the sign-up: the
-Lattice Wallet connects, you give a name, and the checkout shows the price, the
-network fee and the total before one approval buys the handle and writes the
-page with it. There is no log in: the page asks the wallet only where a key is
-needed (Your page, Edit, buying and selling). The network fee is 0 on the trial
-chain (its hosts admit 0-fee transactions), so a new account needs no coins to
-take a handle no one owns. It reads every
+`app/` is a static page laid out like a domain registrar: a name search
+whose results page shows the exact name (available at 0, for sale by its
+owner at their price, or taken) and names close to it with their prices; a
+checkout that is only the order (price, network fee, total, one approval); a
+Marketplace of listed names; and My names, where you put a name on your page,
+sell it, give it away or release it. Each account also has one page, like a
+link page (photo, name, `@handle`, bio, a stack of links), and Edit. Your first
+name goes on your page in the same approval that buys it. There is no log in:
+the page asks the wallet only where a key is needed (Your page, My names, Edit,
+checkout). The network fee is 0 on the trial chain (its hosts admit 0-fee
+transactions), so a new account needs no coins to buy a name no one owns. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
 `lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
 and asks the Lattice Wallet extension to approve each write: a save is one

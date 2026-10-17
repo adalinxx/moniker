@@ -177,10 +177,23 @@ const test = (name, body, { wallet: withWallet = true } = {}) =>
 const alice = newAccount();
 const bob = newAccount();
 
-test("a visitor finds nobody under a free handle, and reads with no wallet", async ({ page }) => {
-  await openApp(page, null, "#/@nobody");
+test("a visitor searches: a name no one owns is for sale at 0, and reading needs no wallet", async ({ page }) => {
+  await openApp(page, null, "#/");
   await expect(page.locator("h1")).toHaveText("Own your name on the internet.");
-  await expect(page.locator("#want-status")).toHaveText("No one holds @nobody.");
+  await page.locator("#q").fill("@No Body");
+  await page.getByRole("button", { name: "Search" }).click();
+  // Searched as a handle: lowercase, no @ or spaces.
+  await expect(page).toHaveURL(/#\/search\/nobody$/);
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+  await expect(page.locator(".result")).toContainText("No one owns it yet, so it costs 0.");
+  await expect(page.getByRole("link", { name: "Buy @nobody", exact: true })).toBeVisible();
+  // Names close to it, each with its price.
+  await expect(page.getByRole("link", { name: "Buy @nobody_ for 0" })).toBeVisible();
+  // A page no one holds is the same search.
+  await page.goto(stack.app + "#/@nobody");
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+  await page.goto(stack.app + "#/search/no!body");
+  await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
 }, { wallet: false });
 
 test("Alice makes her page: name, bio, website and links in her order", async ({ page }) => {
@@ -219,25 +232,27 @@ test("Alice makes her page: name, bio, website and links in her order", async ({
 
 test("Alice buys @alice, which no one owned, for 0; a visitor finds her by it", async ({ page }) => {
   await openApp(page, alice, "#/");
-  await page.locator("#want").fill("Alice");
-  await expect(page.locator("#want-status")).toHaveText("Only lowercase letters, digits and _.");
-  await page.locator("#want").fill("alice");
-  await expect(page.locator("#want-status")).toHaveText("No one owns @alice yet, so it costs 0.");
-  await page.getByRole("button", { name: "Buy @alice · 0" }).click();
-  // Already connected: straight to the checkout, her name filled in.
-  await expect(page.locator("h1")).toHaveText("Buy @alice");
+  await page.locator("#q").fill("alice");
+  await page.locator("#q").press("Enter");
+  await page.getByRole("link", { name: "Buy @alice", exact: true }).click();
+  // Already connected: straight to the checkout, which is only the order.
+  await expect(page.locator("h1")).toHaveText("Checkout");
+  await expect(page.locator(".order")).toHaveText("@alice");
   await expect(page.locator(".sum")).toContainText("no one owns it yet");
-  await expect(page.locator("#name")).toHaveValue("Alice Rivera");
   await page.getByRole("button", { name: "Buy for 0" }).click();
-  await expect(page).toHaveURL(/#\/me$/);
+  await expect(page).toHaveURL(/#\/bought\/alice$/);
+  await expect(page.locator("h1")).toHaveText("@alice is yours");
+  // She has a page already, and her first name went on it.
+  await page.getByRole("link", { name: "View your page" }).click();
   await expect(page.locator(".handle")).toHaveText("@alice");
-  // Her links stayed: registering changed only the handle.
   await expect(page.locator(".links a")).toHaveCount(3);
 
   const visitor = await browser.newPage();
-  await openApp(visitor, null, "#/");
-  await visitor.locator("#want").fill("alice");
-  await visitor.getByRole("button", { name: "See @alice's page" }).click();
+  await openApp(visitor, null, "#/search/alice");
+  await expect(visitor.locator(".result .badge")).toHaveText("Taken");
+  // Taken: names close to it that can be bought.
+  await expect(visitor.getByRole("link", { name: "Buy @alice_ for 0" })).toBeVisible();
+  await visitor.getByRole("link", { name: "See @alice's page" }).click();
   await expect(visitor.locator("h1")).toHaveText("Alice Rivera");
   await expect(visitor.getByRole("link", { name: "Edit" })).toHaveCount(0);
   await visitor.close();
@@ -254,7 +269,7 @@ test("another app shows Alice with <moniker-name>, linked to her page", async ({
 
 test("Alice sells @alice; Bob buys it alone, and it leaves her page", async ({ page }) => {
   {
-    await openApp(page, alice, "#/handles");
+    await openApp(page, alice, "#/names");
     const row = page.locator(".row", { hasText: "@alice" });
     await row.getByRole("button", { name: "Sell" }).click();
     await expect(page.locator("#sheet")).toContainText("Anyone can buy it at this price at once");
@@ -269,19 +284,17 @@ test("Alice sells @alice; Bob buys it alone, and it leaves her page", async ({ p
   const bobContext = await walletBrowser();
   try {
     const bobPage = bobContext.pages()[0] ?? (await bobContext.newPage());
-    await openApp(bobPage, bob, "#/handles");
-    const offer = bobPage.locator(".row", { hasText: "@alice" });
-    await offer.getByRole("link", { name: "Buy · 500" }).click();
-    // The same checkout as a handle no one owns, at the owner's price.
-    await expect(bobPage.locator("h1")).toHaveText("Buy @alice");
+    await openApp(bobPage, bob, "#/");
+    await bobPage.getByRole("link", { name: "Marketplace" }).click();
+    await bobPage.getByRole("link", { name: "Buy @alice for 500" }).click();
+    // The same checkout as a name no one owns, at the owner's price.
+    await expect(bobPage.locator("h1")).toHaveText("Checkout");
     await expect(bobPage.locator(".sum")).toContainText("paid to its owner");
     await expect(bobPage.locator("main")).toContainText("If the owner changes the price before it lands, nothing is taken.");
-    await bobPage.locator("#name").fill("Bob");
     await bobPage.getByRole("button", { name: "Buy for 500" }).click();
-    await expect(bobPage).toHaveURL(/#\/me$/);
-    await expect(bobPage.locator(".handle")).toHaveText("@alice");
-    await bobPage.goto(stack.app + "#/handles");
-    await expect(bobPage.locator("section", { hasText: "Yours" }).locator(".row", { hasText: "@alice" })).toBeVisible();
+    await expect(bobPage.locator("h1")).toHaveText("@alice is yours");
+    await bobPage.getByRole("link", { name: "Go to My names" }).click();
+    await expect(bobPage.locator(".row", { hasText: "@alice" })).toContainText("on your page");
   } finally {
     await bobContext.close();
   }
@@ -309,33 +322,34 @@ test("links another client wrote are shown only when they are web addresses", as
   await expect(page.locator(".links a")).toHaveText(["Fine"]);
 }, { wallet: false });
 
-test("a newcomer with no coins buys @erin, which no one owned, at the front door, approves once, and is live", async ({ page }) => {
+test("a newcomer with no coins searches, buys @erin for 0 in one approval, then sets up their page", async ({ page }) => {
   const erin = newAccount();
   assert.equal(BigInt((await account(erin.address)).balance ?? 0), 0n);
   await walletHolds(page.context(), erin);
   await openApp(page, null, "#/");
-  await expect(page.locator("h1")).toHaveText("Own your name on the internet.");
-  await page.locator("#want").fill("erin");
-  await expect(page.locator("#want-status")).toHaveText("No one owns @erin yet, so it costs 0.");
-  await page.getByRole("button", { name: "Buy @erin · 0" }).click();
+  await page.locator("#q").fill("erin");
+  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("link", { name: "Buy @erin", exact: true }).click();
 
   // The wallet is asked to connect on the way in.
   await expect(page).toHaveURL(/#\/buy\/erin$/);
-  await expect(page.locator("h1")).toHaveText("Buy @erin");
-  await page.locator("#name").fill("Erin Vale");
+  await expect(page.locator("h1")).toHaveText("Checkout");
   await page.getByRole("button", { name: "Buy for 0" }).click();
+  await expect(page.locator("h1")).toHaveText("@erin is yours");
+  // Connecting, and one write that bought the name and put it on the page.
+  assert.equal(page.context().approvals, 2);
 
+  await page.getByRole("link", { name: "Set up your page" }).click();
+  await expect(page.locator("#handle")).toHaveValue("erin");
+  await page.locator("#name").fill("Erin Vale");
+  await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator("h1")).toHaveText("Erin Vale");
   await expect(page.locator(".handle")).toHaveText("@erin");
-  await expect(page.getByRole("button", { name: "Copy your link ⧉" })).toBeVisible();
-  // Connecting, and one write that claimed the handle and wrote the card.
-  assert.equal(page.context().approvals, 2);
 
   const visitor = await browser.newPage();
-  await openApp(visitor, null, "#/");
-  await visitor.locator("#want").fill("erin");
-  await visitor.getByRole("button", { name: "See @erin's page" }).click();
+  await openApp(visitor, null, "#/search/erin");
+  await visitor.getByRole("link", { name: "See @erin's page" }).click();
   await expect(visitor.locator("h1")).toHaveText("Erin Vale");
   await visitor.close();
 });
