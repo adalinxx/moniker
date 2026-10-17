@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="app/brand/moniker-lockup-dark.svg">
-  <img src="app/brand/moniker-lockup-light.svg" alt="Moniker" width="276" height="100">
+  <img src="app/brand/moniker-lockup-light.svg" alt="Moniker" width="393" height="100">
 </picture>
 
 Register your name on the internet. Moniker gives you an `@handle` that
