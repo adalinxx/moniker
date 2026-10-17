@@ -143,14 +143,12 @@ async function openApp(page, who, hash = "#/") {
     localStorage.setItem("moniker.settings", JSON.stringify({ nodes: [node], chain }));
   }, { node: stack.node, chain: stack.chain });
   if (who) await walletHolds(page.context(), who);
-  await page.goto(stack.app + "#/find");
+  // Your page asks the wallet to connect.
+  await page.goto(stack.app + (who ? "#/me" : hash));
   if (who) {
-    await page.getByRole("button", { name: "Connect wallet" }).click();
-    // Connecting from the start screen goes to your page, or to Edit.
-    await expect(page).toHaveURL(/#\/(edit)?$/);
+    await expect(page.getByRole("link", { name: "Edit", exact: true })).toBeVisible();
+    if (hash !== "#/me") await page.goto(stack.app + hash);
   }
-  // null: stay where connecting landed.
-  if (hash !== null) await page.goto(stack.app + hash);
 }
 
 /** A test with a fresh browser and page; on failure, what the page showed. */
@@ -181,8 +179,8 @@ const bob = newAccount();
 
 test("a visitor finds nobody under a free handle, and reads with no wallet", async ({ page }) => {
   await openApp(page, null, "#/@nobody");
-  await expect(page.locator("#app")).toContainText("No one holds @nobody.");
-  await expect(page.getByRole("button", { name: "Connect wallet" })).toBeVisible();
+  await expect(page.locator("h1")).toHaveText("Register your name on the internet.");
+  await expect(page.locator("#want-status")).toHaveText("No one holds @nobody.");
 }, { wallet: false });
 
 test("Alice makes her page: name, bio, website and links in her order", async ({ page }) => {
@@ -207,7 +205,7 @@ test("Alice makes her page: name, bio, website and links in her order", async ({
   // GitHub first.
   await page.getByRole("button", { name: "Move link 2 up" }).click();
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page).toHaveURL(/#\/$/);
+  await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator("h1")).toHaveText("Alice Rivera");
   await expect(page.locator(".bio")).toHaveText("Builds open tools.");
   await expect(page.locator(".links a")).toHaveText(["alice.example", "GitHub", "Newsletter"]);
@@ -219,26 +217,26 @@ test("Alice makes her page: name, bio, website and links in her order", async ({
   expect(p.links).toEqual([{ label: "GitHub", url: "https://github.com/alice" }, { label: "Newsletter", url: "https://news.example" }]);
 });
 
-test("Alice claims @alice and puts it on her page; a visitor finds her by it", async ({ page }) => {
-  await openApp(page, alice, "#/handles");
+test("Alice registers @alice for her page; a visitor finds her by it", async ({ page }) => {
+  await openApp(page, alice, "#/");
   await page.locator("#want").fill("Alice");
   await expect(page.locator("#want-status")).toHaveText("Only lowercase letters, digits and _.");
   await page.locator("#want").fill("alice");
-  await expect(page.locator("#want-status")).toHaveText("@alice is free to claim.");
-  await page.getByRole("button", { name: "Claim" }).click();
-  await page.locator("#sheet").getByRole("button", { name: "Claim" }).click();
-  await expect(page.locator(".row", { hasText: "@alice" })).toBeVisible();
-  await page.goto(stack.app + "#/edit");
-  await page.locator("#handle").selectOption("alice");
-  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("#want-status")).toHaveText("@alice is available.");
+  await page.getByRole("button", { name: "Register @alice" }).click();
+  // Already connected: straight to the approval, her name filled in.
+  await expect(page.locator("h1")).toHaveText("Register @alice");
+  await expect(page.locator("#name")).toHaveValue("Alice Rivera");
+  await page.getByRole("button", { name: "Approve in wallet" }).click();
+  await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator(".handle")).toHaveText("@alice");
-  // Her name and links stayed: the save changed only the handle.
+  // Her links stayed: registering changed only the handle.
   await expect(page.locator(".links a")).toHaveCount(3);
 
   const visitor = await browser.newPage();
-  await openApp(visitor, null, "#/find");
-  await visitor.locator("#q").fill("@alice");
-  await visitor.locator("#q").press("Enter");
+  await openApp(visitor, null, "#/");
+  await visitor.locator("#want").fill("alice");
+  await visitor.getByRole("button", { name: "See @alice's page" }).click();
   await expect(visitor.locator("h1")).toHaveText("Alice Rivera");
   await expect(visitor.getByRole("link", { name: "Edit" })).toHaveCount(0);
   await visitor.close();
@@ -313,18 +311,16 @@ test("a newcomer with no coins registers @erin at the front door, approves once,
   await expect(page.locator("#want-status")).toHaveText("@erin is available.");
   await page.getByRole("button", { name: "Register @erin" }).click();
 
+  // The wallet is asked to connect on the way in.
   await expect(page).toHaveURL(/#\/join\/erin$/);
-  await expect(page.locator("main")).toContainText("Your key proves it's you");
-  await page.getByRole("button", { name: "Connect your wallet" }).click();
   await expect(page.locator("h1")).toHaveText("Register @erin");
   await page.locator("#name").fill("Erin Vale");
   await page.getByRole("button", { name: "Approve in wallet" }).click();
 
-  await expect(page).toHaveURL(/#\/welcome$/);
+  await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator("h1")).toHaveText("Erin Vale");
   await expect(page.locator(".handle")).toHaveText("@erin");
-  await expect(page.locator("#app")).toContainText("@erin is registered to you.");
-  await expect(page.locator("#app")).toContainText("Finish your page · 2 of 4");
+  await expect(page.getByRole("button", { name: "Copy your link ⧉" })).toBeVisible();
   // Connecting, and one write that claimed the handle and wrote the card.
   assert.equal(page.context().approvals, 2);
 
@@ -336,16 +332,14 @@ test("a newcomer with no coins registers @erin at the front door, approves once,
   await visitor.close();
 });
 
-test("tapping Connect wallet takes a new account to Edit, and one with a page to it", async ({ page }) => {
+test("Your page shows a new account where to start, and one with a page its page", async ({ page }) => {
   const dave = newAccount();
-  await openApp(page, dave, null);
-  await expect(page).toHaveURL(/#\/edit$/);
-  await expect(page.locator("h1")).toHaveText("Edit your page");
+  await openApp(page, dave, "#/me");
+  await expect(page.locator(".empty")).toHaveText("Nothing here yet. Make your page.");
   const context = await walletBrowser();
   try {
     const alicePage = context.pages()[0] ?? (await context.newPage());
-    await openApp(alicePage, alice, null);
-    await expect(alicePage).toHaveURL(/#\/$/);
+    await openApp(alicePage, alice, "#/me");
     await expect(alicePage.locator("h1")).toHaveText("Alice Rivera");
   } finally {
     await context.close();

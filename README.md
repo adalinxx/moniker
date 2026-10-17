@@ -65,8 +65,10 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 `app/` is a static page: one page per account, like a link page (photo,
 name, `@handle`, bio, a stack of links), plus Edit and Handles. The front
 door is a name search: type a handle and it says whether it is available, taken or
-for sale. Registering it is the sign-up: connect the Lattice Wallet, give a
-name, and one approval claims the handle and writes the page with it. Writes
+for sale. Registering it is the sign-up: the Lattice Wallet connects, you give a
+name, and one approval claims the handle and writes the page with it. There is
+no log in: the page asks the wallet only where a key is needed (Your page,
+Edit, Register, buying and selling). Writes
 are free on the trial chain (its hosts admit 0-fee transactions), so a new
 account needs no coins. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
