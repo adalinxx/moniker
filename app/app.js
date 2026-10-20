@@ -67,6 +67,20 @@ async function readState() {
   throw new Error(`No node is serving ${settings.chain} right now.`, { cause: failure });
 }
 
+/**
+ * The account's balance on this chain, as a node says, or undefined if none
+ * answers. Only to warn before asking the wallet, which checks it again.
+ */
+async function balanceOf(address) {
+  for (const node of settings.nodes) {
+    try {
+      const response = await fetch(`${node}/api/state/account/${address}?chainPath=${encodeURIComponent(settings.chain)}`, { cache: "no-store" });
+      if (response.ok) return BigInt((await response.json()).balance ?? 0);
+    } catch {}
+  }
+  return undefined;
+}
+
 // Photos, once per CID: content-addressed, so they never change.
 const MEDIA_TYPES = /^image\/(png|jpeg|gif|webp|avif)$/;
 const photos = new Map();
@@ -787,6 +801,14 @@ document.addEventListener("submit", async (event) => {
       }
     }
     const me = connected;
+    // Selfhold would only say "Not enough"; say how much is missing, and ask it nothing.
+    const total = BigInt(form.dataset.price) + FEE;
+    if (total > 0n) {
+      const balance = await balanceOf(me);
+      if (balance !== undefined && balance < total) {
+        return toast(`@${want} costs ${coins(total)}, and your account has ${coins(balance)}. Nothing was sent.`, { bad: true });
+      }
+    }
     act(
       `Buying @${want}`,
       async () => {

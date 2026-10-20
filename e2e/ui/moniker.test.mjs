@@ -464,6 +464,8 @@ test("checkout refuses a price that changed, or a name just taken, and asks the 
   const gwen = newAccount();
   const hal = newAccount();
   await fund(gwen.address, 100n);
+  // Hal can pay the 100 he is shown, so it is the price check that stops him.
+  await fund(hal.address, 150n);
   await writeAs(gwen, await profile.claim(await state(), gwen.address, "gwensale", 100n));
   await until("@gwensale for sale at 100", async () => (await profile.resolve(await state(), "gwensale"))?.price === 100n);
   const context = page.context();
@@ -630,3 +632,81 @@ test("a card another client wrote shows as text, long ones fit a phone, and odd 
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
 }, { wallet: false });
+
+test("back from adding Selfhold: the page reloads at the same checkout, then offers Buy once Selfhold arrives", async ({ page }) => {
+  // Chrome itself can't be made to install an extension here; everything the page does around it can.
+  const returnToTab = () => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  const mark = () => page.evaluate(() => (window.__sameDocument = true));
+  const reloaded = async () => !(await page.evaluate(() => window.__sameDocument === true));
+  await openApp(page, null, "#/buy/backnow");
+  // Coming back to the tab before choosing to add Selfhold changes nothing.
+  await mark();
+  await returnToTab();
+  await page.waitForTimeout(1000);
+  expect(await reloaded()).toBe(false);
+
+  const store = page.waitForEvent("popup");
+  await page.getByRole("link", { name: /^Add Selfhold/ }).click();
+  await (await store).close();
+  await expect(page.locator("#wallet-wait")).toBeVisible();
+  await mark();
+  await Promise.all([page.waitForEvent("load"), returnToTab()]);
+  expect(await reloaded()).toBe(true);
+  await expect(page).toHaveURL(/#\/buy\/backnow$/);
+  await expect(page.locator("#wallet-wait")).toBeVisible();
+
+  // Selfhold announces itself on the page; checkout now offers Buy, and stops waiting.
+  await page.evaluate(() => {
+    Object.defineProperty(window, "lattice", { value: { connect: async () => null, address: async () => null } });
+    window.dispatchEvent(new Event("lattice#initialized"));
+  });
+  await expect(page.getByRole("button", { name: "Buy for 0" })).toBeVisible();
+  await expect(page.locator("#get-wallet")).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem("moniker.awaitingWallet"))).toBeNull();
+}, { wallet: false });
+
+test("if Selfhold now connects this site to another account, a save sends nothing and the page shows that account", async ({ page }) => {
+  const nia = newAccount();
+  const oz = newAccount();
+  const context = page.context();
+  await openApp(page, nia, "#/edit");
+  await page.locator("#name").fill("Nia");
+  // In Selfhold, the person adds Oz's key and connects this site to Oz instead.
+  const popup = await context.newPage();
+  await popup.goto(`${context.walletOrigin}/popup/index.html`);
+  const imported = await popup.evaluate((privHex) => chrome.runtime.sendMessage({ type: "importKey", privHex }), oz.keyHex);
+  expect(imported.ok).toBe(true);
+  await popup.evaluate(async ({ origin, address }) => {
+    const { connections = {} } = await chrome.storage.local.get("connections");
+    await chrome.storage.local.set({ connections: { ...connections, [origin]: address } });
+  }, { origin: new URL(stack.app).origin, address: oz.address });
+  await popup.close();
+
+  const asked = context.approvals;
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(toast(page, "Selfhold now connects this site to a different account. Look again, then try again.")).toBeVisible();
+  expect(context.approvals).toBe(asked);
+  // Edit is now Oz's page, empty; saving it writes Oz's card, and Nia's is untouched.
+  await expect(page.locator("#name")).toHaveValue("");
+  await page.locator("#name").fill("Oz");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("h1")).toHaveText("Oz");
+  const s = await state();
+  expect((await profile.getProfile(s, oz.address)).name).toBe("Oz");
+  expect((await profile.getProfile(s, nia.address)).name).toBeUndefined();
+});
+
+test("buying a listed name with too few coins says how much it costs, and asks the wallet nothing", async ({ page }) => {
+  const pia = newAccount();
+  const quinn = newAccount();
+  await fund(pia.address, 100n);
+  await writeAs(pia, await profile.claim(await state(), pia.address, "piasale", 500n));
+  await until("@piasale for sale at 500", async () => (await profile.resolve(await state(), "piasale"))?.price === 500n);
+  const context = page.context();
+  await openApp(page, quinn, "#/buy/piasale");
+  const asked = context.approvals;
+  await page.getByRole("button", { name: "Buy for 500" }).click();
+  await expect(toast(page, "@piasale costs 500, and your account has 0. Nothing was sent.")).toBeVisible();
+  expect(context.approvals).toBe(asked);
+  expect((await profile.resolve(await state(), "piasale")).holder).toBe(pia.address);
+});
