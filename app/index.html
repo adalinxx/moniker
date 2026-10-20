@@ -77,6 +77,10 @@ footer nav a, .quiet { color: var(--muted); font-size: 13px; text-decoration: no
 .section { margin-top: 32px; }
 .note { margin: 0 22px; font-size: 14px; color: var(--muted); }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 20px; }
+details.panel > summary { cursor: pointer; font-weight: 600; }
+details.panel:not([open]) { gap: 0; }
+/* A QR code stays black on white in both themes, so any camera reads it. */
+.qr { align-self: center; width: min(260px, 100%); height: auto; image-rendering: pixelated; background: #fff; padding: 12px; border-radius: 12px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label, .label { font-size: 14px; color: var(--muted); }
 .field input, .field textarea, .field select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }

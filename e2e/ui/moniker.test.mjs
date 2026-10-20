@@ -299,10 +299,16 @@ test("Alice buys @alice, which no one owned, for 0; a visitor finds her by it", 
   await expect(page.locator("h1")).toHaveText("Checkout");
   await expect(page.locator(".order")).toHaveText("@alice");
   await expect(page.locator(".sum")).toContainText("no one owns it yet");
+  const asked = page.context().approvals;
   await page.getByRole("button", { name: "Buy for 0" }).click();
   await expect(page).toHaveURL(/#\/bought\/alice$/);
   await expect(page.locator("h1")).toHaveText("@alice is yours");
-  // She has a page already, and her first name went on it.
+  await expect(page.locator("main")).toContainText(`It's held by ${alice.address.slice(0, 7)}`);
+  // Buying needed no account: her page, made before, was left as it was. Connected, she can put it there.
+  expect((await profile.getProfile(await state(), alice.address)).handle).toBeUndefined();
+  await page.getByRole("button", { name: "Put @alice on your page" }).click();
+  await expect(page.getByRole("button", { name: "Put @alice on your page" })).toHaveCount(0);
+  expect(page.context().approvals).toBe(asked + 2);
   await page.getByRole("link", { name: "View your page" }).click();
   await expect(page.locator(".handle")).toHaveText("@alice");
   await expect(page.locator(".links a")).toHaveCount(3);
@@ -391,17 +397,22 @@ test("a newcomer with no coins searches, buys @erin for 0 in one approval, then 
   await page.getByRole("button", { name: "Search" }).click();
   await page.getByRole("link", { name: "Buy @erin", exact: true }).click();
 
-  // Checkout asks the wallet for nothing until Buy, which connects, then buys.
+  // Checkout asks the wallet for nothing until Buy, which needs no connection.
   await expect(page).toHaveURL(/#\/buy\/erin$/);
   await expect(page.locator("h1")).toHaveText("Checkout");
   assert.equal(page.context().approvals, 0);
   await page.getByRole("button", { name: "Buy for 0" }).click();
   await expect(page.locator("h1")).toHaveText("@erin is yours");
-  // Connecting, and one write that bought the name and put it on the page.
-  assert.equal(page.context().approvals, 2);
+  // One write, which bought the name and made a page showing it.
+  assert.equal(page.context().approvals, 1);
+  expect((await profile.getProfile(await state(), erin.address)).handle).toBe("erin");
+  expect(await page.evaluate(() => window.lattice.address())).toBeNull();
 
+  // Setting up the page edits it, so that connects.
   await page.getByRole("link", { name: "Set up your page" }).click();
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
   await expect(page.locator("#handle")).toHaveValue("erin");
+  assert.equal(page.context().approvals, 2);
   await page.locator("#name").fill("Erin Vale");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/#\/me$/);
@@ -696,27 +707,76 @@ test("if Selfhold now connects this site to another account, a save sends nothin
   expect((await profile.getProfile(s, nia.address)).name).toBeUndefined();
 });
 
-test("checkout says when an account is short, and still leaves paying to the wallet", async ({ page }) => {
+test("paying from another wallet: the QR code on checkout, opened in Selfhold elsewhere, buys the name", async ({ page }) => {
   const pia = newAccount();
   const quinn = newAccount();
   await fund(pia.address, 100n);
+  await fund(quinn.address, 600n);
   await writeAs(pia, await profile.claim(await state(), pia.address, "piasale", 500n));
   await until("@piasale for sale at 500", async () => (await profile.resolve(await state(), "piasale"))?.price === 500n);
-  const context = page.context();
-  await openApp(page, quinn, "#/buy/piasale");
-  await expect(page.locator("#short")).toHaveText("This costs 500. Your account has 0 on this chain.");
-  // Another wallet might bring the coins in its own way: Buy still asks it.
-  const asked = context.approvals;
-  context.answer = "decline";
-  await page.getByRole("button", { name: "Buy for 500" }).click();
-  await expect(toast(page, "You declined it in the wallet. Nothing was sent.")).toBeVisible();
-  expect(context.declines).toBe(1);
-  expect(context.approvals).toBe(asked);
-  expect((await profile.resolve(await state(), "piasale")).holder).toBe(pia.address);
 
-  // An account that can pay is told nothing.
-  await fund(quinn.address, 600n);
-  await page.reload();
-  await expect(page.getByRole("button", { name: "Buy for 500" })).toBeVisible();
-  await expect(page.locator("#short")).toHaveCount(0);
+  // A visitor's browser, with no wallet: the order, as a code and as text.
+  const visitor = await browser.newPage();
+  await openApp(visitor, null, "#/buy/piasale");
+  await expect(visitor.locator("#get-wallet")).toBeVisible();
+  await visitor.getByText("Pay from another wallet or device").click();
+  await expect(visitor.locator("#elsewhere")).toContainText("In Selfhold, choose Open request");
+  const request = await visitor.getByRole("button", { name: "Copy request" }).getAttribute("data-copy");
+  expect(request).toMatch(/^lattice:\/\/write\?v=1&intent=/);
+  const code = Buffer.from((await visitor.locator("img.qr").getAttribute("src")).split(",")[1], "base64");
+  const image = `${mkdtempSync(`${tmpdir()}/moniker-qr-`)}/request.gif`;
+  writeFileSync(image, code);
+
+  // Quinn's Selfhold, in another browser, never connected to Moniker: it reads the code.
+  const context = page.context();
+  await walletHolds(context, quinn);
+  const popup = await context.newPage();
+  await popup.goto(`${context.walletOrigin}/popup/index.html`);
+  await popup.getByRole("button", { name: "Open request" }).click();
+  await popup.locator('input[type="file"]').setInputFiles(image);
+  await expect(popup.getByText("Review it in the window that opened.")).toBeVisible();
+  await until("one approval", async () => context.approvals === 1);
+
+  // The visitor's page saw the name change hands.
+  await expect(visitor).toHaveURL(/#\/bought\/piasale$/, { timeout: 120_000 });
+  await expect(visitor.locator("main")).toContainText(`It's held by ${quinn.address.slice(0, 7)}`);
+  await visitor.close();
+  const s = await state();
+  expect((await profile.resolve(s, "piasale")).holder).toBe(quinn.address);
+  expect((await profile.getProfile(s, quinn.address)).handle).toBe("piasale");
+  expect(BigInt((await account(pia.address)).balance)).toBeGreaterThan(500n);
+});
+
+test("a request copied from checkout is refused once it has expired, or after the name was taken", async ({ page }) => {
+  const rae = newAccount();
+  const sam = newAccount();
+  const context = page.context();
+  await walletHolds(context, rae);
+  await openApp(page, null, "#/buy/samsnext");
+  await page.getByText("Pay from another wallet or device").click();
+  const request = await page.getByRole("button", { name: "Copy request" }).getAttribute("data-copy");
+  // Someone else takes it first: Rae's request, opened later, is refused by the chain and pays nothing.
+  await fund(sam.address, 100n);
+  await writeAs(sam, await profile.claim(await state(), sam.address, "samsnext"));
+  await until("@samsnext taken", async () => (await profile.resolve(await state(), "samsnext"))?.holder === sam.address);
+  const popup = await context.newPage();
+  await popup.goto(`${context.walletOrigin}/popup/index.html`);
+  await popup.getByRole("button", { name: "Open request" }).click();
+  await popup.locator("textarea").fill(request);
+  await popup.getByRole("button", { name: "Use pasted text" }).click();
+  await until("the window answered", async () => context.approvals === 1);
+  expect((await profile.resolve(await state(), "samsnext")).holder).toBe(sam.address);
+  expect(await profile.heldBy(await state(), rae.address)).toEqual([]);
+
+  // Past its expiry, the wallet refuses it outright.
+  const old = request.replace(/intent=([^&]+)/, (_, b64) => {
+    const intent = JSON.parse(Buffer.from(b64, "base64url").toString());
+    return `intent=${Buffer.from(JSON.stringify({ ...intent, expiresAt: "2020-01-01T00:00:00.000Z" })).toString("base64url")}`;
+  });
+  await popup.reload();
+  await popup.getByRole("button", { name: "Open request" }).click();
+  await popup.locator("textarea").fill(old);
+  await popup.getByRole("button", { name: "Use pasted text" }).click();
+  await expect(popup.getByText("This request has expired")).toBeVisible();
+  expect(context.approvals).toBe(1);
 });

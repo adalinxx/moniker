@@ -5,7 +5,8 @@ import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { mediaVolume, operator } from "../client/media.mjs";
 import * as profile from "../sdk/src/records/profile.mjs";
 import { anyHost, tip, view, volumeLoader } from "../sdk/src/records/state.mjs";
-import { writeRequest } from "../sdk/src/records/wallet.mjs";
+import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
+import encodeQR from "./vendor/qr.js";
 
 // ---------------------------------------------------------------- settings
 
@@ -67,21 +68,6 @@ async function readState() {
   throw new Error(`No node is serving ${settings.chain} right now.`, { cause: failure });
 }
 
-/**
- * The account's balance on this chain, as a node says, or undefined if none
- * answers. Only to inform: the wallet decides how a buy is paid, and may
- * bring coins in a way this page can't see.
- */
-async function balanceOf(address) {
-  for (const node of settings.nodes) {
-    try {
-      const response = await fetch(`${node}/api/state/account/${address}?chainPath=${encodeURIComponent(settings.chain)}`, { cache: "no-store" });
-      if (response.ok) return BigInt((await response.json()).balance ?? 0);
-    } catch {}
-  }
-  return undefined;
-}
-
 // Photos, once per CID: content-addressed, so they never change.
 const MEDIA_TYPES = /^image\/(png|jpeg|gif|webp|avif)$/;
 const photos = new Map();
@@ -141,14 +127,21 @@ function send(write) {
   return turn;
 }
 
+/** Hands Selfhold a lattice://write request, to sign as whichever account the person chooses there. Needs no connection. */
+function openRequest(uri) {
+  const turn = walletTurn.then(() => wallet().openRequest(uri));
+  walletTurn = turn.catch(() => {});
+  return turn;
+}
+
 /**
  * Sends a write, then waits until the chain shows it (`landed(state)`), so
  * the page redraws from what the chain holds, not from what was asked.
  */
-async function act(label, build, landed, done = render) {
+async function act(label, build, landed, done = render, submit = send) {
   const progress = toast(`${label}: approve it in your wallet.`);
   try {
-    await send(await build());
+    await submit(await build());
     progress.update(`${label}: waiting for the block…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
@@ -427,19 +420,23 @@ function connectPanel(why) {
     </section>`;
 }
 
+// The checkout shown, as a lattice://write request any wallet can sign as the
+// account the person chooses there: `holder` is who held the handle when it was read.
+let order = null;
+
 /**
  * Checkout: only the order. A handle no one owns costs 0, a listed one its
- * asking price, paid to its owner.
+ * asking price, paid to its owner. No account is needed to buy: the wallet
+ * fills in the buyer, and puts the handle on their page if they have none.
  */
 async function viewBuy(handle, state) {
   const entry = await profile.resolve(state, handle);
   if (connected && entry?.holder === connected) return viewBought(handle, state);
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
-  const ready = Boolean(wallet()); // Buy connects first if this site isn't connected yet
-  // Short on this chain: said here; whether and how to pay is the wallet's to decide.
-  const balance = connected && price + FEE > 0n ? await balanceOf(connected) : undefined;
-  const short = balance !== undefined && balance < price + FEE;
+  const expiresAt = new Date(Date.now() + 15 * 60_000);
+  order = { handle, holder: entry?.holder, price, expiresAt, uri: writeRequestURI(chainPath(), profile.acquire(handle, entry), { fee: FEE, label: `Buy @${handle}`, expiresAt }) };
+  const ready = Boolean(wallet());
   return `
     ${backBar(`#/search/${esc(handle)}`, "Back to results")}
     <main class="col stack" style="margin-top: 12px">
@@ -452,24 +449,62 @@ async function viewBuy(handle, state) {
           <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>
         </div>
         <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " If the owner changes the price before it lands, nothing is taken." : ""}</p>
-        ${short ? `<p class="note" id="short" style="margin: 0">This costs ${coins(price + FEE)}. Your account has ${coins(balance)} on this chain.</p>` : ""}
         ${ready ? `<button class="pill accent big" type="submit">Buy for ${coins(price + FEE)}</button>` : ""}
       </form>
       ${ready ? "" : walletPanel(`To buy @${esc(handle)}, add Selfhold`)}
+      ${elsewherePanel(order)}
     </main>`;
 }
 
-/** Just bought: say so, then the next step. */
+/** The order for a wallet in another browser or on another device: its request as a QR code and as text. */
+function elsewherePanel({ handle, uri, expiresAt }) {
+  const until = expiresAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `
+    <details class="panel stack" id="elsewhere">
+      <summary>Pay from another wallet or device</summary>
+      <p class="note" style="margin: 0">In Selfhold, choose Open request, then scan this code or paste the request. It works until ${esc(until)}, and this page shows when @${esc(handle)} changes hands.</p>
+      <img class="qr" src="${encodeQR(uri, "data-url", { ecc: "low", scale: 4 })}" alt="QR code of the request to buy @${esc(handle)}">
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <button class="pill" type="button" data-copy="${esc(uri)}">Copy request</button>
+        ${navigator.share ? `<button class="pill" type="button" data-share-request>Share</button>` : ""}
+      </div>
+    </details>`;
+}
+
+// While the request is shown, the page looks for the handle changing hands.
+let watching = 0;
+function watchOrder() {
+  const mine = ++watching;
+  const { handle, holder } = order;
+  const look = async () => {
+    if (mine !== watching || route() !== `buy/${handle}`) return;
+    try {
+      if ((await profile.resolve(await readState(), handle))?.holder !== holder) {
+        location.hash = `#/bought/${handle}`;
+        return;
+      }
+    } catch {}
+    setTimeout(look, 4000);
+  };
+  setTimeout(look, 4000);
+}
+
+/** Just bought: who holds it now, then the next step. */
 async function viewBought(handle, state) {
-  const p = await profile.getProfile(state, connected);
+  const entry = await profile.resolve(state, handle);
+  if (!entry) return viewStart(`No one holds @${handle}.`);
+  const p = await profile.getProfile(state, entry.holder);
   return `
     <main class="col card" style="margin-top: 48px">
       <span class="badge">Bought</span>
       <h1 class="mono">@${esc(handle)} is yours</h1>
       <p class="bio">It stays yours until you sell it or give it away. Any app can now know you by it.</p>
+      <p class="note">It's held by <span class="mono">${esc(short(entry.holder))}</span>, the account you approved with.</p>
       <div class="stack" style="width: 100%; margin-top: 28px">
+        ${connected === entry.holder && p.handle !== handle
+          ? `<button class="pill accent big" type="button" data-use="${esc(handle)}">Put @${esc(handle)} on your page</button>` : ""}
         ${p.name
-          ? `<a class="pill accent big" href="#/me">View your page</a>`
+          ? `<a class="pill accent big" href="#/@${esc(handle)}">View your page</a>`
           : `<a class="pill accent big" href="#/edit">Set up your page</a>`}
         <a class="pill big" href="#/names">Go to My names</a>
       </div>
@@ -633,7 +668,7 @@ async function render() {
         html = profile.isHandle(q) ? await viewSearch(q, state) : viewStart(q ? `“${arg}”: a name is lowercase letters, digits and _.` : "");
       } else if (page === "buy" && profile.isHandle(arg)) {
         html = await viewBuy(arg, state);
-      } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
+      } else if (page === "bought" && profile.isHandle(arg)) html = await viewBought(arg, state);
       else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
         html = entry ? await viewProfile(entry.holder, state) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewStart(`No one holds ${r}.`);
@@ -685,6 +720,8 @@ document.addEventListener("click", async (event) => {
   } else if (d.share) {
     if (navigator.share) navigator.share({ title: "Moniker", url: d.share }).catch(() => {});
     else navigator.clipboard?.writeText(d.share).then(() => toast("Link copied. Open it on a computer."), () => toast(d.share));
+  } else if ("shareRequest" in d && order) {
+    navigator.share({ title: `Buy @${order.handle}`, text: order.uri }).catch(() => {});
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("addLink" in d) {
@@ -798,6 +835,28 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "buy") {
     event.preventDefault();
     const want = form.dataset.handle;
+    if (wallet()?.openRequest) {
+      // Selfhold opens the request now, from this click: no connection, and the
+      // person chooses the account there. It lands when the handle changes hands.
+      if (order?.handle !== want || order.expiresAt <= new Date()) {
+        toast("This checkout is out of date. Look again.");
+        return render();
+      }
+      // Still the order shown? Asked only briefly: the click lets the page open
+      // the wallet for a few seconds, and the chain refuses a stale order anyway.
+      const fresh = await Promise.race([
+        readState().then((s) => profile.resolve(s, want)).catch(() => order),
+        new Promise((resolve) => setTimeout(resolve, 2000, order)),
+      ]);
+      if (fresh !== order) {
+        if (fresh && fresh.price === undefined) return toast(`@${want} was just taken, and it isn't for sale.`, { bad: true });
+        if (fresh?.holder !== order.holder || (fresh?.price ?? 0n) !== order.price) return toast(`The price of @${want} just changed. Look again.`, { bad: true });
+      }
+      const { uri, holder } = order;
+      return act(`Buying @${want}`, () => uri, async (s) => (await profile.resolve(s, want))?.holder !== holder,
+        () => { location.hash = `#/bought/${want}`; }, openRequest);
+    }
+    // Selfhold before 0.5 takes only writes from a connected site.
     if (!connected) {
       try {
         await connect();
@@ -878,6 +937,11 @@ document.addEventListener("submit", async (event) => {
 
 window.addEventListener("hashchange", render);
 // Back from adding Selfhold: reload, on the same address, so it reaches the page.
+// <details> toggles don't bubble: listen in the capture phase.
+document.addEventListener("toggle", (event) => {
+  if (event.target.id === "elsewhere" && event.target.open && order) watchOrder();
+}, true);
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && awaiting() && !wallet()) location.reload();
 });

@@ -216,6 +216,38 @@ test("the holder unlists, transfers and releases; a released handle is free agai
   assert.throws(() => profile.transfer(gift, "not-an-address"), /not an address/);
 });
 
+test("a request any wallet signs: the buyer filled in, and a page only for an account with none", async () => {
+  const { state, submit, map } = chain({ [ALICE]: 100, [BOB]: 1000, [CAROL]: 100 });
+  // What the wallet does with a lattice://write request before signing it as `account`.
+  const fill = ({ actions, payments }, account) => ({
+    actions: actions
+      .map((a) => ({ ...a, key: a.key.replaceAll(profile.ACCOUNT, account), ...(a.newValue !== undefined && { newValue: a.newValue.replaceAll(profile.ACCOUNT, account) }) }))
+      .filter((a) => !(a.ifAbsent && map.has(a.key)))
+      .map(({ ifAbsent: _, ...a }) => a),
+    payments,
+  });
+  // A newcomer: the handle, and a page showing it, in one transaction.
+  assert.ok(submit(ALICE, fill(profile.acquire("alice"), ALICE)));
+  assert.equal((await profile.getProfile(state, ALICE)).handle, "alice");
+  // Someone with a page gets the handle only; the page is left as it is.
+  assert.ok(submit(BOB, await profile.editCard(state, BOB, { name: "Bob" })));
+  assert.ok(submit(BOB, fill(profile.acquire("bob"), BOB)));
+  assert.deepEqual(await profile.getProfile(state, BOB), { address: BOB, name: "Bob" });
+  // Filled in for someone other than the signer, the policy refuses it.
+  assert.ok(!submit(CAROL, fill(profile.acquire("carol"), BOB)));
+  // A listed handle at the price read; a request older than the price is refused.
+  assert.ok(submit(ALICE, profile.list(await profile.resolve(state, "alice"), 50n)));
+  const stale = profile.acquire("alice", await profile.resolve(state, "alice"));
+  assert.ok(submit(ALICE, profile.list(await profile.resolve(state, "alice"), 900n)));
+  assert.ok(!submit(BOB, fill(stale, BOB)), "the price changed since");
+  assert.ok(submit(BOB, fill(profile.acquire("alice", await profile.resolve(state, "alice")), BOB)));
+  assert.equal((await profile.resolve(state, "alice")).holder, BOB);
+  // And a request for a handle someone took meanwhile is refused.
+  const late = profile.acquire("dora");
+  assert.ok(submit(CAROL, fill(profile.acquire("dora"), CAROL)));
+  assert.ok(!submit(BOB, fill(late, BOB)));
+});
+
 test("a buy and a card change go in one transaction", async () => {
   const { state, submit } = chain({ [ALICE]: 100, [BOB]: 1000 });
   assert.ok(submit(ALICE, await profile.claim(state, ALICE, "both", 10n)));

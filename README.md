@@ -68,11 +68,15 @@ owner at their price, or taken) and names close to it with their prices; a
 checkout that is only the order (price, network fee, total, one approval); a
 Marketplace of listed names; and My names, where you put a name on your page,
 sell it, give it away or release it. Each account also has one page, like a
-link page (photo, name, `@handle`, bio, a stack of links), and Edit. Your first
-name goes on your page in the same approval that buys it. There is no log in:
-the page asks the wallet only where a key is needed, and only from a click, as
-Selfhold requires: Your page, My names and Edit offer Connect Selfhold, and
-checkout's Buy connects first. Without a wallet, the checkout still shows the order, with how to
+link page (photo, name, `@handle`, bio, a stack of links), and Edit. Buying
+needs no account: checkout is a `lattice://write` request with the buyer left
+open, which Buy hands to Selfhold (`lattice.openRequest`). The person chooses
+the account there, and a newcomer's page, showing the name, is made in the
+same approval. **Pay from another wallet or device** shows the same request as a
+QR code and as text for Selfhold's Open request, and the page shows when the
+name changes hands. There is no log in: the page asks the wallet for an
+account only where it acts as an owner, and only from a click, as Selfhold
+requires. Your page, My names and Edit offer Connect Selfhold. Without a wallet, the checkout still shows the order, with how to
 add Selfhold in place of Buy; back on the tab after adding it, the page reloads
 at the same checkout (Selfhold reaches only pages loaded after it), and on a
 phone it offers the link to finish on a computer. The network fee is 0 on the trial chain (its hosts admit 0-fee
@@ -91,7 +95,7 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
 ```
 
 `e2e/ui/` runs the page in headless Chromium with the real Selfhold extension
-(its `dist/`, built with `npm ci` then `npm run build`; tested with 0.4.2)
+(its `dist/`, built with `npm ci` then `npm run build`; needs `lattice.openRequest`, Selfhold 0.5)
 against a private stack:
 
 ```sh
