@@ -70,8 +70,9 @@ Marketplace of listed names; and My names, where you put a name on your page,
 sell it, give it away or release it. Each account also has one page, like a
 link page (photo, name, `@handle`, bio, a stack of links), and Edit. Your first
 name goes on your page in the same approval that buys it. There is no log in:
-the page asks the wallet only where a key is needed (Your page, My names, Edit,
-checkout). Without a wallet, the checkout still shows the order, with how to
+the page asks the wallet only where a key is needed, and only from a click, as
+Selfhold requires: Your page, My names and Edit offer Connect Selfhold, and
+checkout's Buy connects first. Without a wallet, the checkout still shows the order, with how to
 add Selfhold in place of Buy; back on the tab after adding it, the page reloads
 at the same checkout (Selfhold reaches only pages loaded after it), and on a
 phone it offers the link to finish on a computer. The network fee is 0 on the trial chain (its hosts admit 0-fee
@@ -89,7 +90,8 @@ must list the page's origin in `rpcAllowedOrigins`). Fonts ship in
 python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/
 ```
 
-`e2e/ui/` runs the page in headless Chromium with the real wallet extension
+`e2e/ui/` runs the page in headless Chromium with the real Selfhold extension
+(its `dist/`, built with `npm ci` then `npm run build`; tested with 0.4.2)
 against a private stack:
 
 ```sh

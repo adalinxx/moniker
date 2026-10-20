@@ -5,7 +5,7 @@
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
 //   LATTICE_WALLET=<lattice-wallet>/dist npm test
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { after, before, test as nodeTest } from "node:test";
@@ -22,6 +22,10 @@ if (!wallet) throw new Error("LATTICE_WALLET: the built Lattice Wallet extension
 const walletInstalled = mkdtempSync(`${tmpdir()}/moniker-ui-wallet-`);
 cpSync(wallet, walletInstalled, { recursive: true });
 const manifest = JSON.parse(readFileSync(`${walletInstalled}/manifest.json`, "utf8"));
+// A build that skipped the SDK step has no scripts; say so, not "no service worker" 30s later.
+const scripts = [manifest.background?.service_worker, ...(manifest.content_scripts ?? []).flatMap((c) => c.js ?? [])].filter(Boolean);
+const absent = scripts.filter((file) => !existsSync(`${walletInstalled}/${file}`));
+if (absent.length) throw new Error(`LATTICE_WALLET is an incomplete build, missing ${absent.join(", ")}: build it with npm ci, then npm run build`);
 manifest.host_permissions = [...manifest.host_permissions, "http://127.0.0.1/*"];
 writeFileSync(`${walletInstalled}/manifest.json`, JSON.stringify(manifest));
 
@@ -92,7 +96,8 @@ async function walletBrowser() {
     headless: false,
     args: ["--headless=new", `--disable-extensions-except=${walletInstalled}`, `--load-extension=${walletInstalled}`],
   });
-  const [worker] = context.serviceWorkers().length ? context.serviceWorkers() : [await context.waitForEvent("serviceworker")];
+  const [worker] = context.serviceWorkers().length ? context.serviceWorkers()
+    : [await context.waitForEvent("serviceworker").catch(async (error) => { await context.close(); throw error; })];
   context.walletOrigin = worker.url().split("/").slice(0, 3).join("/");
   context.approvals = 0;
   context.walletNotes = []; // what a wallet window said when its button never woke
@@ -142,11 +147,20 @@ async function openApp(page, who, hash = "#/") {
     sessionStorage.setItem("moniker-test-seeded", "1");
     localStorage.setItem("moniker.settings", JSON.stringify({ nodes: [node], chain }));
   }, { node: stack.node, chain: stack.chain });
+  // Playwright's own clicks and reads count as the person acting, so Selfhold
+  // would let a page connect at any time here. As in a page someone just
+  // opened, the app sees no recent click, and must ask only from one.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userActivation", { value: { isActive: false, hasBeenActive: false } });
+  });
   if (who) await walletHolds(page.context(), who);
-  // Your page asks the wallet to connect.
   await page.goto(stack.app + (who ? "#/me" : hash));
   if (who) {
+    // Your page asks for nothing on the way in: it offers to connect.
+    const before = page.context().approvals;
+    await page.getByRole("button", { name: "Connect Selfhold" }).click();
     await expect(page.getByRole("link", { name: "Edit", exact: true })).toBeVisible();
+    expect(page.context().approvals).toBe(before + 1);
     if (hash !== "#/me") await page.goto(stack.app + hash);
   }
 }
@@ -355,9 +369,10 @@ test("a newcomer with no coins searches, buys @erin for 0 in one approval, then 
   await page.getByRole("button", { name: "Search" }).click();
   await page.getByRole("link", { name: "Buy @erin", exact: true }).click();
 
-  // The wallet is asked to connect on the way in.
+  // Checkout asks the wallet for nothing until Buy, which connects, then buys.
   await expect(page).toHaveURL(/#\/buy\/erin$/);
   await expect(page.locator("h1")).toHaveText("Checkout");
+  assert.equal(page.context().approvals, 0);
   await page.getByRole("button", { name: "Buy for 0" }).click();
   await expect(page.locator("h1")).toHaveText("@erin is yours");
   // Connecting, and one write that bought the name and put it on the page.

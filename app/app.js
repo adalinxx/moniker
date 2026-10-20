@@ -93,6 +93,7 @@ function photo(cid) {
 let connected = null;
 const wallet = () => window.lattice ?? null;
 
+/** Asks Selfhold for this site's address. It answers only within a click or key press, so call it before any other wait. */
 async function connect() {
   if (!wallet()) throw new Error("This needs the Selfhold wallet.");
   connected = await wallet().connect();
@@ -391,6 +392,16 @@ function walletPanel(why) {
     </section>`;
 }
 
+/** Where a key is needed, Selfhold is here, and this site isn't connected yet: one click asks it. */
+function connectPanel(why) {
+  return `
+    <section class="panel stack" aria-labelledby="connect">
+      <h2 id="connect">${why}</h2>
+      <p class="lede" style="margin: 0">Selfhold asks you first. Moniker sees only your address, never your key.</p>
+      <button class="pill accent big" type="button" data-connect>Connect Selfhold</button>
+    </section>`;
+}
+
 /**
  * Checkout: only the order. A handle no one owns costs 0, a listed one its
  * asking price, paid to its owner.
@@ -400,7 +411,7 @@ async function viewBuy(handle, state) {
   if (connected && entry?.holder === connected) return viewBought(handle, state);
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
-  const ready = Boolean(connected);
+  const ready = Boolean(wallet()); // Buy connects first if this site isn't connected yet
   return `
     ${backBar(`#/search/${esc(handle)}`, "Back to results")}
     <main class="col stack" style="margin-top: 12px">
@@ -575,20 +586,23 @@ async function render() {
     let html;
     if (r === "settings") html = viewSettings();
     else {
+      // Selfhold connects only within a click, so ask now, before the read, if this render came from one.
+      const needs = r === "edit" || r === "me" || r === "names";
+      if (needs && !connected && wallet() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
       const [page, arg = ""] = r.split(/\/(.*)/s);
       if ((r === "edit" || r === "me" || r === "names") && !wallet()) {
         html = `<main class="col stack" style="margin-top: 24px">${walletPanel(r === "names" ? "Your names live in your wallet" : "Your page belongs to your wallet's key")}</main>`;
-      } else if (r === "edit" || r === "me" || r === "names") {
-        if (!connected) await connect();
+      } else if (needs && !connected) {
+        html = `<main class="col stack" style="margin-top: 24px">${connectPanel(r === "names" ? "Your names live in your wallet" : "Your page belongs to your wallet's key")}</main>`;
+      } else if (needs) {
         html = r === "edit" ? await viewEdit(state) : r === "me" ? await viewProfile(connected, state) : await viewNames(state);
       } else if (r === "market") html = await viewMarket(state);
       else if (page === "search") {
         const q = asHandle(arg);
         html = profile.isHandle(q) ? await viewSearch(q, state) : viewStart(q ? `“${arg}”: a name is lowercase letters, digits and _.` : "");
       } else if (page === "buy" && profile.isHandle(arg)) {
-        if (!connected && wallet()) await connect();
         html = await viewBuy(arg, state);
       } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
       else if (r.startsWith("@")) {
@@ -629,6 +643,13 @@ document.addEventListener("click", async (event) => {
   const d = el.dataset;
   if ("retry" in d) {
     render();
+  } else if ("connect" in d) {
+    try {
+      await connect();
+      render();
+    } catch (error) {
+      toast(walletMessage(error), { bad: true });
+    }
   } else if ("getWallet" in d) {
     awaiting(true);
     $("#wallet-wait")?.removeAttribute("hidden");
@@ -748,6 +769,13 @@ document.addEventListener("submit", async (event) => {
   } else if (form.id === "buy") {
     event.preventDefault();
     const want = form.dataset.handle;
+    if (!connected) {
+      try {
+        await connect();
+      } catch (error) {
+        return toast(walletMessage(error), { bad: true });
+      }
+    }
     const me = connected;
     act(
       `Buying @${want}`,
