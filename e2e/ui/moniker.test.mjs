@@ -696,7 +696,7 @@ test("if Selfhold now connects this site to another account, a save sends nothin
   expect((await profile.getProfile(s, nia.address)).name).toBeUndefined();
 });
 
-test("buying a listed name with too few coins says how much it costs, and asks the wallet nothing", async ({ page }) => {
+test("checkout says when an account is short, and still leaves paying to the wallet", async ({ page }) => {
   const pia = newAccount();
   const quinn = newAccount();
   await fund(pia.address, 100n);
@@ -704,9 +704,19 @@ test("buying a listed name with too few coins says how much it costs, and asks t
   await until("@piasale for sale at 500", async () => (await profile.resolve(await state(), "piasale"))?.price === 500n);
   const context = page.context();
   await openApp(page, quinn, "#/buy/piasale");
+  await expect(page.locator("#short")).toHaveText("This costs 500. Your account has 0 on this chain.");
+  // Another wallet might bring the coins in its own way: Buy still asks it.
   const asked = context.approvals;
+  context.answer = "decline";
   await page.getByRole("button", { name: "Buy for 500" }).click();
-  await expect(toast(page, "@piasale costs 500, and your account has 0. Nothing was sent.")).toBeVisible();
+  await expect(toast(page, "You declined it in the wallet. Nothing was sent.")).toBeVisible();
+  expect(context.declines).toBe(1);
   expect(context.approvals).toBe(asked);
   expect((await profile.resolve(await state(), "piasale")).holder).toBe(pia.address);
+
+  // An account that can pay is told nothing.
+  await fund(quinn.address, 600n);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Buy for 500" })).toBeVisible();
+  await expect(page.locator("#short")).toHaveCount(0);
 });
