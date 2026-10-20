@@ -111,7 +111,17 @@ function walletMessage(error) {
 // The wallet takes one request from a page at a time.
 let walletTurn = Promise.resolve();
 function send(write) {
-  const turn = walletTurn.then(() => wallet().writeRecords(writeRequest(chainPath(), write, FEE)));
+  const turn = walletTurn.then(async () => {
+    // A write is built for the account this page shows. If Selfhold was since
+    // disconnected from this site, or connected to another account, say so and send nothing.
+    const now = await wallet().address();
+    if (now !== connected) {
+      connected = now;
+      render();
+      throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
+    }
+    return wallet().writeRecords(writeRequest(chainPath(), write, FEE));
+  });
   walletTurn = turn.catch(() => {});
   return turn;
 }
@@ -783,6 +793,7 @@ document.addEventListener("submit", async (event) => {
         const state = await readState();
         const entry = await profile.resolve(state, want);
         // Bought at the price shown, or not at all.
+        if (entry && entry.price === undefined) throw new Error(`@${want} was just taken, and it isn't for sale.`);
         if (entry && entry.price !== BigInt(form.dataset.price)) throw new Error(`The price of @${want} just changed. Look again.`);
         const take = entry ? profile.buy(entry, me) : await profile.claim(state, me, want);
         // Your first name goes on your page too, in the same approval.
