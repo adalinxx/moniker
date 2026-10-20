@@ -61,6 +61,8 @@ export async function start() {
     Object.assign(t, { listen: ports.listen, rpc: ports.rpc, publicRead: ports.publicRead, webSocket: 0, publicSubmit: true });
     // As the testnet hosts: any fee, 0 included.
     t.minRelayFee = 0;
+    // The page keeps a photo on this node, as on someone's own node.
+    t.rpcAllowedOrigins = [`http://127.0.0.1:${ports.web}`];
     // Reads are many (one per trie node): no rate ceilings in the way.
     t.publicReadExpensiveRate = 10000;
     t.publicReadRate = 10000;

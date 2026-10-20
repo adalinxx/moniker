@@ -90,7 +90,10 @@ async function writeAs(who, write) {
 
 // ---------------------------------------------------------------- browser
 
-/** A browser with the wallet installed; each approval window is answered Connect or Sign, and counted. */
+/**
+ * A browser with the wallet installed; each approval window is answered, and
+ * counted: Connect or Sign, or Decline while `context.answer` is "decline".
+ */
 async function walletBrowser() {
   const context = await chromium.launchPersistentContext(mkdtempSync(`${tmpdir()}/moniker-ui-browser-`), {
     headless: false,
@@ -100,6 +103,8 @@ async function walletBrowser() {
     : [await context.waitForEvent("serviceworker").catch(async (error) => { await context.close(); throw error; })];
   context.walletOrigin = worker.url().split("/").slice(0, 3).join("/");
   context.approvals = 0;
+  context.declines = 0;
+  context.answer = "approve";
   context.walletNotes = []; // what a wallet window said when its button never woke
   context.on("page", (opened) => respond(opened).catch(() => {}));
   async function respond(opened) {
@@ -108,6 +113,11 @@ async function walletBrowser() {
     // The approving button wakes only in a focused window, once everything
     // that decides the request has been seen: as a person, look, then press.
     await opened.bringToFront();
+    if (context.answer === "decline") {
+      await opened.getByRole("button", { name: "Decline" }).click();
+      context.declines += 1;
+      return;
+    }
     const approve = opened.getByRole("button", { name: /^(Connect|Sign write|Sign message|Pay .+)$/ });
     const rest = opened.getByRole("button", { name: /^See the rest/ });
     const deadline = Date.now() + 60_000;
@@ -140,6 +150,18 @@ async function walletHolds(context, who) {
   await page.close();
 }
 
+/** Selfhold forgets this site, as when the person disconnects it in the wallet. */
+async function walletForgetsSite(context) {
+  const page = await context.newPage();
+  await page.goto(`${context.walletOrigin}/popup/index.html`);
+  await page.evaluate(async (origin) => {
+    const { connections = {} } = await chrome.storage.local.get("connections");
+    delete connections[origin];
+    await chrome.storage.local.set({ connections });
+  }, new URL(stack.app).origin);
+  await page.close();
+}
+
 /** Opens the app pointed at the stack, as `who` (connected through the wallet) or as a visitor. */
 async function openApp(page, who, hash = "#/") {
   await page.addInitScript(({ node, chain }) => {
@@ -166,13 +188,13 @@ async function openApp(page, who, hash = "#/") {
 }
 
 /** A test with a fresh browser and page; on failure, what the page showed. */
-const test = (name, body, { wallet: withWallet = true } = {}) =>
+const test = (name, body, { wallet: withWallet = true, expectedErrors } = {}) =>
   nodeTest(name, { timeout: 300_000 }, async () => {
     const context = withWallet ? await walletBrowser() : await browser.newContext();
     const page = context.pages()[0] ?? (await context.newPage());
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    page.on("console", (message) => message.type() === "error" && errors.push(message.text()));
+    page.on("console", (message) => message.type() === "error" && !expectedErrors?.test(message.text()) && errors.push(message.text()));
     try {
       await body({ page });
       if (errors.length) throw new Error(`page errors: ${errors.join(" | ")}`);
@@ -406,3 +428,205 @@ test("Your page shows a new account where to start, and one with a page its page
     await context.close();
   }
 });
+
+// A 1×1 PNG.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+const toast = (page, text) => page.locator(".toast", { hasText: text });
+
+test("declining in Selfhold sends nothing, and the page says so", async ({ page }) => {
+  const frank = newAccount();
+  const context = page.context();
+  await walletHolds(context, frank);
+  await openApp(page, null, "#/me");
+  context.answer = "decline";
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
+  await expect(toast(page, "You declined it in the wallet. Nothing was sent.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Selfhold" })).toBeVisible();
+  // Asked again at once: the wallet waits a few seconds after a decline, and the page says so.
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
+  await expect(toast(page, "Try again in a moment.")).toBeVisible();
+  expect(context.declines).toBe(1);
+
+  context.answer = "approve";
+  await page.waitForTimeout(5500);
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
+  await expect(page.locator(".empty")).toHaveText("Nothing here yet. Make your page.");
+  await page.goto(stack.app + "#/edit");
+  await page.locator("#name").fill("Frank");
+  context.answer = "decline";
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(toast(page, "You declined it in the wallet. Nothing was sent.")).toBeVisible();
+  expect(context.declines).toBe(2);
+  expect((await profile.getProfile(await state(), frank.address)).name).toBeUndefined();
+});
+
+test("checkout refuses a price that changed, or a name just taken, and asks the wallet nothing", async ({ page }) => {
+  const gwen = newAccount();
+  const hal = newAccount();
+  await fund(gwen.address, 100n);
+  await writeAs(gwen, await profile.claim(await state(), gwen.address, "gwensale", 100n));
+  await until("@gwensale for sale at 100", async () => (await profile.resolve(await state(), "gwensale"))?.price === 100n);
+  const context = page.context();
+  await openApp(page, hal, "#/buy/gwensale");
+  await expect(page.getByRole("button", { name: "Buy for 100" })).toBeVisible();
+  // Gwen asks more before Hal presses Buy.
+  await writeAs(gwen, profile.list(await profile.resolve(await state(), "gwensale"), 200n));
+  await until("@gwensale at 200", async () => (await profile.resolve(await state(), "gwensale"))?.price === 200n);
+  const asked = context.approvals;
+  await page.getByRole("button", { name: "Buy for 100" }).click();
+  await expect(toast(page, "The price of @gwensale just changed. Look again.")).toBeVisible();
+
+  // A name no one owned, taken while Hal looks at it.
+  await page.goto(stack.app + "#/buy/halsnext");
+  await expect(page.getByRole("button", { name: "Buy for 0" })).toBeVisible();
+  await writeAs(gwen, await profile.claim(await state(), gwen.address, "halsnext"));
+  await until("@halsnext taken", async () => (await profile.resolve(await state(), "halsnext"))?.holder === gwen.address);
+  await page.getByRole("button", { name: "Buy for 0" }).click();
+  await expect(toast(page, "@halsnext was just taken, and it isn't for sale.")).toBeVisible();
+  expect(context.approvals).toBe(asked);
+  expect(await profile.heldBy(await state(), hal.address)).toEqual([]);
+});
+
+test("My names: another name on the page, sell and stop selling, give one away, release one", async ({ page }) => {
+  const ivy = newAccount();
+  const jo = newAccount();
+  await openApp(page, ivy, "#/");
+  for (const handle of ["ivyone", "ivytwo"]) {
+    await page.goto(stack.app + `#/buy/${handle}`);
+    await page.getByRole("button", { name: "Buy for 0" }).click();
+    await expect(page.locator("h1")).toHaveText(`@${handle} is yours`);
+  }
+  await page.getByRole("link", { name: "Go to My names" }).click();
+  const one = page.locator(".row", { hasText: "@ivyone" });
+  const two = page.locator(".row", { hasText: "@ivytwo" });
+  // Her first name went on her page; the second did not.
+  await expect(one).toContainText("on your page");
+  await expect(two).not.toContainText("on your page");
+  await two.getByRole("button", { name: "Use on page" }).click();
+  await expect(two).toContainText("on your page");
+  await expect(one).not.toContainText("on your page");
+
+  await two.getByRole("button", { name: "Sell" }).click();
+  await page.locator("#sheet-input").fill("50");
+  await page.locator("#sheet").getByRole("button", { name: "List it" }).click();
+  await expect(two).toContainText("for sale · 50");
+  await two.getByRole("button", { name: "Stop selling" }).click();
+  await expect(two).not.toContainText("for sale");
+  expect((await profile.resolve(await state(), "ivytwo")).price).toBeUndefined();
+
+  // Given only to an account address.
+  await one.getByRole("button", { name: "Give" }).click();
+  await page.locator("#sheet-input").fill("@jo");
+  await page.locator("#sheet").getByRole("button", { name: "Give it" }).click();
+  await expect(page.locator("#sheet-error")).toHaveText("That is not an account address.");
+  await page.locator("#sheet-input").fill(jo.address);
+  await page.locator("#sheet").getByRole("button", { name: "Give it" }).click();
+  await expect(one).toHaveCount(0);
+  expect((await profile.resolve(await state(), "ivyone")).holder).toBe(jo.address);
+
+  // Released: anyone's next, at 0.
+  await two.getByRole("button", { name: "Release" }).click();
+  await expect(page.locator("#sheet")).toContainText("anyone may buy it next, for 0");
+  await page.locator("#sheet").getByRole("button", { name: "Release it" }).click();
+  await expect(two).toHaveCount(0);
+  await expect(page.locator(".note")).toContainText("You don't own a name yet.");
+  expect(await profile.resolve(await state(), "ivytwo")).toBeUndefined();
+  await page.goto(stack.app + "#/search/ivytwo");
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+});
+
+test("if Selfhold forgets this site while Moniker is open, a save sends nothing and offers to connect again", async ({ page }) => {
+  const kit = newAccount();
+  const context = page.context();
+  await openApp(page, kit, "#/edit");
+  await page.locator("#name").fill("Kit");
+  await walletForgetsSite(context);
+  const asked = context.approvals;
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(toast(page, "Selfhold isn't connected to this site anymore. Connect again, then try again.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Selfhold" })).toBeVisible();
+  expect(context.approvals).toBe(asked);
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
+  await page.locator("#name").fill("Kit");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("h1")).toHaveText("Kit");
+  // Connect again, then the one save.
+  expect(context.approvals).toBe(asked + 2);
+});
+
+test("Settings: a node that is down is skipped, and with none reachable the page says so", async ({ page }) => {
+  const down = "http://127.0.0.1:27199"; // nothing listens here
+  await openApp(page, null, "#/settings");
+  await page.locator("#s-nodes").fill(`${down}\n${stack.node}`);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(toast(page, "Settings saved.")).toBeVisible();
+  await page.goto(stack.app + "#/search/nodefall");
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+
+  await page.goto(stack.app + "#/settings");
+  await page.locator("#s-nodes").fill(down);
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.goto(stack.app + "#/search/nodefall");
+  await expect(page.locator("#app")).toContainText(`No node is serving ${stack.chain} right now.`);
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+
+  // Defaults puts back the hosted nodes.
+  await page.goto(stack.app + "#/settings");
+  await page.getByRole("button", { name: "Defaults" }).click();
+  await expect(page.locator("#s-nodes")).toHaveValue("https://lattice-testnet-apps-iad.fly.dev\nhttps://lattice-testnet-apps-ams.fly.dev");
+}, { wallet: false, expectedErrors: /ERR_CONNECTION_REFUSED/ });
+
+test("a photo kept on your own node goes on your page, and visitors see it", async ({ page }) => {
+  const lu = newAccount();
+  await openApp(page, lu, "#/edit");
+  await page.locator("#photo").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hi") });
+  await expect(toast(page, "Choose a PNG, JPEG, GIF, WebP or AVIF image.")).toBeVisible();
+  await page.locator("#photo").setInputFiles({ name: "me.png", mimeType: "image/png", buffer: PNG });
+  await expect(toast(page, "Photos are kept by your own node. Set it in Settings first.")).toBeVisible();
+
+  await page.goto(stack.app + "#/settings");
+  await page.locator("#s-own").fill(stack.rpc);
+  await page.locator("#s-cookie").fill(readFileSync(`${stack.root}/chains/Nexus/.cookie`, "utf8").trim());
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.goto(stack.app + "#/edit");
+  await page.locator("#name").fill("Lu");
+  await page.locator("#photo").setInputFiles({ name: "me.png", mimeType: "image/png", buffer: PNG });
+  await expect(toast(page, "Photo kept. Save to put it on your page.")).toBeVisible();
+  await page.locator("#name").fill("Lu");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.locator("h1")).toHaveText("Lu");
+  await expect(page.locator("img.avatar")).toHaveAttribute("src", /^blob:/);
+  const { avatar } = await profile.getProfile(await state(), lu.address);
+  expect(avatar).toMatch(/^bafy/);
+
+  const visitor = await browser.newPage();
+  await openApp(visitor, null, `#/${lu.address}`);
+  await expect(visitor.locator("img.avatar")).toHaveAttribute("src", /^blob:/);
+  await visitor.close();
+});
+
+test("a card another client wrote shows as text, long ones fit a phone, and odd searches are refused", async ({ page }) => {
+  const mo = newAccount();
+  await fund(mo.address, 100n);
+  const long = "w".repeat(300);
+  const name = `<img src=x onerror="window.__hit=1">Mo`;
+  await writeAs(mo, {
+    actions: [{
+      key: profile.cardKey(mo.address),
+      newValue: JSON.stringify({ name, description: `${long}\n<script>window.__hit=2</script>`, links: [{ label: `<b>bold</b> ${long}`, url: `https://example.com/${long}` }] }),
+    }],
+  });
+  await until("Mo's card", async () => (await profile.getProfile(await state(), mo.address)).name === name);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openApp(page, null, `#/${mo.address}`);
+  await expect(page.locator("h1")).toHaveText(name);
+  await expect(page.locator(".bio")).toContainText("<script>window.__hit=2</script>");
+  await expect(page.locator(".links a")).toHaveText(`<b>bold</b> ${long}`);
+  expect(await page.evaluate(() => window.__hit)).toBeUndefined();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+  await page.goto(stack.app + "#/");
+  await page.locator("#q").fill("Ünïcode");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
+}, { wallet: false });
