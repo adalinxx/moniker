@@ -69,7 +69,8 @@ async function readState() {
 
 /**
  * The account's balance on this chain, as a node says, or undefined if none
- * answers. Only to warn before asking the wallet, which checks it again.
+ * answers. Only to inform: the wallet decides how a buy is paid, and may
+ * bring coins in a way this page can't see.
  */
 async function balanceOf(address) {
   for (const node of settings.nodes) {
@@ -436,6 +437,9 @@ async function viewBuy(handle, state) {
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
   const ready = Boolean(wallet()); // Buy connects first if this site isn't connected yet
+  // Short on this chain: said here; whether and how to pay is the wallet's to decide.
+  const balance = connected && price + FEE > 0n ? await balanceOf(connected) : undefined;
+  const short = balance !== undefined && balance < price + FEE;
   return `
     ${backBar(`#/search/${esc(handle)}`, "Back to results")}
     <main class="col stack" style="margin-top: 12px">
@@ -448,6 +452,7 @@ async function viewBuy(handle, state) {
           <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>
         </div>
         <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " If the owner changes the price before it lands, nothing is taken." : ""}</p>
+        ${short ? `<p class="note" id="short" style="margin: 0">This costs ${coins(price + FEE)}. Your account has ${coins(balance)} on this chain.</p>` : ""}
         ${ready ? `<button class="pill accent big" type="submit">Buy for ${coins(price + FEE)}</button>` : ""}
       </form>
       ${ready ? "" : walletPanel(`To buy @${esc(handle)}, add Selfhold`)}
@@ -801,14 +806,6 @@ document.addEventListener("submit", async (event) => {
       }
     }
     const me = connected;
-    // Selfhold would only say "Not enough"; say how much is missing, and ask it nothing.
-    const total = BigInt(form.dataset.price) + FEE;
-    if (total > 0n) {
-      const balance = await balanceOf(me);
-      if (balance !== undefined && balance < total) {
-        return toast(`@${want} costs ${coins(total)}, and your account has ${coins(balance)}. Nothing was sent.`, { bad: true });
-      }
-    }
     act(
       `Buying @${want}`,
       async () => {
