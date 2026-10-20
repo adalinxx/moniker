@@ -247,6 +247,16 @@ test("with no wallet, checkout still shows the order, with how to add Selfhold i
   await page.goto(stack.app + "#/names");
   await expect(page.locator("#get-wallet")).toHaveText("Your names live in your wallet");
 
+  // A name too long for a QR code: the order is still there, as text to copy.
+  const long = "n".repeat(1200);
+  await page.goto(stack.app + `#/buy/${long}`);
+  await expect(page.locator("h1")).toHaveText("Checkout");
+  await page.getByText("Pay from another wallet or device").click();
+  await expect(page.getByRole("button", { name: "Copy request" })).toBeVisible();
+  await expect(page.locator("img.qr")).toHaveCount(0);
+  const intent = JSON.parse(Buffer.from((await page.getByRole("button", { name: "Copy request" }).getAttribute("data-copy")).split("intent=")[1], "base64url").toString());
+  expect(intent.label).toBeUndefined();
+
   // A phone can't add Selfhold: it is offered the link to finish on a computer.
   const phone = await browser.newContext({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148" });
   const p = await phone.newPage();
@@ -303,7 +313,6 @@ test("Alice buys @alice, which no one owned, for 0; a visitor finds her by it", 
   await page.getByRole("button", { name: "Buy for 0" }).click();
   await expect(page).toHaveURL(/#\/bought\/alice$/);
   await expect(page.locator("h1")).toHaveText("@alice is yours");
-  await expect(page.locator("main")).toContainText(`It's held by ${alice.address.slice(0, 7)}`);
   // Buying needed no account: her page, made before, was left as it was. Connected, she can put it there.
   expect((await profile.getProfile(await state(), alice.address)).handle).toBeUndefined();
   await page.getByRole("button", { name: "Put @alice on your page" }).click();
@@ -402,7 +411,8 @@ test("a newcomer with no coins searches, buys @erin for 0 in one approval, then 
   await expect(page.locator("h1")).toHaveText("Checkout");
   assert.equal(page.context().approvals, 0);
   await page.getByRole("button", { name: "Buy for 0" }).click();
-  await expect(page.locator("h1")).toHaveText("@erin is yours");
+  // Not connected, the page can't tell whose account signed: it names the holder.
+  await expect(page.locator("h1")).toHaveText(`@erin is held by ${erin.address.slice(0, 7)}…${erin.address.slice(-5)}`);
   // One write, which bought the name and made a page showing it.
   assert.equal(page.context().approvals, 1);
   expect((await profile.getProfile(await state(), erin.address)).handle).toBe("erin");
@@ -739,7 +749,7 @@ test("paying from another wallet: the QR code on checkout, opened in Selfhold el
 
   // The visitor's page saw the name change hands.
   await expect(visitor).toHaveURL(/#\/bought\/piasale$/, { timeout: 120_000 });
-  await expect(visitor.locator("main")).toContainText(`It's held by ${quinn.address.slice(0, 7)}`);
+  await expect(visitor.locator("h1")).toHaveText(`@piasale is held by ${quinn.address.slice(0, 7)}…${quinn.address.slice(-5)}`);
   await visitor.close();
   const s = await state();
   expect((await profile.resolve(s, "piasale")).holder).toBe(quinn.address);

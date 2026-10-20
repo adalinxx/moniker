@@ -127,12 +127,13 @@ function send(write) {
   return turn;
 }
 
-/** Hands Selfhold a lattice://write request, to sign as whichever account the person chooses there. Needs no connection. */
-function openRequest(uri) {
-  const turn = walletTurn.then(() => wallet().openRequest(uri));
-  walletTurn = turn.catch(() => {});
-  return turn;
-}
+/**
+ * Hands Selfhold a lattice://write request, to sign as whichever account the
+ * person chooses there. Needs no connection. Not queued behind other requests:
+ * it must reach the wallet while the click still lets it open a window, and
+ * the wallet itself turns away a second request from this site.
+ */
+const openRequest = (uri) => wallet().openRequest(uri);
 
 /**
  * Sends a write, then waits until the chain shows it (`landed(state)`), so
@@ -435,7 +436,9 @@ async function viewBuy(handle, state) {
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
   const expiresAt = new Date(Date.now() + 15 * 60_000);
-  order = { handle, holder: entry?.holder, price, expiresAt, uri: writeRequestURI(chainPath(), profile.acquire(handle, entry), { fee: FEE, label: `Buy @${handle}`, expiresAt }) };
+  // Wallets show at most 64 characters of a request's label: a longer one goes unlabeled.
+  const label = `Buy @${handle}`.length <= 64 ? `Buy @${handle}` : undefined;
+  order = { handle, holder: entry?.holder, price, expiresAt, uri: writeRequestURI(chainPath(), profile.acquire(handle, entry), { fee: FEE, label, expiresAt }) };
   const ready = Boolean(wallet());
   return `
     ${backBar(`#/search/${esc(handle)}`, "Back to results")}
@@ -459,11 +462,16 @@ async function viewBuy(handle, state) {
 /** The order for a wallet in another browser or on another device: its request as a QR code and as text. */
 function elsewherePanel({ handle, uri, expiresAt }) {
   const until = expiresAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  // A very long handle makes a request too big for a QR code: then it is text only.
+  let code;
+  try {
+    code = encodeQR(uri, "data-url", { ecc: "low", scale: 2 });
+  } catch {}
   return `
     <details class="panel stack" id="elsewhere">
       <summary>Pay from another wallet or device</summary>
-      <p class="note" style="margin: 0">In Selfhold, choose Open request, then scan this code or paste the request. It works until ${esc(until)}, and this page shows when @${esc(handle)} changes hands.</p>
-      <img class="qr" src="${encodeQR(uri, "data-url", { ecc: "low", scale: 4 })}" alt="QR code of the request to buy @${esc(handle)}">
+      <p class="note" style="margin: 0">In Selfhold, choose Open request, then ${code ? "scan this code or " : ""}paste the request. It works until ${esc(until)}, and this page shows when @${esc(handle)} changes hands.</p>
+      ${code ? `<img class="qr" src="${code}" alt="QR code of the request to buy @${esc(handle)}">` : ""}
       <div style="display: flex; gap: 8px; flex-wrap: wrap">
         <button class="pill" type="button" data-copy="${esc(uri)}">Copy request</button>
         ${navigator.share ? `<button class="pill" type="button" data-share-request>Share</button>` : ""}
@@ -475,9 +483,10 @@ function elsewherePanel({ handle, uri, expiresAt }) {
 let watching = 0;
 function watchOrder() {
   const mine = ++watching;
-  const { handle, holder } = order;
+  const { handle, holder, expiresAt } = order;
   const look = async () => {
-    if (mine !== watching || route() !== `buy/${handle}`) return;
+    // Until the request can no longer land, while its panel is open on this checkout.
+    if (mine !== watching || route() !== `buy/${handle}` || !$("#elsewhere")?.open || Date.now() > expiresAt) return;
     try {
       if ((await profile.resolve(await readState(), handle))?.holder !== holder) {
         location.hash = `#/bought/${handle}`;
@@ -489,23 +498,30 @@ function watchOrder() {
   setTimeout(look, 4000);
 }
 
-/** Just bought: who holds it now, then the next step. */
+/**
+ * Just bought: who holds it now, then the next step. The wallet doesn't tell
+ * the page which account it signed as, so unless this site is connected as the
+ * holder, the page names the holder and lets the person compare.
+ */
 async function viewBought(handle, state) {
   const entry = await profile.resolve(state, handle);
   if (!entry) return viewStart(`No one holds @${handle}.`);
   const p = await profile.getProfile(state, entry.holder);
+  const mine = connected === entry.holder;
   return `
     <main class="col card" style="margin-top: 48px">
-      <span class="badge">Bought</span>
-      <h1 class="mono">@${esc(handle)} is yours</h1>
-      <p class="bio">It stays yours until you sell it or give it away. Any app can now know you by it.</p>
-      <p class="note">It's held by <span class="mono">${esc(short(entry.holder))}</span>, the account you approved with.</p>
+      <span class="badge">${mine ? "Bought" : "Changed hands"}</span>
+      ${mine
+        ? `<h1 class="mono">@${esc(handle)} is yours</h1>
+      <p class="bio">It stays yours until you sell it or give it away. Any app can now know you by it.</p>`
+        : `<h1 class="mono">@${esc(handle)} is held by ${esc(short(entry.holder))}</h1>
+      <p class="bio">If that's the account you approved with in your wallet, @${esc(handle)} is yours until you sell it or give it away.</p>`}
       <div class="stack" style="width: 100%; margin-top: 28px">
-        ${connected === entry.holder && p.handle !== handle
+        ${mine && p.handle !== handle
           ? `<button class="pill accent big" type="button" data-use="${esc(handle)}">Put @${esc(handle)} on your page</button>` : ""}
         ${p.name
-          ? `<a class="pill accent big" href="#/@${esc(handle)}">View your page</a>`
-          : `<a class="pill accent big" href="#/edit">Set up your page</a>`}
+          ? `<a class="pill accent big" href="#/@${esc(handle)}">${mine ? "View your page" : "View its page"}</a>`
+          : mine || !connected ? `<a class="pill accent big" href="#/edit">Set up your page</a>` : ""}
         <a class="pill big" href="#/names">Go to My names</a>
       </div>
     </main>`;
@@ -936,11 +952,12 @@ document.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("hashchange", render);
-// Back from adding Selfhold: reload, on the same address, so it reaches the page.
 // <details> toggles don't bubble: listen in the capture phase.
 document.addEventListener("toggle", (event) => {
   if (event.target.id === "elsewhere" && event.target.open && order) watchOrder();
 }, true);
+
+// Back from adding Selfhold: reload, on the same address, so it reaches the page.
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && awaiting() && !wallet()) location.reload();
