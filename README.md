@@ -45,6 +45,18 @@ value it has: consensus checks every old value, and the policy reads the owner
 from it. Nothing is put on an account or a profile without its owner's
 signature, which is why a gift is an offer the receiver takes.
 
+The policy reads a transaction's actions once, in order, keeping only the last
+two profiles written in mind, so checking costs what the bytes do. The SDK
+writes this order; anyone writing transactions by hand follows it:
+
+- `profile/<p>`, then the `owns/` keys it moves, the one it leaves first.
+- `about/<p>/...` while `<p>` is one of the last two profiles written;
+  `about/<p>/name`, when set, directly after the name it shows.
+- `name/<handle>` while the profiles it moves between are among the last two
+  written, then the `holds/` keys it moves, the one it leaves first.
+- A seller's purchases one after another, and sellers credited in the order
+  they are first paid.
+
 The card holds what a feed shows. A card may carry fields this list does not
 name; clients keep them when they save. Display names are not unique. `url`
 and every link are http or https addresses; clients show nothing else. Media

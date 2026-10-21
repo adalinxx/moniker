@@ -35,10 +35,26 @@
 //! Nothing is put on an account or a profile without its owner's signature:
 //! a profile's new owner signs, and so does the owner of a name's new profile.
 //!
+//! The policy reads the actions once, in order, keeping only the last two
+//! profiles written in mind, so it costs what the transaction's bytes do.
+//! The order:
+//!
+//! - `profile/<p>` is followed directly by the `owns/` keys it moves, the
+//!   one it leaves first.
+//! - `about/<p>/...` comes while `<p>` is one of the last two profiles
+//!   written, and `about/<p>/name`, when set, directly after the name it
+//!   shows (and that name's index keys).
+//! - `name/<handle>` comes while the profiles it moves between are among the
+//!   last two written, and is followed directly by the `holds/` keys it
+//!   moves, the one it leaves first.
+//! - A seller's purchases come one after another, and sellers are credited in
+//!   the order they are first paid: each run of purchases is paid by the
+//!   seller's next credit.
+//!
 //! What the records mean is up to clients. Coin actions pass untouched.
 #![cfg_attr(not(test), no_std)]
 
-use lattice_policy_rules::{decimal, is_address, transaction_body, Action, Body};
+use lattice_policy_rules::{decimal, is_address, transaction_body, Action, Body, Payments, Signers};
 
 /// What a token's holder asks of anyone else who would take it.
 #[derive(Clone, Copy, PartialEq)]
@@ -53,25 +69,179 @@ enum Terms<'a> {
 
 lattice_policy_rules::lattice_policy_abi!(crate::validate);
 
-/// The verdict for one policy context. Anything malformed is a rejection.
-pub fn validate(context: &[u8]) -> bool {
-    transaction_body(context).and_then(check_body).is_some()
+/// The verdict for one policy context, with `scratch` for the signer table.
+/// Anything malformed is a rejection.
+pub fn validate(context: &[u8], scratch: &mut [u32]) -> bool {
+    transaction_body(context).and_then(|body| check_body(body, scratch)).is_some()
 }
 
-fn check_body(bytes: &[u8]) -> Option<()> {
+fn check_body(bytes: &[u8], scratch: &mut [u32]) -> Option<()> {
     let body = Body::parse(bytes)?;
+    let signers = body.signers(scratch)?;
+    let mut walk = Walk { signers: &signers, recent: [None; 2], expect: [None; 2], shown: None, payments: body.payments()? };
     for action in body.actions()? {
-        let action = action?;
-        match Key::parse(action.key)? {
-            Key::Own(account) => body.is_signer(account)?,
-            Key::Profile(p) => check_profile(&body, &action, p)?,
-            Key::ProfileField(p, field) => check_field(&body, &action, p, field)?,
-            Key::Name(handle) => check_name(&body, &action, handle)?,
-            Key::Owns(account, p) => check_index(&body, &action, b"profile/", p, account)?,
-            Key::Holds(p, handle) => check_index(&body, &action, b"name/", handle, p)?,
+        walk.step(&action?)?;
+    }
+    walk.expect[0].is_none().then_some(())?;
+    walk.payments.finish()
+}
+
+/// A profile among the last two written: its id, its owner after the
+/// transaction, and whether that owner signs.
+#[derive(Clone, Copy)]
+struct Recent<'a> {
+    p: &'a [u8],
+    owner: &'a [u8],
+    signs: bool,
+}
+
+/// An index key the action before calls for: `owns/<holder>/<id>` or
+/// `holds/<holder>/<id>`, written (`created`) or deleted.
+#[derive(Clone, Copy, PartialEq)]
+struct Index<'a> {
+    owns: bool,
+    holder: &'a [u8],
+    id: &'a [u8],
+    created: bool,
+}
+
+/// What the walk keeps from the actions read so far.
+struct Walk<'a, 'b> {
+    signers: &'b Signers<'a, 'b>,
+    /// The last profile written first.
+    recent: [Option<Recent<'a>>; 2],
+    /// The index keys still called for, the next first.
+    expect: [Option<Index<'a>>; 2],
+    /// The name just written, and the profile holding it after.
+    shown: Option<(&'a [u8], &'a [u8])>,
+    payments: Payments<'a>,
+}
+
+impl<'a> Walk<'a, '_> {
+    fn step(&mut self, action: &Action<'a>) -> Option<()> {
+        let key = Key::parse(action.key)?;
+        if let Some(index) = self.expect[0] {
+            let (owns, holder, id) = match key {
+                Key::Owns(account, p) => (true, account, p),
+                Key::Holds(p, handle) => (false, p, handle),
+                _ => return None,
+            };
+            let created = match (action.old_value, action.new_value) {
+                (None, Some(b"1")) => true,
+                (Some(_), None) => false,
+                _ => return None,
+            };
+            (Index { owns, holder, id, created } == index).then_some(())?;
+            self.expect = [self.expect[1], None];
+            return Some(());
+        }
+        let shown = self.shown.take();
+        match key {
+            Key::Own(account) => self.signers.is_signer(account),
+            Key::Profile(p) => self.profile(action, p),
+            Key::ProfileField(p, field) => {
+                self.acts_for(p)?;
+                // The name a profile shows is one it holds: the one just written.
+                match action.new_value {
+                    Some(handle) if field == b"name" => (shown == Some((handle, p))).then_some(()),
+                    _ => Some(()),
+                }
+            }
+            Key::Name(handle) => self.name(action, handle),
+            // Index keys come only where a token's move calls for them.
+            Key::Owns(..) | Key::Holds(..) => None,
         }
     }
-    body.check_purchases(|action| purchase(&body, action))
+
+    fn recent(&self, p: &[u8]) -> Option<Recent<'a>> {
+        self.recent.iter().flatten().find(|recent| recent.p == p).copied()
+    }
+
+    /// Profile `p` is one of the last two written, and its owner signs.
+    fn acts_for(&self, p: &[u8]) -> Option<()> {
+        self.recent(p)?.signs.then_some(())
+    }
+
+    fn profile(&mut self, action: &Action<'a>, p: &'a [u8]) -> Option<()> {
+        let new_value = action.new_value?;
+        let (owner, _) = token(new_value, is_address)?;
+        let signs = self.signers.is_signer(owner).is_some();
+        self.recent = [Some(Recent { p, owner, signs }), self.recent[0]];
+        let Some(old_value) = action.old_value else {
+            // A new profile: its owner creates it.
+            signs.then_some(())?;
+            return self.calls_for(true, p, None, Some(owner));
+        };
+        if old_value == new_value {
+            return Some(());
+        }
+        let (old_owner, terms) = token(old_value, is_address)?;
+        if old_owner != owner {
+            // Nobody is given a profile without signing for it.
+            signs.then_some(())?;
+        }
+        // The owner changes it at will; anyone else only takes it.
+        if self.signers.is_signer(old_owner).is_none() {
+            (old_owner != owner).then_some(())?;
+            self.purchase(old_owner, terms, owner)?;
+        }
+        self.calls_for(true, p, Some(old_owner), Some(owner))
+    }
+
+    fn name(&mut self, action: &Action<'a>, handle: &'a [u8]) -> Option<()> {
+        let old = match action.old_value {
+            Some(value) => Some(token(value, is_profile)?),
+            None => None,
+        };
+        let new = match action.new_value {
+            Some(value) => Some(token(value, is_profile)?.0),
+            None => None,
+        };
+        let from = old.map(|(holder, _)| holder);
+        self.shown = new.map(|new| (handle, new));
+        if action.old_value.is_some() && action.old_value == action.new_value {
+            // Anyone may write a name unchanged.
+            return Some(());
+        }
+        if let Some(new) = new.filter(|&new| from != Some(new)) {
+            // Nothing is put on a profile without its owner signing for it.
+            self.acts_for(new)?;
+        }
+        if let Some((holder, terms)) = old {
+            let seller = self.recent(holder)?;
+            // Its profile's owner changes it at will; anyone else only takes
+            // it onto another profile. A free name is claimed onto a profile.
+            if !seller.signs {
+                let taker = new.filter(|&new| new != holder)?;
+                self.purchase(seller.owner, terms, taker)?;
+            }
+        } else {
+            new?;
+        }
+        self.calls_for(false, handle, from, new)
+    }
+
+    /// A token at `<id>` that moves from holder `from` to `to` calls for its
+    /// index keys next: the one it leaves, then the one it reaches.
+    fn calls_for(&mut self, owns: bool, id: &'a [u8], from: Option<&'a [u8]>, to: Option<&'a [u8]>) -> Option<()> {
+        if from == to {
+            return Some(());
+        }
+        let leaves = from.map(|holder| Index { owns, holder, id, created: false });
+        let reaches = to.map(|holder| Index { owns, holder, id, created: true });
+        self.expect = if leaves.is_some() { [leaves, reaches] } else { [reaches, None] };
+        Some(())
+    }
+
+    /// A token taken from `seller`, who does not sign: bought at its price,
+    /// or taken for nothing by the one it is offered to.
+    fn purchase(&mut self, seller: &'a [u8], terms: Terms<'a>, taker: &[u8]) -> Option<()> {
+        match terms {
+            Terms::Price(price) => self.payments.owe(seller, price),
+            Terms::Offer(to) if to == taker => Some(()),
+            _ => None,
+        }
+    }
 }
 
 /// What a key is, by shape. Anything else is a rejection.
@@ -125,7 +295,7 @@ fn is_handle(text: &[u8]) -> bool {
 }
 
 /// A token value, `<holder>`, `<holder>@<price>` or `<holder>><taker>`, whose
-/// holder and taker pass `valid`.
+/// holder and taker pass `valid`. A price is one a credit can pay: below 2^63.
 fn token(value: &[u8], valid: fn(&[u8]) -> bool) -> Option<(&[u8], Terms<'_>)> {
     let Some(at) = value.iter().position(|&byte| byte == b'@' || byte == b'>') else {
         return valid(value).then_some((value, Terms::Kept));
@@ -135,172 +305,8 @@ fn token(value: &[u8], valid: fn(&[u8]) -> bool) -> Option<(&[u8], Terms<'_>)> {
         return None;
     }
     if value[at] == b'@' {
-        return Some((holder, Terms::Price(decimal(rest)?)));
+        let price = decimal(rest).filter(|&price| price <= i64::MAX as u64)?;
+        return Some((holder, Terms::Price(price)));
     }
     (valid(rest) && rest != holder).then_some((holder, Terms::Offer(rest)))
-}
-
-/// The holder before and after a token write; an absent value has none.
-fn holders<'a>(action: &Action<'a>, valid: fn(&[u8]) -> bool) -> Option<(Option<&'a [u8]>, Option<&'a [u8]>)> {
-    let holder = |value: Option<&'a [u8]>| -> Option<Option<&'a [u8]>> {
-        match value {
-            None => Some(None),
-            Some(value) => Some(Some(token(value, valid)?.0)),
-        }
-    };
-    Some((holder(action.old_value)?, holder(action.new_value)?))
-}
-
-/// The transaction's write to `<prefix><id>`, if any.
-fn write_to<'a>(body: &Body<'a>, prefix: &[u8], id: &[u8]) -> Option<Option<Action<'a>>> {
-    for action in body.actions()? {
-        let action = action?;
-        if action.key.strip_prefix(prefix) == Some(id) {
-            return Some(Some(action));
-        }
-    }
-    Some(None)
-}
-
-/// The owner of profile `p` after this transaction, from its write to
-/// `profile/<p>`; a transaction acting for `p`, or buying from it, carries one.
-/// A profile that changes owner is signed for by its new owner, so a buyer
-/// pays the owner it had.
-fn owner<'a>(body: &Body<'a>, p: &[u8]) -> Option<&'a [u8]> {
-    let action = write_to(body, b"profile/", p)??;
-    holders(&action, is_address)?.1
-}
-
-/// The owner of profile `p` signs this transaction.
-fn acts_for(body: &Body, p: &[u8]) -> Option<()> {
-    body.is_signer(owner(body, p)?)
-}
-
-fn check_profile(body: &Body, action: &Action, p: &[u8]) -> Option<()> {
-    let new_value = action.new_value?;
-    let (new_owner, _) = token(new_value, is_address)?;
-    let Some(old_value) = action.old_value else {
-        // A new profile: its owner creates it.
-        body.is_signer(new_owner)?;
-        return moved(body, b"owns/", p, None, Some(new_owner));
-    };
-    if old_value == new_value {
-        return Some(());
-    }
-    // The owner changes it at will; anyone else only buys it (`purchase`).
-    let (owner, _) = token(old_value, is_address)?;
-    if owner != new_owner {
-        // Nobody is given a profile without signing for it.
-        body.is_signer(new_owner)?;
-    }
-    moved(body, b"owns/", p, Some(owner), Some(new_owner))
-}
-
-fn check_field(body: &Body, action: &Action, p: &[u8], field: &[u8]) -> Option<()> {
-    acts_for(body, p)?;
-    if field == b"name" {
-        // The name a profile shows is one it holds.
-        if let Some(handle) = action.new_value {
-            let held = write_to(body, b"name/", handle)??;
-            if holders(&held, is_profile)?.1 != Some(p) {
-                return None;
-            }
-        }
-    }
-    Some(())
-}
-
-fn check_name(body: &Body, action: &Action, handle: &[u8]) -> Option<()> {
-    if action.old_value.is_some() && action.old_value == action.new_value {
-        token(action.new_value?, is_profile)?;
-        return Some(());
-    }
-    let (old, new) = holders(action, is_profile)?;
-    if let Some(new) = new {
-        if old != Some(new) {
-            // Nothing is put on a profile without its owner signing for it.
-            acts_for(body, new)?;
-        }
-    }
-    // Its profile's owner changes it at will; anyone else only buys it
-    // (`purchase`), onto a profile. A free name is claimed onto a profile.
-    match old {
-        Some(old) if acts_for(body, old).is_some() => {}
-        _ => {
-            new?;
-        }
-    }
-    moved(body, b"holds/", handle, old, new)
-}
-
-/// A token at `<id>` that changes holder from `from` to `to` moves its index
-/// key under `index` (`owns/<holder>/<id>` or `holds/<holder>/<id>`).
-fn moved(body: &Body, index: &[u8], id: &[u8], from: Option<&[u8]>, to: Option<&[u8]>) -> Option<()> {
-    if from == to {
-        return Some(());
-    }
-    let has = |holder: &[u8], created: bool| -> Option<()> {
-        for other in body.actions()? {
-            let other = other?;
-            let Some(rest) = other.key.strip_prefix(index) else { continue };
-            if split(rest) == Some((holder, id)) && other.new_value.is_some() == created {
-                return Some(());
-            }
-        }
-        None
-    };
-    if let Some(from) = from {
-        has(from, false)?;
-    }
-    if let Some(to) = to {
-        has(to, true)?;
-    }
-    Some(())
-}
-
-/// An index key (`owns/<holder>/<id>`, `holds/<holder>/<id>`) is written as
-/// its token reaches its holder and deleted as the token leaves: never alone.
-fn check_index(body: &Body, action: &Action, token_prefix: &[u8], id: &[u8], holder: &[u8]) -> Option<()> {
-    let created = match (action.old_value, action.new_value) {
-        (None, Some(b"1")) => true,
-        (Some(_), None) => false,
-        _ => return None,
-    };
-    let write = write_to(body, token_prefix, id)??;
-    let valid = if token_prefix == b"profile/" { is_address } else { is_profile };
-    let (old, new) = holders(&write, valid)?;
-    let moved = if created { new == Some(holder) && old != Some(holder) } else { old == Some(holder) && new != Some(holder) };
-    moved.then_some(())
-}
-
-/// Whom `action` pays and how much, when it changes a token its signers do
-/// not control: a profile's owner, or the owner of a name's profile. Such a
-/// change is a purchase at the token's price, or the taking of an offer by
-/// the one it is offered to, for nothing; anything else is a rejection.
-fn purchase<'a>(body: &Body<'a>, action: &Action<'a>) -> Option<Option<(&'a [u8], u64)>> {
-    let Some(old_value) = action.old_value.filter(|old| action.new_value != Some(*old)) else {
-        return Some(None);
-    };
-    let (seller, terms, taker) = match Key::parse(action.key)? {
-        Key::Profile(_) => {
-            let (owner, terms) = token(old_value, is_address)?;
-            (owner, terms, token(action.new_value?, is_address)?.0)
-        }
-        Key::Name(_) => {
-            let (p, terms) = token(old_value, is_profile)?;
-            if acts_for(body, p).is_some() {
-                return Some(None);
-            }
-            (owner(body, p)?, terms, token(action.new_value?, is_profile)?.0)
-        }
-        _ => return Some(None),
-    };
-    if body.is_signer(seller).is_some() {
-        return Some(None);
-    }
-    match terms {
-        Terms::Price(price) => Some(Some((seller, price))),
-        Terms::Offer(to) if to == taker => Some(None),
-        _ => None,
-    }
 }

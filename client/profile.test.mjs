@@ -12,9 +12,10 @@ const address = (seed) => sdk.addressFromPublicKey(sdk.publicKeyFromPrivate(new 
 const [ALICE, BOB, CAROL] = [address(1), address(2), address(3)];
 
 /**
- * A chain in memory that admits a transaction the way consensus would: every
- * action's old value must be what the key holds, the built profile policy
- * must accept the body, and no balance may go below zero.
+ * A chain in memory that admits a transaction the way consensus would: each
+ * key changes once, every action's old value must be what the key holds, no
+ * account action is zero, the built profile policy must accept the body, and
+ * no balance may go below zero.
  */
 function chain(balances) {
   const map = new Map();
@@ -28,7 +29,9 @@ function chain(balances) {
   let nonce = 0n;
   function submit(owner, { actions, payments = [] }) {
     const body = wallet.transaction({ owner, actions, payments, fee: 1n, nonce: nonce++, chainPath: PATH });
+    if (new Set(actions.map((a) => a.key)).size !== actions.length) return false;
     for (const { key, oldValue } of actions) if (map.get(key) !== oldValue) return false;
+    if (body.accountActions.some(({ delta }) => delta === 0n)) return false;
     if (!validate(context(sdk.encodeTransactionBody(body).bytes, { path: PATH }))) return false;
     const after = new Map(coins);
     for (const { owner: who, delta } of body.accountActions) after.set(who, (after.get(who) ?? 0n) + delta);
@@ -211,6 +214,49 @@ test("a sold profile moves whole: card, names and all", async () => {
   // The new owner edits it; the old one no longer can.
   assert.ok(c.submit(BOB, await profile.editCard(c.state, BOB, p, { description: "Under new ownership" })));
   await assert.rejects(profile.editCard(c.state, ALICE, p, { name: "Mine" }), /isn't yours/);
+});
+
+test("a profile's admins go with a sale: the seller's other account can't act for it", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const p = await made(c, ALICE, { name: "Band" }, "band");
+  assert.ok(c.submit(ALICE, await profile.setAdmin(c.state, ALICE, p, CAROL)));
+  assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { price: 50n })));
+  assert.ok(c.submit(BOB, await profile.takeProfile(c.state, BOB, p)));
+  assert.deepEqual(await profile.adminsOf(c.state, p), []);
+  assert.ok(!(await profile.actsFor(c.state, CAROL, p)));
+});
+
+test("a name or profile priced at 0 is taken free: no payment", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  const p = await made(c, ALICE, undefined, "gift");
+  const b = await made(c, BOB);
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "gift", 0n)));
+  const buy = await profile.buy(c.state, BOB, "gift", b);
+  assert.deepEqual(buy.payments, []);
+  assert.ok(c.submit(BOB, buy));
+  assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { price: 0n })));
+  assert.ok(c.submit(BOB, await profile.takeProfile(c.state, BOB, p)));
+  assert.equal((await profile.profileToken(c.state, p)).owner, BOB);
+});
+
+test("offers go to someone else; prices fit a credit", async () => {
+  const c = chain({ [ALICE]: 100 });
+  const p = await made(c, ALICE, undefined, "mine");
+  await assert.rejects(profile.setProfileTerms(c.state, ALICE, p, { offer: ALICE }), /someone else/);
+  await assert.rejects(profile.offerName(c.state, ALICE, "mine", p), /someone else/);
+  await assert.rejects(profile.list(c.state, ALICE, "mine", 2n ** 63n), /bad price/);
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mine", 2n ** 63n - 1n)));
+});
+
+test("combine keeps each key where it first comes, and refuses a key changed twice", async () => {
+  const c = chain({ [ALICE]: 100 });
+  const p = await made(c, ALICE, undefined, "one");
+  const both = profile.combine(await profile.list(c.state, ALICE, "one", 5n), await profile.setProfileTerms(c.state, ALICE, p, { price: 9n }));
+  assert.deepEqual(both.actions.map((a) => a.key), [`profile/${p}`, "name/one"]);
+  assert.equal(both.actions[0].newValue, `${ALICE}@9`);
+  assert.ok(c.submit(ALICE, both));
+  const twice = [await profile.list(c.state, ALICE, "one", 1n), await profile.list(c.state, ALICE, "one", 2n)];
+  assert.throws(() => profile.combine(...twice), /changed twice/);
 });
 
 test("a profile offered to an account is taken by it for nothing; that is how a lost key moves on", async () => {
