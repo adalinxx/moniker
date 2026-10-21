@@ -1,3 +1,6 @@
 [submodule "sdk"]
 	path = sdk
 	url = https://github.com/adalinxx/moniker-sdk.git
+[submodule "follows"]
+	path = follows
+	url = https://github.com/adalinxx/follows
