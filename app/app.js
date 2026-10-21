@@ -1,11 +1,13 @@
-// Moniker: one page per account, like a link page, read from the profile
-// chain by CID and written through the Selfhold wallet, which asks the owner to
-// approve every change. Reading needs no wallet.
+// Moniker: profiles and the @names they hold, read from the profile chain by
+// CID and written through the Selfhold wallet, which asks the owner to approve
+// every change. An account (a key) owns profiles; each profile has a card and
+// a page. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { mediaVolume, operator } from "../client/media.mjs";
 import * as profile from "../sdk/src/records/profile.mjs";
 import { anyHost, tip, view, volumeLoader } from "../sdk/src/records/state.mjs";
 import { writeRequest } from "../sdk/src/records/wallet.mjs";
+import { createMoniker } from "../sdk/src/index.mjs";
 import { createFollows } from "../follows/src/index.mjs";
 import { defineFollowButton } from "../follows/src/element.mjs";
 
@@ -13,7 +15,7 @@ import { defineFollowButton } from "../follows/src/element.mjs";
 
 const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/moniker-da6f57",
+  chain: "Nexus/testnet/moniker-8eb926",
   // Follows, the follow graph every app shares: who follows a name or an account.
   follows: "Nexus/testnet/follows-6ed91a",
   // Your own node, for keeping photos: its URL and the cookie it writes at start.
@@ -22,7 +24,10 @@ const DEFAULTS = {
 };
 function loadSettings() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem("moniker.settings") ?? "{}") };
+    const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
+    // Settings saved before the trial moved name the old one; follow the move.
+    if (saved.chain === "Nexus/testnet/moniker-da6f57") delete saved.chain;
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -59,11 +64,22 @@ function getReader() {
 
 let graph = null;
 function getGraph() {
-  if (!graph) graph = createFollows({ sdk, nodes: settings.nodes, chain: settings.follows.split("/").filter(Boolean), freshFor: 5000 });
+  if (!graph) {
+    const moniker = createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), freshFor: 5000 });
+    graph = createFollows({ sdk, nodes: settings.nodes, chain: settings.follows.split("/").filter(Boolean), freshFor: 5000, moniker });
+  }
   return graph;
 }
 // The Follow button reads and writes through whichever graph the settings name now.
-defineFollowButton(new Proxy({}, { get: (_, method) => (...args) => getGraph()[method](...args) }), { walletURL: WALLET_URL });
+defineFollowButton(
+  new Proxy({}, {
+    get: (_, name) => {
+      const value = getGraph()[name];
+      return typeof value === "function" ? (...args) => getGraph()[name](...args) : value;
+    },
+  }),
+  { walletURL: WALLET_URL, monikerURL: "#/" },
+);
 
 /** The chain's state at the tip of the first node that answers. */
 async function readState() {
@@ -186,7 +202,7 @@ const esc = (text) =>
   String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // An account ID by its end: every address begins alike (`bafyrei…`).
 const shortID = (address) => `…${address.slice(-8)}`;
-const initial = (p) => (p.name?.trim()?.[0] ?? p.handle?.[0] ?? "?").toUpperCase();
+const initial = (p) => (p.name?.trim()?.[0] ?? p.handle?.[0] ?? "").toUpperCase();
 const hostOf = (url) => {
   try {
     return new URL(url).host.replace(/^www\./, "");
@@ -199,7 +215,8 @@ const coins = (amount) => `${amount.toLocaleString("en-US")}`;
 function toast(message, { bad = false } = {}) {
   const box = document.createElement("div");
   box.className = `toast${bad ? " bad" : ""}`;
-  box.setAttribute("role", bad ? "alert" : "status");
+  // #toasts is a live region; an error is read at once.
+  if (bad) box.setAttribute("role", "alert");
   const text = document.createElement("span");
   text.textContent = message;
   const close = Object.assign(document.createElement("button"), { type: "button", textContent: "×" });
@@ -211,7 +228,7 @@ function toast(message, { bad = false } = {}) {
     update(next, options = {}) {
       text.textContent = next;
       box.classList.toggle("bad", Boolean(options.bad));
-      box.setAttribute("role", options.bad ? "alert" : "status");
+      if (options.bad) box.setAttribute("role", "alert");
     },
     close: () => box.remove(),
   };
@@ -266,7 +283,7 @@ const header = () => `
     </a>
     <nav class="top-nav" aria-label="Moniker">
       <a href="#/market">Marketplace</a>
-      <a class="pill" href="#/names">My names</a>
+      <a class="pill" href="#/profiles">My profiles</a>
     </nav>
   </header>`;
 
@@ -277,70 +294,101 @@ const footer = () => `
 
 // ---------------------------------------------------------------- views
 
+/** `who` from a route: a profile, by `@handle` or by id; undefined when there is none. */
+async function profileFor(state, who) {
+  return who.startsWith("@") ? profile.profileOf(state, who.slice(1)) : profile.getProfile(state, who);
+}
+
+/** What to call a profile: its card's name, else its @handle, else that it has none. */
+const nameOf = (p) => p.name ?? (p.handle ? `@${p.handle}` : "Unnamed profile");
+
+/** A profile's page by its @handle, else by its id. */
+const pageOf = (p) => `#/${p.handle ? `@${p.handle}` : p.id}`;
+
+/** The connected account's profiles. */
+const myProfiles = async (state) => (connected ? profile.profilesOf(state, connected) : []);
+
 /**
- * Who follows `target` (a @name or an address) and whom `holder` follows,
- * each count opening its list, and the Follow button: on a name's page it
- * follows the name, on an account's page the account. Not on your own page.
+ * Who follows profile `p` and whom it follows, each count opening its list,
+ * and the Follow button (not on your own profile).
  */
-async function followsBlock(target, holder, mine, label) {
+async function followsBlock(p, mine) {
   // Follows is another chain: if it can't be reached, the page still shows, without counts.
-  const counts = await countLinks(target, holder).catch(() => "");
+  const counts = await countLinks(p.id).catch(() => "");
   return `
     <div class="follows">
-      <p class="counts" data-target="${esc(target)}" data-holder="${esc(holder)}">${counts}</p>
-      ${mine ? "" : `<follows-button target="${esc(target)}" label="${esc(label)}" owner="${esc(holder)}"></follows-button>`}
+      <p class="counts" data-target="${esc(p.id)}">${counts}</p>
+      ${mine ? "" : `<follows-button target="${esc(p.id)}" label="${esc(nameOf(p))}"></follows-button>`}
     </div>`;
 }
 
 /** "N followers" and "N following", each opening its list. */
-async function countLinks(target, holder) {
-  const [followers, following] = await Promise.all([getGraph().followers(target), holder ? getGraph().following(holder) : []]);
+async function countLinks(id) {
+  const [followers, following] = await Promise.all([getGraph().followers(id), getGraph().following(id)]);
   const many = (n, one, other) => `<strong>${n.toLocaleString("en-US")}</strong> ${n === 1 ? one : other}`;
   return `
-    <a href="#/${esc(target)}/followers">${many(followers.length, "follower", "followers")}</a>
-    <a href="#/${esc(target)}/following">${many(following.length, "following", "following")}</a>`;
+    <a href="#/${esc(id)}/followers">${many(followers.length, "follower", "followers")}</a>
+    <a href="#/${esc(id)}/following">${many(following.length, "following", "following")}</a>`;
 }
 
 /**
- * An account's page, reached by its address (or Your page), or a name's
- * page, reached by `@handle`: the same card, but a name's page is about the
- * name (its followers, Follow the name) and an account's about the account
- * (every name it owns, its followers, Follow the account).
+ * A profile's page: its card, the name it shows and its other names, who
+ * follows it, and which account owns it.
  */
-async function viewProfile(address, state, handle) {
-  const p = await profile.getProfile(state, address);
-  const mine = connected === address;
-  const target = handle ? `@${handle}` : address;
-  const [held, follows] = await Promise.all([handle ? [] : profile.heldBy(state, address), followsBlock(target, address, mine, p.name ?? (handle ? `@${handle}` : "this account"))]);
+async function viewProfile(p, state) {
+  const mine = connected === p.owner;
+  const [names, follows] = await Promise.all([profile.namesOf(state, p.id), followsBlock(p, mine)]);
+  const others = names.filter((n) => n.handle !== p.handle);
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
-  const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : address}`;
   return `
-    <div class="col top">${mine ? `<a class="pill" href="#/edit">Edit</a>` : ""}</div>
+    <div class="col top">${mine ? `<a class="pill" href="#/edit/${esc(p.id)}">Edit</a>` : ""}</div>
     <main class="col card">
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
-      <h1>${esc(p.name ?? (handle ? `@${handle}` : "Unnamed account"))}</h1>
-      ${handle
-        ? `<p class="handle">@${esc(handle)}</p>`
-        : `<p class="account">Account <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span><button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy account ID">⧉</button></p>
-          ${held.length ? `<p class="names"><span class="label">${held.length === 1 ? "Name" : "Names"}</span>${held.map((h) => `<a class="handle" href="#/@${esc(h.handle)}">@${esc(h.handle)}</a>`).join("")}</p>` : ""}`}
+      <h1>${esc(nameOf(p))}</h1>
+      ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
+      ${others.length ? `<p class="also">Also ${others.map((n) => `<a href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>`).join(", ")}</p>` : ""}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${follows}
-      ${handle ? `<a class="owner" href="#/${esc(address)}">Owned by ${mine ? "you" : `<span class="mono">${esc(shortID(address))}</span>`}</a>` : ""}
+      <a class="owner" href="#/${esc(p.owner)}">Owned by ${mine ? "you" : `<span class="mono">${esc(shortID(p.owner))}</span>`}</a>
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
-      ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit">Make your page</a>.` : "This account hasn't made a page yet."}</p>` : ""}
-      ${mine
-        ? `<button class="copy" type="button" data-copy="${esc(link)}" style="margin-top: 24px">Copy your link ⧉</button>`
-        : ""}
+      ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit/${esc(p.id)}">Set it up</a>.` : "This profile is empty so far."}</p>` : ""}
+      ${p.price !== undefined && !mine ? `<p class="note">Its owner is selling this profile, names and all, for ${coins(p.price)}. <a href="#/take-profile/${esc(p.id)}">Buy it</a></p>` : ""}
     </main>`;
 }
 
-/** One person in a list: their photo, name and @handle, linked to their page. */
+/**
+ * An account: only its ID and the profiles it owns, so anyone can check who
+ * owns what. Accounts have no card and aren't followed.
+ */
+async function viewAccount(address, state) {
+  const mine = connected === address;
+  const owned = await profile.profilesOf(state, address);
+  return `
+    <main class="col card account-page">
+      <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span></h1>
+      <button class="copy" type="button" data-copy="${esc(address)}">Copy ID</button>
+      <section class="names">
+        ${owned.length ? `<h2>${owned.length === 1 ? "Profile" : "Profiles"}</h2>` : ""}
+        ${owned.length
+          ? owned.map((p) => personRow(p, pageOf(p), p.name && p.handle ? `@${p.handle}` : "")).join("")
+          : `<p class="empty">${mine ? `No profiles yet. <a href="#/">Get a name</a> to make one.` : "This account owns no profiles."}</p>`}
+      </section>
+    </main>`;
+}
+
+/** Your page: your profile if you have one, else My profiles. */
+async function viewMe(state) {
+  const mine = await myProfiles(state);
+  return mine.length === 1 ? viewProfile(mine[0], state) : viewProfiles(state);
+}
+
+/** One profile in a list: its photo, name and @handle, linked to its page. */
 function personRow(p, href, sub) {
   return `
     <a class="row person" href="${esc(href)}">
       ${p.avatar ? `<img class="avatar sm" data-photo="${esc(p.avatar)}" alt="">` : `<span class="avatar sm" aria-hidden="true">${esc(initial(p))}</span>`}
-      <span class="who"><strong>${esc(p.name ?? (p.handle ? `@${p.handle}` : "Unnamed account"))}</strong>${sub ? `<span class="label">${esc(sub)}</span>` : ""}</span>
+      <span class="who"><strong>${esc(nameOf(p))}</strong>${sub ? `<span class="label">${esc(sub)}</span>` : ""}</span>
     </a>`;
 }
 
@@ -348,47 +396,25 @@ function personRow(p, href, sub) {
 const LIST_PAGE = 50;
 let listAll = null; // the list (its route) that shows all its rows
 
-/** Who follows `who` (a @name or an address), or what its account follows. */
+/** Who follows a profile, or whom it follows. */
 async function viewFollowList(who, tab, state) {
+  const p = await profileFor(state, who);
+  if (!p) return viewStart(`No one holds ${who}.`);
   const everyone = listAll === `${who}/${tab}`;
-  const handle = who.startsWith("@") ? who.slice(1) : null;
-  const holder = handle ? (await profile.resolve(state, handle))?.holder : who;
-  let rows;
-  let total;
-  if (tab === "followers") {
-    const all = await getGraph().followers(who);
-    total = all.length;
-    const cards = await profile.getProfiles(state, everyone ? all : all.slice(0, LIST_PAGE));
-    rows = cards.map((p) => personRow(p, `#/${p.handle ? `@${p.handle}` : p.address}`, p.handle ? `@${p.handle}` : ""));
-  } else {
-    // Names, as whoever owns them now; accounts, marked as such.
-    const all = holder ? await getGraph().following(holder) : [];
-    total = all.length;
-    const followed = everyone ? all : all.slice(0, LIST_PAGE);
-    rows = await Promise.all(
-      followed.map(async (t) => {
-        if (!t.startsWith("@")) {
-          const p = await profile.getProfile(state, t);
-          return personRow(p, `#/${t}`, p.handle ? `@${p.handle} · account` : "Account");
-        }
-        const owner = (await profile.resolve(state, t.slice(1)))?.holder;
-        const p = owner ? await profile.getProfile(state, owner) : {};
-        return personRow({ ...p, handle: t.slice(1) }, `#/${t}`, owner ? t : "No one owns it yet");
-      }),
-    );
-  }
-  const whose = handle ? who : (await profile.getProfile(state, who)).name ?? "This account";
-  const empty = tab === "followers" ? "No followers yet." : holder ? "Not following anyone yet." : `No one owns ${who} yet.`;
+  const all = tab === "followers" ? await getGraph().followers(p.id) : await getGraph().following(p.id);
+  const shown = await profile.getProfiles(state, everyone ? all : all.slice(0, LIST_PAGE));
+  const rows = shown.map((q) => personRow(q, pageOf(q), q.name && q.handle ? `@${q.handle}` : ""));
+  const empty = tab === "followers" ? "No followers yet." : "Not following anyone yet.";
+  const title = p.handle ? `@${p.handle}` : nameOf(p);
   return `
-    ${backBar(`#/${esc(who)}`, "Back")}
+    ${backBar(pageOf(p), title)}
     <main class="col stack">
-      <h1 style="margin: 0">${esc(tab === "followers" ? `${whose}'s followers` : `${whose} follows`)}</h1>
+      <h1 style="margin: 0">${esc(tab === "followers" ? `${title}'s followers` : `${title} follows`)}</h1>
       ${rows.length ? rows.join("") : `<p class="empty">${empty}</p>`}
-      ${total > rows.length ? `<button class="pill" type="button" data-list-all="${esc(`${who}/${tab}`)}">Show all ${total.toLocaleString("en-US")}</button>` : ""}
+      ${all.length > rows.length ? `<button class="pill" type="button" data-list-all="${esc(`${who}/${tab}`)}">Show all ${all.length.toLocaleString("en-US")}</button>` : ""}
     </main>`;
 }
 
-/** What someone typed, as a handle: lowercase, without `@` or spaces. */
 const asHandle = (typed) => typed.trim().replace(/^@/, "").replace(/\s+/g, "").toLowerCase();
 
 const searchBox = (value = "") => `
@@ -425,9 +451,9 @@ function variants(q) {
 }
 
 /** One handle's standing: available (0), for sale (its price), yours, or taken. */
-function standing(handle, entry) {
+function standing(handle, entry, mine) {
   if (!entry) return { handle, kind: "available", price: 0n };
-  if (entry.holder === connected) return { handle, kind: "yours" };
+  if (mine.has(entry.profile)) return { handle, kind: "yours" };
   if (entry.price !== undefined) return { handle, kind: "sale", price: entry.price };
   return { handle, kind: "taken" };
 }
@@ -438,23 +464,24 @@ function resultRow(r) {
   const tail = {
     available: `<span class="price">${coins(r.price)}</span>${buyLink(r)}`,
     sale: `<span class="label">for sale by its owner</span><span class="price">${coins(r.price)}</span>${buyLink(r, "pill dark")}`,
-    yours: `<span class="label">yours</span><a class="pill" href="#/names">My names</a>`,
-    taken: `<span class="label">taken</span><a class="pill" href="#/@${esc(r.handle)}">See page</a>`,
+    yours: `<span class="label">yours</span><a class="pill" href="#/profiles">My profiles</a>`,
+    taken: `<span class="label">taken</span><a class="pill" href="#/@${esc(r.handle)}">See profile</a>`,
   }[r.kind];
   return `<div class="row"><span class="mono">@${esc(r.handle)}</span><div class="end">${tail}</div></div>`;
 }
 
 /** Search results: the exact name first, then names close to it. */
 async function viewSearch(q, state) {
-  const [exact, ...near] = await Promise.all([q, ...variants(q)].map(async (h) => standing(h, await profile.resolve(state, h))));
+  const mine = new Set((await myProfiles(state)).map((p) => p.id));
+  const [exact, ...near] = await Promise.all([q, ...variants(q)].map(async (h) => standing(h, await profile.resolve(state, h), mine)));
   const listed = (await profile.forSale(state))
-    .filter((h) => h.handle !== q && h.handle.includes(q) && h.holder !== connected)
+    .filter((h) => h.handle !== q && h.handle.includes(q) && !mine.has(h.profile))
     .map((h) => ({ handle: h.handle, kind: "sale", price: h.price }));
   const more = [...near.filter((r) => r.kind === "available"), ...listed].slice(0, 6);
   const headline = {
     available: ["Available", "No one owns it yet, so it costs 0."],
     sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction."],
-    yours: ["Yours", "You own this name."],
+    yours: ["Yours", "One of your profiles holds this name."],
     taken: ["Taken", "Someone owns it and isn't selling it. Try one of the names below."],
   }[exact.kind];
   return `
@@ -468,8 +495,8 @@ async function viewSearch(q, state) {
           ${exact.kind === "available" || exact.kind === "sale"
             ? `<span class="price big">${coins(exact.price)}</span><a class="pill accent" href="#/buy/${esc(q)}">Buy @${esc(q)}</a>`
             : exact.kind === "yours"
-              ? `<a class="pill" href="#/names">Go to My names</a>`
-              : `<a class="pill" href="#/@${esc(q)}">See @${esc(q)}'s page</a>`}
+              ? `<a class="pill" href="#/profiles">Go to My profiles</a>`
+              : `<a class="pill" href="#/@${esc(q)}">See @${esc(q)}'s profile</a>`}
         </div>
       </section>
       ${more.length ? `
@@ -531,13 +558,27 @@ function connectPanel(why) {
     </section>`;
 }
 
+/** Which of your profiles a name goes on: a choice when you have some, else a new one. */
+function profileChoice(mine, label) {
+  if (mine.length === 0) return `<p class="note" style="margin: 0">It goes on a new profile of yours.</p>`;
+  return `
+    <div class="field">
+      <label for="to">${label}</label>
+      <select id="to">
+        ${mine.map((p) => `<option value="${esc(p.id)}">${esc(nameOf(p))}${p.handle && p.name ? ` · @${esc(p.handle)}` : ""}</option>`).join("")}
+        <option value="new">A new profile</option>
+      </select>
+    </div>`;
+}
+
 /**
  * Checkout: only the order. A handle no one owns costs 0, a listed one its
- * asking price, paid to its owner.
+ * asking price, paid to its owner. It goes on a profile of yours.
  */
 async function viewBuy(handle, state) {
   const entry = await profile.resolve(state, handle);
-  if (connected && entry?.holder === connected) return viewBought(handle, state);
+  const mine = await myProfiles(state);
+  if (entry && mine.some((p) => p.id === entry.profile)) return viewBought(handle, state);
   if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
   const ready = Boolean(wallet()); // Buy connects first if this site isn't connected yet
@@ -555,7 +596,8 @@ async function viewBuy(handle, state) {
           <span class="label">Network fee</span><span>${coins(FEE)}</span>
           <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>
         </div>
-        <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " If the owner changes the price before it lands, nothing is taken." : ""}</p>
+        ${connected ? profileChoice(mine, "Put it on") : ""}
+        <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " Only the name moves: its old profile stays with its owner. If the owner changes the price before it lands, nothing is taken." : ""}</p>
         ${short ? `<p class="note" id="short" style="margin: 0">This costs ${coins(price + FEE)}. Your account has ${coins(balance)} on this chain.</p>` : ""}
         ${ready ? `<button class="pill accent big" type="submit">Buy for ${coins(price + FEE)}</button>` : ""}
       </form>
@@ -565,37 +607,75 @@ async function viewBuy(handle, state) {
 
 /** Just bought: say so, then the next step. */
 async function viewBought(handle, state) {
-  const p = await profile.getProfile(state, connected);
+  const p = await profile.profileOf(state, handle);
   return `
     <main class="col card" style="margin-top: 48px">
       <span class="badge">Bought</span>
       <h1 class="mono">@${esc(handle)} is yours</h1>
-      <p class="bio">It stays yours until you sell it or give it away. Any app can now know you by it.</p>
+      <p class="bio">It stays yours until you sell it or give it away. Any app can now find your profile by it.</p>
       <div class="stack" style="width: 100%; margin-top: 28px">
-        ${p.name
-          ? `<a class="pill accent big" href="#/me">View your page</a>`
-          : `<a class="pill accent big" href="#/edit">Set up your page</a>`}
-        <a class="pill big" href="#/names">Go to My names</a>
+        ${p?.name
+          ? `<a class="pill accent big" href="#/@${esc(handle)}">View the profile</a>`
+          : `<a class="pill accent big" href="#/edit/${esc(p?.id ?? "")}">Set up the profile</a>`}
+        <a class="pill big" href="#/profiles">Go to My profiles</a>
       </div>
     </main>`;
 }
 
-async function viewEdit(state) {
-  const p = await profile.getProfile(state, connected);
-  const held = await profile.heldBy(state, connected);
-  // Links and photo being edited survive a redraw until saved.
-  draft = draft?.address === connected ? draft : { address: connected, links: [...(p.links ?? [])], avatar: p.avatar };
+/** A name offered to one of your profiles: take it, for nothing. */
+async function viewTake(handle, state) {
+  const entry = await profile.resolve(state, handle);
+  const mine = await myProfiles(state);
+  const to = mine.find((p) => p.id === entry?.offer);
+  if (!entry || !to) return viewStart(entry && mine.some((p) => p.id === entry.profile) ? `@${handle} is already yours.` : `@${handle} isn't offered to a profile of yours.`);
   return `
-    <div class="col top" style="justify-content: space-between; align-items: center">
-      <a class="pill icon" href="#/me" aria-label="Back to your page">‹</a>
-      <a class="pill" href="#/names">My names</a>
+    <main class="col card" style="margin-top: 48px">
+      <span class="badge">A gift</span>
+      <h1 class="mono">@${esc(handle)}</h1>
+      <p class="bio">Its owner is giving it to your profile ${esc(nameOf(to))}. Take it, and it's yours.</p>
+      <button class="pill accent big" type="button" data-take-name="${esc(handle)}" data-to="${esc(to.id)}" style="margin-top: 28px">Take @${esc(handle)}</button>
+    </main>`;
+}
+
+/** A profile for sale, or offered to you: take it, with its card and names. */
+async function viewTakeProfile(id, state) {
+  const p = await profile.getProfile(state, id);
+  if (!p) return viewStart("No such profile.");
+  if (p.owner === connected) return viewProfile(p, state);
+  const offered = p.offer !== undefined && p.offer === connected;
+  if (!offered && p.price === undefined) return viewStart(`${nameOf(p)} isn't for sale.`);
+  const names = await profile.namesOf(state, id);
+  return `
+    ${backBar(pageOf(p), nameOf(p))}
+    <main class="col stack" style="margin-top: 12px">
+      <h1 style="margin: 0">${offered ? "A profile for you" : "Buy this profile"}</h1>
+      <section class="panel stack">
+        ${personRow(p, pageOf(p), p.handle && p.name ? `@${p.handle}` : "")}
+        <p class="note" style="margin: 0">It comes whole: its card, its followers${names.length ? ` and its names, ${names.map((n) => `@${esc(n.handle)}`).join(", ")}` : ""}.</p>
+        ${offered ? "" : `<div class="sum" style="margin: 0"><span class="label">Price · paid to its owner</span><span>${coins(p.price)}</span><span class="label">Network fee</span><span>${coins(FEE)}</span></div>`}
+        ${wallet() ? `<button class="pill accent big" type="button" data-take-profile="${esc(id)}">${offered ? "Take it" : `Buy for ${coins(p.price + FEE)}`}</button>` : walletPanel("To take a profile, add Selfhold")}
+      </section>
+    </main>`;
+}
+
+async function viewEdit(id, state) {
+  const p = await profile.getProfile(state, id);
+  if (p?.owner !== connected) {
+    return `<main class="col card" style="margin-top: 48px"><h1>This profile isn't yours</h1><p class="bio">Only its owner edits it.</p><a class="pill big" href="#/profiles" style="margin-top: 20px">Go to My profiles</a></main>`;
+  }
+  const admins = await profile.adminsOf(state, id);
+  // Links and photo being edited survive a redraw until saved.
+  draft = draft?.id === id ? draft : { id, links: [...(p.links ?? [])], avatar: p.avatar };
+  return `
+    <div class="col top" style="justify-content: flex-start; align-items: center">
+      <a class="pill" href="${esc(pageOf(p))}">‹ ${esc(nameOf(p))}</a>
     </div>
     <main class="col stack" style="margin-top: 12px">
-      <h1 style="margin: 0">Edit your page</h1>
-      <form id="edit" class="stack">
-        <section class="panel stack" aria-label="About you">
+      <h1 style="margin: 0">Edit ${p.handle ? `<span class="mono">@${esc(p.handle)}</span>` : "profile"}</h1>
+      <form id="edit" class="stack" data-profile="${esc(id)}">
+        <section class="panel stack" aria-label="About this profile">
           <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap">
-            ${draft.avatar ? `<img class="avatar small" data-photo="${esc(draft.avatar)}" alt="Your photo">` : `<div class="avatar small" aria-hidden="true">${esc(initial(p))}</div>`}
+            ${draft.avatar ? `<img class="avatar small" data-photo="${esc(draft.avatar)}" alt="The photo">` : `<div class="avatar small" aria-hidden="true">${esc(initial(p))}</div>`}
             <div class="stack" style="gap: 6px">
               <label class="pill" for="photo" style="width: fit-content">Change photo</label>
               <input id="photo" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" class="sr">
@@ -604,26 +684,25 @@ async function viewEdit(state) {
           </div>
           <div class="field"><label for="name">Name</label><input id="name" value="${esc(p.name ?? "")}" autocomplete="name"></div>
           <div class="field"><label for="bio">Bio</label><textarea id="bio" rows="3">${esc(p.description ?? "")}</textarea></div>
-          <div class="field">
-            <label for="handle">Handle on your page</label>
-            <select id="handle">
-              <option value="">None</option>
-              ${held.map((h) => `<option value="${esc(h.handle)}"${h.handle === p.handle ? " selected" : ""}>@${esc(h.handle)}</option>`).join("")}
-            </select>
-            <span class="label">Only handles you hold. <a href="#/">Buy one</a></span>
-          </div>
           <div class="field"><label for="url">Website</label><input id="url" type="url" inputmode="url" value="${esc(p.url ?? "")}" placeholder="https://"></div>
         </section>
-        <button class="pill accent" type="button" data-add-link style="min-height: 52px">+ Add link</button>
         <div id="links" class="stack">${draft.links.map((l, i) => linkRow(l, i)).join("")}</div>
+        <button class="pill" type="button" data-add-link style="align-self: flex-start">+ Add link</button>
         <div class="bar">
           <span class="label">One change, approved in your wallet.</span>
           <div class="end"><button class="pill dark" type="submit">Save</button></div>
         </div>
       </form>
+      <section class="panel stack" aria-labelledby="admins-title">
+        <h2 id="admins-title" style="margin: 0">Admins</h2>
+        <p class="note" style="margin: 0">Admins post as this profile in apps, with their own key. Only you edit it, sell it or change admins.</p>
+        ${admins.map((a) => `<div class="row" role="group" aria-label="Admin ${esc(shortID(a))}"><span class="mono">${esc(shortID(a))}</span><div class="end"><button class="pill" type="button" data-remove-admin="${esc(a)}" data-profile="${esc(id)}">Remove</button></div></div>`).join("")}
+        <button class="pill" type="button" data-add-admin="${esc(id)}" style="align-self: flex-start">+ Add admin</button>
+      </section>
     </main>`;
 }
 let draft = null;
+
 
 const linkRow = (link, i) => `
   <div class="panel link-row" data-link="${i}" style="padding: 12px 12px 12px 16px">
@@ -640,37 +719,57 @@ const linkRow = (link, i) => `
     </div>
   </div>`;
 
-/** My names: every handle you own, and what you can do with each. */
-async function viewNames(state) {
-  const mine = await profile.heldBy(state, connected);
-  const shown = (await profile.getProfile(state, connected)).handle;
+/** One name on a profile of yours, and what you can do with it. */
+function nameRow(n, p, more) {
+  const shown = n.handle === p.handle;
+  const label = [shown && "shown", n.price !== undefined && `for sale · ${coins(n.price)}`, n.offer && "offered"].filter(Boolean).join(" · ");
+  return `
+    <div class="row" role="group" aria-label="@${esc(n.handle)}">
+      <span class="mono">@${esc(n.handle)}</span>
+      <span class="label">${label}</span>
+      <div class="end">
+        ${shown ? "" : `<button class="pill" type="button" data-show="${esc(n.handle)}" data-profile="${esc(p.id)}">Show</button>`}
+        ${n.price !== undefined || n.offer
+          ? `<button class="pill" type="button" data-unlist="${esc(n.handle)}">${n.offer ? "Take back" : "Stop selling"}</button>`
+          : `<button class="pill" type="button" data-list="${esc(n.handle)}">Sell</button>`}
+        <button class="pill" type="button" data-give="${esc(n.handle)}">Give</button>
+        ${more ? `<button class="pill" type="button" data-move-name="${esc(n.handle)}">Move</button>` : ""}
+        <button class="pill" type="button" data-release="${esc(n.handle)}">Release</button>
+      </div>
+    </div>`;
+}
+
+/** My profiles: each profile you own, its names, and what you can do with each. */
+async function viewProfiles(state) {
+  const mine = await myProfiles(state);
+  const names = await Promise.all(mine.map((p) => profile.namesOf(state, p.id)));
   return `
     <main class="col" style="margin-top: 12px">
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
-        <h1 style="margin: 0">My names</h1>
-        <div style="display: flex; gap: 8px"><a class="pill" href="#/me">Your page</a><a class="pill" href="#/edit">Edit page</a></div>
+        <h1 style="margin: 0">My profiles</h1>
+        <button class="pill" type="button" data-new-profile>New profile</button>
       </div>
-      <section class="section stack" aria-label="Names you own">
-        ${mine.length ? mine.map((h) => `
-          <div class="row">
-            <span class="mono">@${esc(h.handle)}</span>
-            <span class="label">${h.handle === shown ? "on your page" : ""}${h.price !== undefined ? `${h.handle === shown ? " · " : ""}for sale · ${coins(h.price)}` : ""}</span>
-            <div class="end">
-              ${h.handle === shown ? "" : `<button class="pill" type="button" data-use="${esc(h.handle)}">Use on page</button>`}
-              ${h.price !== undefined
-                ? `<button class="pill" type="button" data-unlist="${esc(h.handle)}">Stop selling</button>`
-                : `<button class="pill" type="button" data-list="${esc(h.handle)}">Sell</button>`}
-              <button class="pill" type="button" data-give="${esc(h.handle)}">Give</button>
-              <button class="pill" type="button" data-release="${esc(h.handle)}">Release</button>
+      ${mine.length ? "" : `<p class="note">No profiles yet. <a href="#/">Get a name</a>: buying one makes your first profile.</p>`}
+      ${mine.map((p, i) => `
+        <section class="section stack" aria-label="${esc(nameOf(p))}">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+            ${personRow(p, pageOf(p), [p.name && p.handle && `@${p.handle}`, p.price !== undefined && `for sale · ${coins(p.price)}`, p.offer && "offered"].filter(Boolean).join(" · "))}
+            <div class="end" style="margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap">
+              <a class="pill" href="#/edit/${esc(p.id)}">Edit</a>
+              ${p.price !== undefined || p.offer
+                ? `<button class="pill" type="button" data-keep-profile="${esc(p.id)}">${p.offer ? "Take back" : "Stop selling"}</button>`
+                : `<button class="pill" type="button" data-sell-profile="${esc(p.id)}">Sell profile</button><button class="pill" type="button" data-give-profile="${esc(p.id)}">Give profile</button>`}
             </div>
-          </div>`).join("") : `<p class="note">You don't own a name yet. <a href="#/">Search for one</a>.</p>`}
-      </section>
+          </div>
+          ${names[i].map((n) => nameRow(n, p, mine.length > 1)).join("") || `<p class="note" style="margin: 0">No names. <a href="#/">Get one</a> for it.</p>`}
+        </section>`).join("")}
     </main>`;
 }
 
 /** The marketplace: names their owners are selling. */
 async function viewMarket(state) {
   const sale = await profile.forSale(state);
+  const mine = new Set((await myProfiles(state)).map((p) => p.id));
   return `
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0">Marketplace</h1>
@@ -679,7 +778,7 @@ async function viewMarket(state) {
         ${sale.map((h) => `
           <div class="row">
             <span class="mono">@${esc(h.handle)}</span>
-            <div class="end">${h.holder === connected
+            <div class="end">${mine.has(h.profile)
               ? `<span class="label">yours · ${coins(h.price)}</span>`
               : `<span class="price">${coins(h.price)}</span><a class="pill dark" href="#/buy/${esc(h.handle)}" aria-label="Buy @${esc(h.handle)} for ${coins(h.price)}">Buy</a>`}</div>
           </div>`).join("") || `<p class="note">Nothing for sale right now. <a href="#/">Search for a name</a>: one no one owns costs 0.</p>`}
@@ -711,6 +810,7 @@ function viewSettings() {
 
 const route = () => decodeURIComponent(location.hash.replace(/^#\/?/, ""));
 let drawing = 0;
+let drawn = 0; // views shown so far
 
 async function render() {
   const ticket = ++drawing;
@@ -721,35 +821,47 @@ async function render() {
     if (r === "settings") html = viewSettings();
     else {
       // Selfhold connects only within a click, so ask now, before the read, if this render came from one.
-      const needs = r === "edit" || r === "me" || r === "names";
+      const [page, arg = ""] = r.split(/\/(.*)/s);
+      // Old links: names and a page edited without saying which profile.
+      if (r === "names" || r === "edit") return void location.replace("#/profiles");
+      const needs = ["me", "profiles", "edit", "take", "take-profile"].includes(page);
       if (needs && !connected && wallet() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
-      const [page, arg = ""] = r.split(/\/(.*)/s);
-      if ((r === "edit" || r === "me" || r === "names") && !wallet()) {
-        html = `<main class="col stack" style="margin-top: 24px">${walletPanel(r === "names" ? "Your names live in your wallet" : "Your page belongs to your wallet's key")}</main>`;
+      const why = "Your profiles belong to your wallet's key";
+      if (needs && !wallet()) {
+        html = `<main class="col stack" style="margin-top: 24px">${walletPanel(why)}</main>`;
       } else if (needs && !connected) {
-        html = `<main class="col stack" style="margin-top: 24px">${connectPanel(r === "names" ? "Your names live in your wallet" : "Your page belongs to your wallet's key")}</main>`;
-      } else if (needs) {
-        html = r === "edit" ? await viewEdit(state) : r === "me" ? await viewProfile(connected, state, (await profile.getProfile(state, connected)).handle) : await viewNames(state);
-      } else if (r === "market") html = await viewMarket(state);
+        html = `<main class="col stack" style="margin-top: 24px">${connectPanel(why)}</main>`;
+      } else if (r === "me") html = await viewMe(state);
+      else if (r === "profiles") html = await viewProfiles(state);
+      else if (page === "edit" && profile.isProfileId(arg)) html = await viewEdit(arg, state);
+      else if (page === "take" && profile.isHandle(arg)) html = await viewTake(arg, state);
+      else if (page === "take-profile" && profile.isProfileId(arg)) html = await viewTakeProfile(arg, state);
+      else if (r === "market") html = await viewMarket(state);
       else if (page === "search") {
         const q = asHandle(arg);
         html = profile.isHandle(q) ? await viewSearch(q, state) : viewStart(q ? `“${arg}”: a name is lowercase letters, digits and _.` : "");
       } else if (page === "buy" && profile.isHandle(arg)) {
         html = await viewBuy(arg, state);
       } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
-      else if (/^@[a-z0-9_]+\/(followers|following)$/.test(r) || /^[a-z2-7]{59}\/(followers|following)$/.test(r) && profile.isAddress(page)) {
+      else if (/^(@[a-z0-9_]+|[a-z2-7]{16})\/(followers|following)$/.test(r)) {
         html = await viewFollowList(page, arg, state);
-      } else if (r.startsWith("@")) {
-        const entry = await profile.resolve(state, r.slice(1));
-        html = entry ? await viewProfile(entry.holder, state, r.slice(1)) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewStart(`No one holds ${r}.`);
-      } else if (profile.isAddress(r)) html = await viewProfile(r, state);
+      } else if (r.startsWith("@") || profile.isProfileId(r)) {
+        const p = await profileFor(state, r);
+        html = p ? await viewProfile(p, state) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewStart(`No profile ${r}.`);
+      } else if (profile.isAddress(r)) html = await viewAccount(r, state);
       else if (r === "") html = viewStart();
-      else html = viewStart(`“${r}” is not a handle or an address.`);
+      else html = viewStart(`“${r}” is not a name, a profile or an account.`);
     }
     if (ticket !== drawing) return;
     app.innerHTML = header() + html + footer();
+    // A new view: focus its heading, so keyboard and screen reader users start there.
+    if (drawn++ > 0 && !app.contains(document.activeElement)) {
+      const heading = $("h1", app);
+      heading?.setAttribute("tabindex", "-1");
+      heading?.focus({ preventScroll: true });
+    }
     for (const img of app.querySelectorAll("[data-photo]")) {
       photo(img.dataset.photo).then((url) => {
         if (url) img.src = url;
@@ -819,28 +931,88 @@ document.addEventListener("click", async (event) => {
   } else if ("reset" in d) {
     saveSettings({});
     render();
-  } else if (d.use) {
+  } else if ("newProfile" in d) {
     const me = connected;
-    act(`Putting @${d.use} on your page`, async () => profile.editCard(await readState(), me, { handle: d.use }), async (s) => (await profile.getProfile(s, me)).handle === d.use);
+    let made;
+    act(
+      "Making a profile",
+      async () => (made = await profile.createProfile(await readState(), me)).write,
+      async (s) => (await profile.getProfile(s, made.id))?.owner === me,
+      () => {
+        location.hash = `#/edit/${made.id}`;
+      },
+    );
+  } else if (d.show) {
+    const me = connected;
+    act(`Showing @${d.show}`, async () => profile.showName(await readState(), me, d.profile, d.show), async (s) => (await profile.getProfile(s, d.profile))?.handle === d.show);
   } else if (d.list) {
     await listHandle(d.list);
   } else if (d.unlist) {
-    const entry = await profile.resolve(await readState(), d.unlist);
-    if (!entry) return;
-    act(`Stop selling @${d.unlist}`, () => profile.unlist(entry), async (s) => (await profile.resolve(s, d.unlist))?.price === undefined);
+    const me = connected;
+    act(`@${d.unlist}`, async () => profile.unlist(await readState(), me, d.unlist), async (s) => {
+      const entry = await profile.resolve(s, d.unlist);
+      return entry?.price === undefined && entry?.offer === undefined;
+    });
   } else if (d.give) {
     await giveHandle(d.give);
+  } else if (d.moveName) {
+    await moveHandle(d.moveName);
   } else if (d.release) {
     await releaseHandle(d.release);
+  } else if (d.takeName) {
+    const me = connected;
+    act(`Taking @${d.takeName}`, async () => profile.moveName(await readState(), me, d.takeName, d.to), async (s) => (await profile.resolve(s, d.takeName))?.profile === d.to, () => {
+      location.hash = `#/@${d.takeName}`;
+    });
+  } else if (d.sellProfile) {
+    await sellProfile(d.sellProfile);
+  } else if (d.giveProfile) {
+    await giveProfile(d.giveProfile);
+  } else if (d.keepProfile) {
+    const me = connected;
+    act("Keeping the profile", async () => profile.setProfileTerms(await readState(), me, d.keepProfile), async (s) => {
+      const p = await profile.getProfile(s, d.keepProfile);
+      return p?.price === undefined && p?.offer === undefined;
+    });
+  } else if (d.takeProfile) {
+    if (!connected) {
+      try {
+        await connect();
+      } catch (error) {
+        return toast(walletMessage(error), { bad: true });
+      }
+    }
+    const me = connected;
+    act("Taking the profile", async () => profile.takeProfile(await readState(), me, d.takeProfile), async (s) => (await profile.getProfile(s, d.takeProfile))?.owner === me, () => {
+      location.hash = `#/${d.takeProfile}`;
+    });
+  } else if (d.addAdmin) {
+    const admin = await sheet({
+      title: "Add an admin",
+      body: "They post as this profile in apps, with their own key. They can't edit it, sell it or change admins.",
+      input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account ID.") },
+      confirm: "Add admin",
+    });
+    if (admin === null) return;
+    const me = connected;
+    act("Adding the admin", async () => profile.setAdmin(await readState(), me, d.addAdmin, admin), async (s) => (await profile.adminsOf(s, d.addAdmin)).includes(admin));
+  } else if (d.removeAdmin) {
+    const me = connected;
+    act("Removing the admin", async () => profile.setAdmin(await readState(), me, d.profile, d.removeAdmin, false), async (s) => !(await profile.adminsOf(s, d.profile)).includes(d.removeAdmin));
   }
 });
 
+/** A link the person can send, shown in a toast that stays until closed. */
+function shareLink(message, hash) {
+  const url = `${location.origin}${location.pathname}${hash}`;
+  navigator.clipboard?.writeText(url).catch(() => {});
+  toast(`${message} ${url}`);
+}
+
 async function listHandle(handle) {
-  const entry = await profile.resolve(await readState(), handle);
-  if (!entry) return;
   const price = await sheet({
     title: `Sell @${handle}`,
-    body: "Anyone can buy it at this price at once, without asking you. Check the number.",
+    body: "Anyone can buy it at this price at once, without asking you. Only the name moves: your profile keeps its card and followers. Check the number.",
     input: {
       label: "Asking price",
       attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
@@ -849,32 +1021,93 @@ async function listHandle(handle) {
     confirm: "List it",
   });
   if (price === null) return;
-  act(`Listing @${handle}`, () => profile.list(entry, BigInt(price)), async (s) => (await profile.resolve(s, handle))?.price === BigInt(price));
+  const me = connected;
+  act(`Listing @${handle}`, async () => profile.list(await readState(), me, handle, BigInt(price)), async (s) => (await profile.resolve(s, handle))?.price === BigInt(price));
 }
 
+/** Gives a name to someone's profile: they take it from a link you send them. */
 async function giveHandle(handle) {
-  const entry = await profile.resolve(await readState(), handle);
-  if (!entry) return;
   const to = await sheet({
     title: `Give @${handle}`,
-    body: "It becomes theirs at once, and you can't take it back.",
-    input: { label: "Their address", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account address.") },
-    confirm: "Give it",
+    body: "Name the profile it goes to, by @name or by its link. Its owner takes it from a link you send them; until then you can take it back.",
+    input: { label: "Their profile", attrs: 'autocomplete="off" spellcheck="false"', check: (v) => (/^@?[a-z0-9_]+$/.test(v.trim()) || profileIdIn(v) ? "" : "An @name or a profile link.") },
+    confirm: "Offer it",
   });
   if (to === null) return;
-  act(`Giving @${handle}`, () => profile.transfer(entry, to), async (s) => (await profile.resolve(s, handle))?.holder === to);
+  const state = await readState();
+  const id = profileIdIn(to) ?? (await profile.resolve(state, to.trim().replace(/^@/, "")))?.profile;
+  if (!id) return toast(`No profile is ${to.trim()}.`, { bad: true });
+  const me = connected;
+  act(`Offering @${handle}`, async () => profile.offerName(await readState(), me, handle, id), async (s) => (await profile.resolve(s, handle))?.offer === id, () => {
+    shareLink(`Send them this link to take @${handle}:`, `#/take/${handle}`);
+    render();
+  });
+}
+
+/** A profile id in what someone typed: the id itself, or a link ending in it. */
+function profileIdIn(text) {
+  const id = text.trim().split(/[#/]/).pop();
+  return profile.isProfileId(id) ? id : undefined;
+}
+
+/** Moves a name to another of your profiles. */
+async function moveHandle(handle) {
+  const state = await readState();
+  const entry = await profile.resolve(state, handle);
+  const others = (await myProfiles(state)).filter((p) => p.id !== entry?.profile);
+  if (!entry || others.length === 0) return;
+  const to = others.length === 1 ? (await sheet({ title: `Move @${handle}`, body: `It moves to ${nameOf(others[0])}.`, confirm: "Move it" })) && others[0].id : await sheet({
+    title: `Move @${handle}`,
+    body: `Which profile: ${others.map((p, i) => `${i + 1}. ${nameOf(p)}`).join(", ")}`,
+    input: { label: "Number", attrs: 'inputmode="numeric" autocomplete="off"', check: (v) => (Number(v) >= 1 && Number(v) <= others.length ? "" : `A number from 1 to ${others.length}.`) },
+    confirm: "Move it",
+  }).then((v) => v && others[Number(v) - 1].id);
+  if (!to) return;
+  const me = connected;
+  act(`Moving @${handle}`, async () => profile.moveName(await readState(), me, handle, to), async (s) => (await profile.resolve(s, handle))?.profile === to);
 }
 
 async function releaseHandle(handle) {
-  const entry = await profile.resolve(await readState(), handle);
-  if (!entry) return;
   const ok = await sheet({
     title: `Release @${handle}`,
-    body: "It stops being yours, and anyone may buy it next, for 0.",
+    body: "It stops being yours, and anyone may buy it next, for 0. Your profile keeps its card and followers.",
     confirm: "Release it",
   });
   if (!ok) return;
-  act(`Releasing @${handle}`, () => profile.release(entry), async (s) => (await profile.resolve(s, handle)) === undefined);
+  const me = connected;
+  act(`Releasing @${handle}`, async () => profile.release(await readState(), me, handle), async (s) => (await profile.resolve(s, handle)) === undefined);
+}
+
+async function sellProfile(id) {
+  const price = await sheet({
+    title: "Sell this profile",
+    body: "Anyone can buy it at this price at once: its card, followers and names all go with it. Check the number.",
+    input: {
+      label: "Asking price",
+      attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
+      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
+    },
+    confirm: "List it",
+  });
+  if (price === null) return;
+  const me = connected;
+  act("Listing the profile", async () => profile.setProfileTerms(await readState(), me, id, { price: BigInt(price) }), async (s) => (await profile.getProfile(s, id))?.price === BigInt(price));
+}
+
+/** Gives a whole profile to an account, which takes it from a link: also how a profile moves to a new key. */
+async function giveProfile(id) {
+  const to = await sheet({
+    title: "Give this profile",
+    body: "Its card, followers and names go to the account you name, which takes it from a link you send. To move it to a new key of your own, name that key's account.",
+    input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account ID.") },
+    confirm: "Offer it",
+  });
+  if (to === null) return;
+  const me = connected;
+  act("Offering the profile", async () => profile.setProfileTerms(await readState(), me, id, { offer: to }), async (s) => (await profile.getProfile(s, id))?.offer === to, () => {
+    shareLink("Send them this link to take it:", `#/take-profile/${id}`);
+    render();
+  });
 }
 
 document.addEventListener("change", async (event) => {
@@ -891,7 +1124,7 @@ document.addEventListener("change", async (event) => {
     await operator(settings.ownNode, settings.ownCookie).pin(volume);
     draft.links = readDraftLinks();
     draft.avatar = volume.cid;
-    progress.update("Photo kept. Save to put it on your page.");
+    progress.update("Photo kept. Save to put it on the page.");
     render();
   } catch (error) {
     progress.update(`Your node did not keep the photo: ${error.message}`, { bad: true });
@@ -916,6 +1149,7 @@ document.addEventListener("submit", async (event) => {
       }
     }
     const me = connected;
+    const choice = $("#to")?.value ?? "new";
     act(
       `Buying @${want}`,
       async () => {
@@ -924,12 +1158,16 @@ document.addEventListener("submit", async (event) => {
         // Bought at the price shown, or not at all.
         if (entry && entry.price === undefined) throw new Error(`@${want} was just taken, and it isn't for sale.`);
         if (entry && entry.price !== BigInt(form.dataset.price)) throw new Error(`The price of @${want} just changed. Look again.`);
-        const take = entry ? profile.buy(entry, me) : await profile.claim(state, me, want);
-        // Your first name goes on your page too, in the same approval.
-        if ((await profile.getProfile(state, me)).handle) return take;
-        return profile.combine(take, await profile.editCard(state, me, { handle: want }));
+        if (choice !== "new") return entry ? profile.buy(state, me, want, choice) : profile.claim(state, me, choice, want);
+        // Onto a new profile, made in the same approval.
+        if (!entry) return (await profile.createProfile(state, me, { handle: want })).write;
+        const made = await profile.createProfile(state, me);
+        return profile.combine(made.write, await profile.buy(state, me, want, made.id, { created: true }));
       },
-      async (s) => (await profile.resolve(s, want))?.holder === me,
+      async (s) => {
+        const holder = (await profile.resolve(s, want))?.profile;
+        return (await profile.profileToken(s, holder))?.owner === me;
+      },
       () => {
         location.hash = `#/bought/${want}`;
       },
@@ -941,10 +1179,10 @@ document.addEventListener("submit", async (event) => {
     if (bad) return toast(bad.label ? `“${bad.label}” needs an http or https address.` : "Every link needs a title.", { bad: true });
     const url = $("#url").value.trim();
     if (url && !profile.isWebURL(url)) return toast("The website needs an http or https address.", { bad: true });
+    const id = form.dataset.profile;
     const changes = {
       name: $("#name").value.trim(),
       description: $("#bio").value.trim(),
-      handle: $("#handle").value,
       url,
       avatar: draft.avatar ?? "",
       links,
@@ -952,7 +1190,7 @@ document.addEventListener("submit", async (event) => {
     const me = connected;
     const progress = toast("Saving: approve it in your wallet.");
     try {
-      const sent = await profile.saveCard(readState, me, changes, send);
+      const sent = await profile.saveCard(readState, me, id, changes, send);
       if (sent === undefined) {
         progress.update("Nothing changed.");
         setTimeout(progress.close, 2000);
@@ -962,13 +1200,14 @@ document.addEventListener("submit", async (event) => {
       const want = JSON.stringify({ ...changes, links });
       for (let i = 0; i < 120; i++) {
         await new Promise((resolve) => setTimeout(resolve, 2500));
-        const p = await profile.getProfile(await readState(), me).catch(() => null);
-        if (p && JSON.stringify({ name: p.name ?? "", description: p.description ?? "", handle: p.handle ?? "", url: p.url ?? "", avatar: p.avatar ?? "", links: p.links ?? [] }) === want) break;
+        const p = await profile.getProfile(await readState(), id).catch(() => null);
+        if (p && JSON.stringify({ name: p.name ?? "", description: p.description ?? "", url: p.url ?? "", avatar: p.avatar ?? "", links: p.links ?? [] }) === want) break;
       }
       draft = null;
-      progress.update("Your page is updated.");
+      progress.update("The profile is updated.");
       setTimeout(progress.close, 2500);
-      location.hash = "#/me";
+      const saved = await profile.getProfile(await readState(), id).catch(() => null);
+      location.hash = saved ? pageOf(saved) : `#/${id}`;
       render();
     } catch (error) {
       progress.update(walletMessage(error), { bad: true });
@@ -993,7 +1232,7 @@ window.addEventListener("follows:change", async () => {
   const counts = $(".counts[data-target]");
   if (!counts) return;
   try {
-    counts.innerHTML = await countLinks(counts.dataset.target, counts.dataset.holder);
+    counts.innerHTML = await countLinks(counts.dataset.target);
   } catch {} // the counts stay as they were; the next visit reads them again
 });
 // Back from adding Selfhold: reload, on the same address, so it reaches the page.
