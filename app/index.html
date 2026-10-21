@@ -97,6 +97,17 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
 .toast.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
 .toast button { border: 0; background: transparent; color: inherit; min-width: 32px; min-height: 32px; cursor: pointer; font-size: 18px; }
 .empty { color: var(--muted); text-align: center; margin-top: 48px; }
+.follows { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
+.counts { margin: 0; display: flex; gap: 20px; }
+.counts a { color: var(--ink); text-decoration: none; }
+.counts a:hover { text-decoration: underline; }
+.follows .label { margin: 0; }
+follows-button { --follows-accent: var(--accent); --follows-ink: var(--ink); --follows-line: var(--line); --follows-muted: var(--muted); min-width: 180px; }
+.names { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; margin-top: 4px; }
+.names .handle { margin: 0; text-decoration: none; }
+.row.person { text-decoration: none; color: var(--ink); padding-left: 10px; }
+.row.person .who { display: flex; flex-direction: column; min-width: 0; }
+.avatar.sm { width: 40px; height: 40px; font-size: 16px; margin: 0; flex: none; }
 .start { margin-top: 12vh; }
 .hero { margin: 0; font-size: clamp(30px, 7vw, 40px); line-height: 1.12; letter-spacing: -0.02em; }
 .lede { margin: 0; color: var(--soft); }

@@ -6,12 +6,16 @@ import { mediaVolume, operator } from "../client/media.mjs";
 import * as profile from "../sdk/src/records/profile.mjs";
 import { anyHost, tip, view, volumeLoader } from "../sdk/src/records/state.mjs";
 import { writeRequest } from "../sdk/src/records/wallet.mjs";
+import { createFollows } from "../follows/src/index.mjs";
+import { defineFollowButton } from "../follows/src/element.mjs";
 
 // ---------------------------------------------------------------- settings
 
 const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
   chain: "Nexus/testnet/moniker-da6f57",
+  // Follows, the follow graph every app shares: who follows a name or an account.
+  follows: "Nexus/testnet/follows-6ed91a",
   // Your own node, for keeping photos: its URL and the cookie it writes at start.
   ownNode: "",
   ownCookie: "",
@@ -30,6 +34,7 @@ function saveSettings(next) {
     localStorage.setItem("moniker.settings", JSON.stringify(settings));
   } catch {}
   reader = null;
+  graph = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
 // Writes are free on the trial chain: its hosts admit 0-fee transactions.
@@ -51,6 +56,14 @@ function getReader() {
   }
   return reader;
 }
+
+let graph = null;
+function getGraph() {
+  if (!graph) graph = createFollows({ sdk, nodes: settings.nodes, chain: settings.follows.split("/").filter(Boolean), freshFor: 5000 });
+  return graph;
+}
+// The Follow button reads and writes through whichever graph the settings name now.
+defineFollowButton(new Proxy({}, { get: (_, method) => (...args) => getGraph()[method](...args) }), { walletURL: WALLET_URL });
 
 /** The chain's state at the tip of the first node that answers. */
 async function readState() {
@@ -263,9 +276,40 @@ const footer = () => `
 
 // ---------------------------------------------------------------- views
 
-async function viewProfile(address, state) {
+/**
+ * Who follows `target` (a @name or an address) and whom `holder` follows,
+ * each count opening its list, and the Follow button: on a name's page it
+ * follows the name, on an account's page the account. Not on your own page.
+ */
+async function followsBlock(target, holder, mine, label) {
+  const [followers, following] = await Promise.all([getGraph().followers(target), holder ? getGraph().following(holder) : []]);
+  const many = (n, one, other) => `<strong>${n.toLocaleString("en-US")}</strong> ${n === 1 ? one : other}`;
+  return `
+    <div class="follows">
+      <p class="counts">
+        <a href="#/${esc(target)}/followers">${many(followers.length, "follower", "followers")}</a>
+        <a href="#/${esc(target)}/following">${many(following.length, "following", "following")}</a>
+      </p>
+      ${mine ? "" : `
+        <follows-button target="${esc(target)}" label="${esc(label)}"></follows-button>
+        <p class="label">${target.startsWith("@") ? `You follow whoever owns ${esc(target)}.` : "You follow this account, whatever names it holds."}</p>`}
+    </div>`;
+}
+
+/**
+ * An account's page, reached by its address (or Your page), or a name's
+ * page, reached by `@handle`: the same card, but a name's page is about the
+ * name (its followers, Follow the name) and an account's about the account
+ * (every name it holds, its followers, Follow the account).
+ */
+async function viewProfile(address, state, handle) {
   const p = await profile.getProfile(state, address);
   const mine = connected === address;
+  const target = handle ? `@${handle}` : address;
+  const [held, follows] = await Promise.all([
+    handle ? [] : profile.heldBy(state, address),
+    followsBlock(target, address, mine, handle ? target : (p.name ?? short(address))),
+  ]);
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
   const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : address}`;
@@ -274,13 +318,59 @@ async function viewProfile(address, state) {
     <main class="col card">
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(p.name ?? short(address))}</h1>
-      ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
+      ${handle
+        ? `<p class="handle">@${esc(handle)}</p>`
+        : held.length
+          ? `<nav class="names" aria-label="Names this account holds">${held.map((h) => `<a class="handle" href="#/@${esc(h.handle)}">@${esc(h.handle)}</a>`).join("")}</nav>`
+          : ""}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
+      ${follows}
+      ${handle ? `<a class="quiet" href="#/${esc(address)}">The account that owns @${esc(handle)}</a>` : ""}
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
       ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit">Make your page</a>.` : "This account hasn't made a page yet."}</p>` : ""}
       ${mine
         ? `<button class="copy" type="button" data-copy="${esc(link)}" style="margin-top: 24px">Copy your link ⧉</button>`
         : `<button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy this address" style="margin-top: 24px">${esc(short(address))} ⧉</button>`}
+    </main>`;
+}
+
+/** One person in a list: their photo, name and @handle, linked to their page. */
+function personRow(p, href, sub) {
+  return `
+    <a class="row person" href="${esc(href)}">
+      ${p.avatar ? `<img class="avatar sm" data-photo="${esc(p.avatar)}" alt="">` : `<span class="avatar sm" aria-hidden="true">${esc(initial(p))}</span>`}
+      <span class="who"><strong>${esc(p.name ?? (p.handle ? `@${p.handle}` : short(p.address)))}</strong><span class="label">${esc(sub)}</span></span>
+    </a>`;
+}
+
+/** Who follows `who` (a @name or an address), or what its account follows. */
+async function viewFollowList(who, tab, state) {
+  const handle = who.startsWith("@") ? who.slice(1) : null;
+  const holder = handle ? (await profile.resolve(state, handle))?.holder : who;
+  let rows;
+  if (tab === "followers") {
+    const cards = await profile.getProfiles(state, await getGraph().followers(who));
+    rows = cards.map((p) => personRow(p, `#/${p.handle ? `@${p.handle}` : p.address}`, p.handle ? `@${p.handle}` : short(p.address)));
+  } else {
+    const followed = holder ? await getGraph().following(holder) : [];
+    rows = await Promise.all(
+      followed.map(async (t) => {
+        if (!t.startsWith("@")) {
+          const p = await profile.getProfile(state, t);
+          return personRow(p, `#/${t}`, `Account · ${short(t)}`);
+        }
+        const owner = (await profile.resolve(state, t.slice(1)))?.holder;
+        const p = owner ? await profile.getProfile(state, owner) : { handle: t.slice(1) };
+        return personRow({ ...p, handle: t.slice(1) }, `#/${t}`, owner ? `${t} · name` : `${t} · no one owns it`);
+      }),
+    );
+  }
+  const empty = tab === "followers" ? "No followers yet." : holder ? "Not following anyone yet." : `No one owns ${who}, so it follows no one.`;
+  return `
+    ${backBar(`#/${esc(who)}`, "Back")}
+    <main class="col stack">
+      <h1 style="margin: 0">${tab === "followers" ? `Followers of ${esc(handle ? who : "this account")}` : `Followed by ${esc(handle ? who : "this account")}`}</h1>
+      ${rows.length ? rows.join("") : `<p class="empty">${empty}</p>`}
     </main>`;
 }
 
@@ -591,6 +681,7 @@ function viewSettings() {
       <form id="settings" class="panel stack">
         <div class="field"><label for="s-nodes">Nodes to read from, one per line</label><textarea id="s-nodes" rows="3">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Profile chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
+        <div class="field"><label for="s-follows">Follows chain</label><input id="s-follows" class="mono" value="${esc(settings.follows)}"></div>
         <div class="field"><label for="s-own">Your own node, for keeping your photo</label><input id="s-own" type="url" value="${esc(settings.ownNode)}" placeholder="http://127.0.0.1:8080"></div>
         <div class="field"><label for="s-cookie">Its cookie (the .cookie file it writes at start)</label><input id="s-cookie" type="password" value="${esc(settings.ownCookie)}" autocomplete="off"></div>
         <p class="label" style="margin: 0">A photo is kept by whoever pins it. Your node must allow this page's origin (rpcAllowedOrigins).</p>
@@ -634,9 +725,11 @@ async function render() {
       } else if (page === "buy" && profile.isHandle(arg)) {
         html = await viewBuy(arg, state);
       } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
-      else if (r.startsWith("@")) {
+      else if (/^@[a-z0-9_]+\/(followers|following)$/.test(r) || /^[a-z2-7]{59}\/(followers|following)$/.test(r) && profile.isAddress(page)) {
+        html = await viewFollowList(page, arg, state);
+      } else if (r.startsWith("@")) {
         const entry = await profile.resolve(state, r.slice(1));
-        html = entry ? await viewProfile(entry.holder, state) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewStart(`No one holds ${r}.`);
+        html = entry ? await viewProfile(entry.holder, state, r.slice(1)) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewStart(`No one holds ${r}.`);
       } else if (profile.isAddress(r)) html = await viewProfile(r, state);
       else if (r === "") html = viewStart();
       else html = viewStart(`“${r}” is not a handle or an address.`);
@@ -868,6 +961,7 @@ document.addEventListener("submit", async (event) => {
     saveSettings({
       nodes: $("#s-nodes").value.split(/\s+/).filter(Boolean).map((n) => n.replace(/\/$/, "")),
       chain: $("#s-chain").value.trim() || DEFAULTS.chain,
+      follows: $("#s-follows").value.trim() || DEFAULTS.follows,
       ownNode: $("#s-own").value.trim().replace(/\/$/, ""),
       ownCookie: $("#s-cookie").value.trim(),
     });
@@ -877,6 +971,8 @@ document.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("hashchange", render);
+// A follow or unfollow saved: redraw, so the counts include it.
+window.addEventListener("follows:change", () => render());
 // Back from adding Selfhold: reload, on the same address, so it reaches the page.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && awaiting() && !wallet()) location.reload();
