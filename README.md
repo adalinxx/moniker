@@ -10,37 +10,50 @@ belongs to you, not to an app: no company can take it back, rename it or
 hand it to someone else, and only your key can change what it says. Any
 app can know you by it.
 
-One chain, Moniker (`Nexus/moniker`), holds every account's profile and every handle.
+One chain, Moniker (`Nexus/moniker`), holds every profile and every name.
 Any app reads and writes it; no app keeps its own profile.
+
+## Accounts, profiles and names
+
+- An **account** is a key, kept in the person's wallet. It is never shown,
+  only checked ("owned by …id").
+- A **profile** is the public identity: a card (name, bio, photo, links), the
+  name it shows, and admins. An account owns profiles. A profile is sold or
+  given whole, card and names with it; giving it to a new key of your own is
+  how you recover from a lost key.
+- A **name** (`@handle`) is held by a profile, which shows one of its names.
+  A name is sold or given on its own; the profile it leaves keeps its card.
+
+A record an app writes says which profile it is from, and the app shows that
+profile's card.
 
 ## Records
 
 | Key | Value | Who may write |
 | --- | --- | --- |
-| `user/<a>/profile` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url`, `handle` (strings) and `links` (`[{ label, url }]`, in order); all optional | `<a>` |
-| `user/<a>/key.x25519` | A public encryption key the owner manages directly (a key an app derives for its own origin goes under `app.<name>.*`, e.g. Fanfare's `app.fanfare.x25519`) | `<a>` |
-| `user/<a>/app.<name>.<field>` | An app's own data | `<a>` |
-| `name/<handle>` | `<holder>` or `<holder>@<price>` | see below |
+| `profile/<p>` | `<owner>`, `<owner>@<price>` or `<owner>><account>` (offered to one account) | its owner; anyone buys at the price; the account it is offered to takes it |
+| `about/<p>/card` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url` (strings) and `links` (`[{ label, url }]`, in order); all optional | the profile's owner |
+| `about/<p>/name` | The handle the profile shows, one it holds | the profile's owner |
+| `about/<p>/admin/<a>` | `1` while account `<a>` may act as the profile in apps | the profile's owner |
+| `name/<handle>` | `<p>`, `<p>@<price>` or `<p>><profile>` (offered to one profile) | its profile's owner; anyone buys at the price; the owner of the profile it is offered to takes it |
+| `owns/<a>/<p>`, `holds/<p>/<handle>` | `1`: an account's profiles, a profile's names, each in one read | only together with the token they index |
+| `user/<a>/key.x25519`, `user/<a>/app.<name>.<field>` | An account's own keys and app data | `<a>` |
 
-The card holds what a feed shows, so one read is enough per author. A card
-may carry fields this list does not name; clients keep them when they save.
-Display names are not unique. `url` and every link are http or https
-addresses; clients show nothing else. Media is a CID of a one-block Volume
-`{ type, bytes }` that the author pins; never a URL.
+`<p>` is 16 random characters of `a`–`z` and `2`–`7`. The policy sees only a
+transaction, so a write acting for profile `<p>` rewrites `profile/<p>` to the
+value it has: consensus checks every old value, and the policy reads the owner
+from it. Nothing is put on an account or a profile without its owner's
+signature, which is why a gift is an offer the receiver takes.
 
-## Handles
+The card holds what a feed shows. A card may carry fields this list does not
+name; clients keep them when they save. Display names are not unique. `url`
+and every link are http or https addresses; clients show nothing else. Media
+is a CID of a one-block Volume `{ type, bytes }` that the author pins; never a
+URL.
 
-A handle is lowercase letters, digits and `_`. Its value is its holder, an
-account address, optionally with an asking price.
-
-- **Claim**: the first to write a free handle holds it.
-- **Holder**: may transfer, price, unprice or release it.
-- **Anyone**: may take a priced handle by paying the holder at least the price
-  in the same transaction. The buyer names the value they read, so if the
-  price changed, the purchase is refused.
-
-An app shows `@h` on `<a>`'s profile only when `<a>`'s card says
-`handle: "h"` and `name/h` is held by `<a>`.
+A handle is lowercase letters, digits and `_`. The first to claim a free name
+puts it on one of their profiles. A buyer names the value they read, so if the
+price changed, the purchase is refused.
 
 ## Use Moniker in your app
 
@@ -65,22 +78,25 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 `app/` is a static page laid out like a domain registrar: a name search
 whose results page shows the exact name (available at 0, for sale by its
 owner at their price, or taken) and names close to it with their prices; a
-checkout that is only the order (price, network fee, total, one approval); a
-Marketplace of listed names; and My names, where you put a name on your page,
-sell it, give it away or release it. Each account also has one page, like a
-link page (photo, name, `@handle`, bio, a stack of links), and Edit. Your first
-name goes on your page in the same approval that buys it. There is no log in:
+checkout that is only the order (price, network fee, total, which of your
+profiles it goes on, one approval; your first name makes your first profile
+in the same approval); a Marketplace of listed names; each profile's page
+(photo, name, `@handle` and its other names, bio, links, followers, owner);
+and My profiles, where you edit a profile, show one of its names, sell, give,
+move or release a name, sell or give a whole profile, and make a new one.
+Edit also manages a profile's admins. A gift is an offer: the giver gets a
+link to send, and the receiver takes it from there. There is no log in:
 the page asks the wallet only where a key is needed, and only from a click, as
-Selfhold requires: Your page, My names and Edit offer Connect Selfhold, and
+Selfhold requires: Your page, My profiles and Edit offer Connect Selfhold, and
 checkout's Buy connects first. Without a wallet, the checkout still shows the order, with how to
 add Selfhold in place of Buy; back on the tab after adding it, the page reloads
 at the same checkout (Selfhold reaches only pages loaded after it), and on a
 phone it offers the link to finish on a computer. The network fee is 0 on the trial chain (its hosts admit 0-fee
 transactions), so a new account needs no coins to buy a name no one owns. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
-`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-da6f57`)
+`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-8eb926`)
 and asks the Selfhold wallet extension to approve each write: a save is one
-transaction, a buy pays the holder in the same one. Reading needs no wallet.
+transaction, a buy pays the owner in the same one. Reading needs no wallet.
 A photo is kept by your own node: set its URL and cookie in Settings (the node
 must list the page's origin in `rpcAllowedOrigins`). Fonts ship in
 `app/fonts/` (SIL Open Font License); the app reads and writes through
