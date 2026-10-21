@@ -184,7 +184,8 @@ async function act(label, build, landed, done = render) {
 const $ = (selector, root = document) => root.querySelector(selector);
 const esc = (text) =>
   String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const short = (address) => `${address.slice(0, 7)}…${address.slice(-5)}`;
+// An account ID by its end: every address begins alike (`bafyrei…`).
+const shortID = (address) => `…${address.slice(-8)}`;
 const initial = (p) => (p.name?.trim()?.[0] ?? p.handle?.[0] ?? "?").toUpperCase();
 const hostOf = (url) => {
   try {
@@ -318,20 +319,19 @@ async function viewProfile(address, state, handle) {
     <div class="col top">${mine ? `<a class="pill" href="#/edit">Edit</a>` : ""}</div>
     <main class="col card">
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
-      <h1>${esc(p.name ?? short(address))}</h1>
+      <h1>${esc(p.name ?? (handle ? `@${handle}` : "Unnamed account"))}</h1>
       ${handle
         ? `<p class="handle">@${esc(handle)}</p>`
-        : held.length
-          ? `<nav class="names" aria-label="Names this account owns">${held.map((h) => `<a class="handle" href="#/@${esc(h.handle)}">@${esc(h.handle)}</a>`).join("")}</nav>`
-          : ""}
+        : `<p class="account">Account <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span><button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy account ID">⧉</button></p>
+          ${held.length ? `<p class="names"><span class="label">${held.length === 1 ? "Name" : "Names"}</span>${held.map((h) => `<a class="handle" href="#/@${esc(h.handle)}">@${esc(h.handle)}</a>`).join("")}</p>` : ""}`}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${follows}
-      ${handle ? `<a class="owner" href="#/${esc(address)}">${mine ? "Your account" : "Owner's page"}</a>` : ""}
+      ${handle ? `<a class="owner" href="#/${esc(address)}">Owned by ${mine ? "you" : `<span class="mono">${esc(shortID(address))}</span>`}</a>` : ""}
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
       ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit">Make your page</a>.` : "This account hasn't made a page yet."}</p>` : ""}
       ${mine
         ? `<button class="copy" type="button" data-copy="${esc(link)}" style="margin-top: 24px">Copy your link ⧉</button>`
-        : handle ? "" : `<button class="copy" type="button" data-copy="${esc(`${location.origin}${location.pathname}#/${address}`)}" style="margin-top: 24px">Copy account link ⧉</button>`}
+        : ""}
     </main>`;
 }
 
