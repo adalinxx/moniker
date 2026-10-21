@@ -4,19 +4,21 @@
 //!
 //! - `user/<account>/...`: the account's own records. The account must sign,
 //!   and may create, overwrite or delete them.
-//! - `profile/<p>`: a profile, held as a token (see `lattice-policy-rules`):
-//!   `<owner>` or `<owner>@<price>`, the owner an account. `<p>` is 16
-//!   characters of `a`–`z` and `2`–`7`. Whoever creates a free id owns it; the
-//!   owner may transfer it, price it or take it off sale, and anyone may take a
-//!   priced profile by paying the owner the price in the same transaction. A
-//!   profile is never deleted.
+//! - `profile/<p>`: a profile, held as a token: `<owner>`, `<owner>@<price>`
+//!   or `<owner>><account>`, the owner an account. `<p>` is 16 characters of
+//!   `a`–`z` and `2`–`7`. Whoever creates a free id owns it; the owner may
+//!   transfer it, price it, offer it to one account or take it back, and
+//!   anyone may take a priced profile by paying the owner the price in the
+//!   same transaction, as the account it is offered to may take it for
+//!   nothing. A profile is never deleted.
 //! - `profile/<p>/<field>...`: the profile's records (its card, the name it
 //!   shows, its admins, any app's fields). Only its owner writes them.
-//! - `name/<handle>`: a name, held as a token by a profile: `<p>` or
-//!   `<p>@<price>`. The holding profile's owner may move it to another
-//!   profile, price it, take it off sale or release it, and anyone may take a
-//!   priced name by paying that owner the price in the same transaction. A
-//!   handle is lowercase letters, digits and `_`.
+//! - `name/<handle>`: a name, held as a token by a profile: `<p>`,
+//!   `<p>@<price>` or `<p>><profile>`. The holding profile's owner may move
+//!   it to another profile, price it, offer it to one profile, take it back or
+//!   release it; anyone may take a priced name by paying that owner the price
+//!   in the same transaction, and the owner of the profile it is offered to
+//!   may take it for nothing. A handle is lowercase letters, digits and `_`.
 //! - `owns/<account>/<p>` and `holds/<p>/<handle>`: `1` while the account owns
 //!   the profile, or the profile holds the name, so either lists by prefix. A
 //!   transaction that moves the token moves its key; these keys change in no
@@ -35,6 +37,17 @@
 #![cfg_attr(not(test), no_std)]
 
 use lattice_policy_rules::{decimal, is_address, transaction_body, Action, Body};
+
+/// What a token's holder asks of anyone else who would take it.
+#[derive(Clone, Copy, PartialEq)]
+enum Terms<'a> {
+    /// Not for anyone else.
+    Kept,
+    /// For anyone, at this price, paid to the owner.
+    Price(u64),
+    /// For this one taker, for nothing.
+    Offer(&'a [u8]),
+}
 
 lattice_policy_rules::lattice_policy_abi!(crate::validate);
 
@@ -109,14 +122,20 @@ fn is_handle(text: &[u8]) -> bool {
     !text.is_empty() && text.iter().all(|&byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
-/// A token value, `<holder>` or `<holder>@<price>`, whose holder passes `valid`.
-fn token(value: &[u8], valid: fn(&[u8]) -> bool) -> Option<(&[u8], Option<u64>)> {
-    let mut parts = value.splitn(2, |&byte| byte == b'@');
-    let holder = parts.next().filter(|holder| valid(holder))?;
-    match parts.next() {
-        None => Some((holder, None)),
-        Some(price) => Some((holder, Some(decimal(price)?))),
+/// A token value, `<holder>`, `<holder>@<price>` or `<holder>><taker>`, whose
+/// holder and taker pass `valid`.
+fn token(value: &[u8], valid: fn(&[u8]) -> bool) -> Option<(&[u8], Terms<'_>)> {
+    let Some(at) = value.iter().position(|&byte| byte == b'@' || byte == b'>') else {
+        return valid(value).then_some((value, Terms::Kept));
+    };
+    let (holder, rest) = (&value[..at], &value[at + 1..]);
+    if !valid(holder) {
+        return None;
     }
+    if value[at] == b'@' {
+        return Some((holder, Terms::Price(decimal(rest)?)));
+    }
+    (valid(rest) && rest != holder).then_some((holder, Terms::Offer(rest)))
 }
 
 /// The holder before and after a token write; an absent value has none.
@@ -254,24 +273,32 @@ fn check_index(body: &Body, action: &Action, token_prefix: &[u8], id: &[u8], hol
 
 /// Whom `action` pays and how much, when it changes a token its signers do
 /// not control: a profile's owner, or the owner of a name's profile. Such a
-/// change is a purchase, so the token must have a price.
+/// change is a purchase at the token's price, or the taking of an offer by
+/// the one it is offered to, for nothing; anything else is a rejection.
 fn purchase<'a>(body: &Body<'a>, action: &Action<'a>) -> Option<Option<(&'a [u8], u64)>> {
     let Some(old_value) = action.old_value.filter(|old| action.new_value != Some(*old)) else {
         return Some(None);
     };
-    let (seller, price) = match Key::parse(action.key)? {
-        Key::Profile(_) => token(old_value, is_address)?,
+    let (seller, terms, taker) = match Key::parse(action.key)? {
+        Key::Profile(_) => {
+            let (owner, terms) = token(old_value, is_address)?;
+            (owner, terms, token(action.new_value?, is_address)?.0)
+        }
         Key::Name(_) => {
-            let (p, price) = token(old_value, is_profile)?;
+            let (p, terms) = token(old_value, is_profile)?;
             if acts_for(body, p).is_some() {
                 return Some(None);
             }
-            (owner(body, p)?, price)
+            (owner(body, p)?, terms, token(action.new_value?, is_profile)?.0)
         }
         _ => return Some(None),
     };
     if body.is_signer(seller).is_some() {
         return Some(None);
     }
-    Some(Some((seller, price?)))
+    match terms {
+        Terms::Price(price) => Some(Some((seller, price))),
+        Terms::Offer(to) if to == taker => Some(None),
+        _ => None,
+    }
 }
