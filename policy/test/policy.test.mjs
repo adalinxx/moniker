@@ -278,3 +278,31 @@ test("owns/ and holds/ keys change only with their token, and only the right way
   assert.ok(!signedBy([ALICE], [{ key: profile(P), newValue: ALICE }, { key: owns(ALICE, P), newValue: "yes" }]));
   assert.ok(!signedBy([ALICE], [{ key: profile(P), newValue: ALICE }, { key: owns(ALICE, P), oldValue: "1", newValue: "1" }]));
 });
+
+// ---------------------------------------------------------------- offers
+
+test("a name offered to one profile is taken by that profile's owner, for nothing", () => {
+  const offered = `${P}>${Q}`;
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: name("gift"), oldValue: P, newValue: offered }]));
+  assert.ok(signedBy([BOB], [proof(P, ALICE), proof(Q, BOB), ...move("gift", P, offered, Q)]));
+  // Not by anyone else, not onto another profile, and the offer can be taken back.
+  assert.ok(!signedBy([CAROL], [proof(P, ALICE), proof("cccccccccccccccc", CAROL), ...move("gift", P, offered, "cccccccccccccccc")]));
+  assert.ok(!signedBy([BOB], [proof(P, ALICE), proof("bbbbbbbbbbbbbbbb", BOB), ...move("gift", P, offered, "bbbbbbbbbbbbbbbb")]));
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: name("gift"), oldValue: offered, newValue: P }]));
+  assert.ok(!signedBy([BOB], [proof(P, ALICE), proof(Q, BOB), { key: name("gift"), oldValue: offered, newValue: P }]));
+});
+
+test("a profile offered to one account is taken by that account, for nothing", () => {
+  const take = (old, to) => [{ key: profile(P), oldValue: old, newValue: to }, { key: owns(ALICE, P), oldValue: "1" }, { key: owns(to, P), newValue: "1" }];
+  assert.ok(signedBy([BOB], take(`${ALICE}>${BOB}`, BOB)));
+  assert.ok(!signedBy([CAROL], take(`${ALICE}>${BOB}`, CAROL)));
+});
+
+test("an offer is to someone else, and well formed", () => {
+  for (const value of [`${P}>${P}`, `${P}>`, `${P}>junk`, `${P}>${ALICE}`, `${P}@5>${Q}`]) {
+    assert.ok(!signedBy([ALICE], [proof(P, ALICE), { key: name("gift"), oldValue: P, newValue: value }]), value);
+  }
+  for (const value of [`${ALICE}>${ALICE}`, `${ALICE}>${P}`, `${ALICE}>`]) {
+    assert.ok(!signedBy([ALICE], [{ key: profile(P), oldValue: ALICE, newValue: value }]), value);
+  }
+});
