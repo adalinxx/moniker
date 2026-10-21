@@ -11,8 +11,10 @@
 //!   anyone may take a priced profile by paying the owner the price in the
 //!   same transaction, as the account it is offered to may take it for
 //!   nothing. A profile is never deleted.
-//! - `profile/<p>/<field>...`: the profile's records (its card, the name it
-//!   shows, its admins, any app's fields). Only its owner writes them.
+//! - `about/<p>/<field>...`: the profile's records (its card, the name it
+//!   shows, its admins, any app's fields). Only its owner writes them. They
+//!   sit apart from `profile/<p>`, which a transaction acting for `<p>`
+//!   rewrites, so that one never writes a key and adds a key under it.
 //! - `name/<handle>`: a name, held as a token by a profile: `<p>`,
 //!   `<p>@<price>` or `<p>><profile>`. The holding profile's owner may move
 //!   it to another profile, price it, offer it to one profile, take it back or
@@ -87,11 +89,11 @@ impl<'a> Key<'a> {
         let (kind, rest) = split(key)?;
         match kind {
             b"user" => Some(Key::Own(split(rest).map_or(rest, |(account, _)| account))),
-            b"profile" => match split(rest) {
-                Some((p, field)) if is_profile(p) && !field.is_empty() => Some(Key::ProfileField(p, field)),
-                Some(_) => None,
-                None => is_profile(rest).then_some(Key::Profile(rest)),
-            },
+            b"profile" => is_profile(rest).then_some(Key::Profile(rest)),
+            b"about" => {
+                let (p, field) = split(rest)?;
+                (is_profile(p) && !field.is_empty()).then_some(Key::ProfileField(p, field))
+            }
             b"name" => is_handle(rest).then_some(Key::Name(rest)),
             b"owns" => {
                 let (account, p) = split(rest)?;
