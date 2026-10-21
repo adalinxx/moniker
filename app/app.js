@@ -15,9 +15,9 @@ import { defineFollowButton } from "../follows/src/element.mjs";
 
 const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/moniker-8eb926",
+  chain: "Nexus/testnet/moniker-273339",
   // Follows, the follow graph every app shares: who follows a name or an account.
-  follows: "Nexus/testnet/follows-6ed91a",
+  follows: "Nexus/testnet/follows-f53551",
   // Your own node, for keeping photos: its URL and the cookie it writes at start.
   ownNode: "",
   ownCookie: "",
@@ -25,8 +25,9 @@ const DEFAULTS = {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
-    // Settings saved before the trial moved name the old one; follow the move.
-    if (saved.chain === "Nexus/testnet/moniker-da6f57") delete saved.chain;
+    // Settings saved before the trials moved name old ones; follow the move.
+    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926"].includes(saved.chain)) delete saved.chain;
+    if (saved.follows === "Nexus/testnet/follows-6ed91a") delete saved.follows;
     return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
