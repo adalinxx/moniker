@@ -94,7 +94,7 @@ test("nobody writes or deletes another account's records", () => {
 });
 
 test("keys outside the shapes are rejected", () => {
-  for (const key of ["user", "user/", ALICE, `index/topic/${ALICE}`, `users/${ALICE}`, `/user/${ALICE}`, "name", "name/", "profile", "profile/", `profile/${P.slice(1)}`, `profile/${P}x`, `profile/${P.toUpperCase()}`, `profile/${P}/`, `holds/${ALICE}/alice`, `owns/${P}/${ALICE}`, `card/${P}`]) {
+  for (const key of ["user", "user/", ALICE, `index/topic/${ALICE}`, `users/${ALICE}`, `/user/${ALICE}`, "name", "name/", "profile", "profile/", `profile/${P.slice(1)}`, `profile/${P}x`, `profile/${P.toUpperCase()}`, `profile/${P}/`, `profile/${P}/card`, `about/${P}`, `about/${P}/`, `about/x/card`, `holds/${ALICE}/alice`, `owns/${P}/${ALICE}`, `card/${P}`]) {
     assert.ok(!signedBy([ALICE], [{ key, newValue: "1" }]), key);
   }
 });
@@ -159,7 +159,7 @@ test("anyone may write a profile or a name unchanged: it only shows what it hold
 });
 
 test("a profile's fields are written only by its owner, who shows it owns the profile", () => {
-  const card = { key: `${profile(P)}/card`, newValue: '{"name":"Alice"}' };
+  const card = { key: `about/${P}/card`, newValue: '{"name":"Alice"}' };
   assert.ok(signedBy([ALICE], [proof(P, ALICE), card]));
   assert.ok(signedBy([ALICE], [proof(P, `${ALICE}@9`), card]));
   // No proof, someone else's proof, or someone else signing: refused.
@@ -167,19 +167,19 @@ test("a profile's fields are written only by its owner, who shows it owns the pr
   assert.ok(!signedBy([BOB], [proof(P, ALICE), card]));
   assert.ok(!signedBy([ALICE], [proof(Q, ALICE), card]));
   // Created and filled in one transaction; admins and app fields alike.
-  assert.ok(signedBy([ALICE], [...create(ALICE, P), card, { key: `${profile(P)}/admin/${BOB}`, newValue: "1" }, { key: `${profile(P)}/app.rave.x`, newValue: "y" }]));
-  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: `${profile(P)}/admin/${BOB}`, oldValue: "1" }]));
+  assert.ok(signedBy([ALICE], [...create(ALICE, P), card, { key: `about/${P}/admin/${BOB}`, newValue: "1" }, { key: `about/${P}/app.rave.x`, newValue: "y" }]));
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: `about/${P}/admin/${BOB}`, oldValue: "1" }]));
   // Bought and filled in one transaction, by the buyer.
   assert.ok(signedBy([BOB], [{ key: profile(P), oldValue: `${ALICE}@5`, newValue: BOB }, { key: owns(ALICE, P), oldValue: "1" }, { key: owns(BOB, P), newValue: "1" }, card], pay(BOB, ALICE, 5n)));
 });
 
 test("the name a profile shows is one it holds", () => {
-  const shows = (handle) => ({ key: `${profile(P)}/name`, newValue: handle });
+  const shows = (handle) => ({ key: `about/${P}/name`, newValue: handle });
   assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: name("alice"), oldValue: P, newValue: P }, shows("alice")]));
   assert.ok(signedBy([ALICE], [proof(P, ALICE), ...claim("alice", P), shows("alice")]));
   assert.ok(!signedBy([ALICE], [proof(P, ALICE), shows("alice")]));
   assert.ok(!signedBy([ALICE], [proof(P, ALICE), { key: name("bob"), oldValue: Q, newValue: Q }, shows("bob")]));
-  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: `${profile(P)}/name`, oldValue: "alice" }]));
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: `about/${P}/name`, oldValue: "alice" }]));
 });
 
 // ---------------------------------------------------------------- names

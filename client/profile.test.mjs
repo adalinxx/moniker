@@ -43,191 +43,204 @@ function chain(balances) {
   return { state, submit, map, coins };
 }
 
-test("a card is written, edited field by field, and read back", async () => {
-  const { state, submit } = chain({ [ALICE]: 100 });
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice", description: "Builds things", avatar: "bafyreiavatar" })));
-  assert.deepEqual(await profile.getProfile(state, ALICE), {
-    address: ALICE,
-    name: "Alice",
-    description: "Builds things",
-    avatar: "bafyreiavatar",
-  });
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { description: undefined, url: "https://alice.example" })));
-  assert.deepEqual(await profile.getProfile(state, ALICE), {
-    address: ALICE,
-    name: "Alice",
-    avatar: "bafyreiavatar",
-    url: "https://alice.example",
-  });
-  // Nothing to write when nothing changes; an emptied card is deleted.
-  assert.deepEqual((await profile.editCard(state, ALICE, { name: "Alice" })).actions, []);
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "", avatar: null, url: undefined })));
-  assert.equal(await state.get(profile.cardKey(ALICE)), undefined);
-  assert.deepEqual(await profile.getProfile(state, ALICE), { address: ALICE });
+/** `who` creates a profile with `card` and `handle`; resolves to its id. */
+async function made(c, who, card, handle) {
+  const { id, write: w } = await profile.createProfile(c.state, who, { card, handle });
+  assert.ok(c.submit(who, w), `profile for ${handle ?? "no name"}`);
+  return id;
+}
+
+test("an account makes a profile with a card and a name in one write", async () => {
+  const c = chain({ [ALICE]: 100 });
+  const p = await made(c, ALICE, { name: "Alice", description: "Builds things", avatar: "bafyreiavatar" }, "alice");
+  assert.ok(profile.isProfileId(p));
+  assert.deepEqual(await profile.getProfile(c.state, p), { id: p, owner: ALICE, name: "Alice", description: "Builds things", avatar: "bafyreiavatar", handle: "alice" });
+  assert.equal((await profile.profileOf(c.state, "alice")).id, p);
+  assert.deepEqual((await profile.profilesOf(c.state, ALICE)).map((x) => x.id), [p]);
+  assert.deepEqual((await profile.namesOf(c.state, p)).map((e) => e.handle), ["alice"]);
+  assert.equal(await profile.getProfile(c.state, "aaaaaaaaaaaaaaaa"), undefined);
+  await assert.rejects(profile.createProfile(c.state, ALICE, { handle: "alice" }), /taken/);
 });
 
-test("a rewrite keeps card fields this client does not know", async () => {
-  const { state, submit, map } = chain({ [ALICE]: 100 });
-  map.set(profile.cardKey(ALICE), JSON.stringify({ name: "Alice", pronouns: "she/her", theme: { dark: true } }));
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice B." })));
-  assert.deepEqual(JSON.parse(map.get(profile.cardKey(ALICE))), { name: "Alice B.", pronouns: "she/her", theme: { dark: true } });
+test("a card is edited field by field by the profile's owner alone", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  const p = await made(c, ALICE, { name: "Alice" }, "alice");
+  assert.ok(c.submit(ALICE, await profile.editCard(c.state, ALICE, p, { description: "Builds things", url: "https://alice.example" })));
+  assert.deepEqual(await profile.getProfile(c.state, p), { id: p, owner: ALICE, name: "Alice", description: "Builds things", url: "https://alice.example", handle: "alice" });
+  assert.deepEqual((await profile.editCard(c.state, ALICE, p, { name: "Alice" })).actions, []);
+  await assert.rejects(profile.editCard(c.state, BOB, p, { name: "Not Alice" }), /isn't yours/);
+  // Written by hand, Bob's card is refused by the policy, with or without the proof.
+  const forged = { key: profile.cardKey(p), oldValue: c.map.get(profile.cardKey(p)), newValue: '{"name":"Not Alice"}' };
+  assert.ok(!c.submit(BOB, { actions: [forged] }));
+  assert.ok(!c.submit(BOB, { actions: [{ key: profile.profileKey(p), oldValue: ALICE, newValue: ALICE }, forged] }));
+  assert.ok(c.submit(ALICE, await profile.editCard(c.state, ALICE, p, { name: "", description: null, url: undefined })));
+  assert.equal(c.map.get(profile.cardKey(p)), undefined);
 });
 
-test("an unreadable card shows nothing and is replaced on the next save", async () => {
-  const { state, submit, map } = chain({ [ALICE]: 100 });
-  map.set(profile.cardKey(ALICE), "not json");
-  assert.deepEqual(await profile.getProfile(state, ALICE), { address: ALICE });
-  map.set(profile.cardKey(ALICE), JSON.stringify({ name: 7, description: ["x"], url: "https://ok" }));
-  assert.deepEqual(await profile.getProfile(state, ALICE), { address: ALICE, url: "https://ok" });
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice" })));
-  assert.equal(JSON.parse(map.get(profile.cardKey(ALICE))).name, "Alice");
-});
-
-test("nobody edits another account's card or fields", async () => {
-  const { state, submit } = chain({ [ALICE]: 100, [BOB]: 100 });
-  assert.ok(!submit(BOB, await profile.editCard(state, ALICE, { name: "Not Alice" })));
-  assert.ok(!submit(BOB, await profile.setField(state, ALICE, "app.demo.color", "red")));
+test("a rewrite keeps card fields this client does not know; an unreadable card shows nothing", async () => {
+  const c = chain({ [ALICE]: 100 });
+  const p = await made(c, ALICE, undefined, "alice");
+  c.map.set(profile.cardKey(p), JSON.stringify({ name: "Alice", pronouns: "she/her", theme: { dark: true } }));
+  assert.ok(c.submit(ALICE, await profile.editCard(c.state, ALICE, p, { name: "Alice B." })));
+  assert.deepEqual(JSON.parse(c.map.get(profile.cardKey(p))), { name: "Alice B.", pronouns: "she/her", theme: { dark: true } });
+  c.map.set(profile.cardKey(p), "not json");
+  assert.deepEqual(await profile.getProfile(c.state, p), { id: p, owner: ALICE, handle: "alice" });
+  c.map.set(profile.cardKey(p), JSON.stringify({ name: 7, url: "https://ok", links: [{ label: "bad", url: "javascript:x" }, { label: "ok", url: "https://ok.example" }, "junk"] }));
+  assert.deepEqual(await profile.getProfile(c.state, p), { id: p, owner: ALICE, url: "https://ok", links: [{ label: "ok", url: "https://ok.example" }], handle: "alice" });
+  await assert.rejects(profile.editCard(c.state, ALICE, p, { links: [{ label: "x", url: "javascript:alert(1)" }] }), /not an http/);
+  await assert.rejects(profile.editCard(c.state, ALICE, p, { links: [{ label: "", url: "https://a.example" }] }), /label/);
 });
 
 test("a stale edit is refused, and saveCard retries it on the new card", async () => {
-  const { state, submit } = chain({ [ALICE]: 100 });
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice" })));
-  const stale = await profile.editCard(state, ALICE, { description: "from app one" });
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { url: "https://from-app-two" })));
-  assert.ok(!submit(ALICE, stale));
-
-  // The first send is beaten by another app's save; the retry keeps both.
-  let raced = false;
-  const send = async (write) => {
-    if (!raced) {
-      raced = true;
-      assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { handle: "alice" })));
+  const c = chain({ [ALICE]: 100 });
+  const p = await made(c, ALICE, { name: "Alice" }, "alice");
+  const stale = await profile.editCard(c.state, ALICE, p, { description: "from app one" });
+  assert.ok(c.submit(ALICE, await profile.editCard(c.state, ALICE, p, { url: "https://from-app-two" })));
+  assert.ok(!c.submit(ALICE, stale));
+  let first = true;
+  const send = async (w) => {
+    if (first) {
+      first = false;
+      assert.ok(c.submit(ALICE, await profile.editCard(c.state, ALICE, p, { name: "Alice R." })));
     }
-    if (!submit(ALICE, write)) throw new Error("refused");
+    if (!c.submit(ALICE, w)) throw new Error("stale");
     return "sent";
   };
-  assert.equal(await profile.saveCard(async () => state, ALICE, { description: "from app one" }, send), "sent");
-  const card = JSON.parse(await state.get(profile.cardKey(ALICE)));
-  assert.equal(card.description, "from app one");
-  assert.equal(card.handle, "alice");
-  assert.equal(card.url, "https://from-app-two");
-
-  // A failure that is not a conflict is not retried.
-  let calls = 0;
-  const failing = async () => {
-    calls++;
-    throw new Error("declined in the wallet");
-  };
-  await assert.rejects(profile.saveCard(async () => state, ALICE, { name: "Again" }, failing), /declined/);
-  assert.equal(calls, 1);
+  assert.equal(await profile.saveCard(async () => c.state, ALICE, p, { description: "from app one" }, send), "sent");
+  assert.deepEqual(JSON.parse(c.map.get(profile.cardKey(p))), { name: "Alice R.", url: "https://from-app-two", description: "from app one" });
+  await assert.rejects(profile.saveCard(async () => c.state, ALICE, p, { name: "Again" }, async () => { throw new Error("declined"); }), /declined/);
 });
 
-test("links are kept in order, and only web addresses are shown", async () => {
-  const { state, submit, map } = chain({ [ALICE]: 100 });
-  const links = [
-    { label: "Website", url: "https://alice.example" },
-    { label: "GitHub", url: "https://github.com/alice" },
-  ];
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice", links })));
-  assert.deepEqual((await profile.getProfile(state, ALICE)).links, links);
-  // Reordered and trimmed in one save; an empty list removes the field.
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { links: [links[1]] })));
-  assert.deepEqual((await profile.getProfile(state, ALICE)).links, [links[1]]);
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { links: [] })));
-  assert.equal("links" in JSON.parse(map.get(profile.cardKey(ALICE))), false);
-  // The client refuses to write a link that is not a web address.
-  await assert.rejects(profile.editCard(state, ALICE, { links: [{ label: "x", url: "javascript:alert(1)" }] }), /not an http/);
-  await assert.rejects(profile.editCard(state, ALICE, { links: [{ label: "", url: "https://a.example" }] }), /label/);
-  // A card written by another client is read the same careful way.
-  map.set(
-    profile.cardKey(ALICE),
-    JSON.stringify({
-      url: "javascript:alert(1)",
-      links: [{ label: "ok", url: "https://ok.example", extra: 1 }, { label: "bad", url: "data:text/html,x" }, { url: "https://no-label.example" }, "nonsense"],
-    }),
-  );
-  assert.deepEqual(await profile.getProfile(state, ALICE), { address: ALICE, links: [{ label: "ok", url: "https://ok.example" }] });
+test("an account's own fields are set, listed and removed, by it alone", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  assert.ok(c.submit(ALICE, await profile.setField(c.state, ALICE, "app.demo.color", "teal")));
+  assert.ok(c.submit(ALICE, await profile.setField(c.state, ALICE, "key.x25519", "abcd")));
+  assert.deepEqual(await profile.getFields(c.state, ALICE), { "app.demo.color": "teal", "key.x25519": "abcd" });
+  assert.ok(c.submit(ALICE, await profile.setField(c.state, ALICE, "app.demo.color", undefined)));
+  assert.equal(await profile.getField(c.state, ALICE, "app.demo.color"), undefined);
+  assert.ok(!c.submit(BOB, await profile.setField(c.state, ALICE, "app.demo.color", "red")));
 });
 
-test("fields outside the card are set, listed and removed", async () => {
-  const { state, submit } = chain({ [ALICE]: 100 });
-  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "app.demo.color", "teal")));
-  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "key.x25519", "abcd")));
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice" })));
-  assert.deepEqual(await profile.getFields(state, ALICE), { "app.demo.color": "teal", "key.x25519": "abcd" });
-  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "app.demo.color", undefined)));
-  assert.equal(await profile.getField(state, ALICE, "app.demo.color"), undefined);
-  await assert.rejects(profile.setField(state, ALICE, "profile", "x"), /not a field name/);
+test("a profile holds several names, shows one, and names move between one's profiles", async () => {
+  const c = chain({ [ALICE]: 100 });
+  const bakery = await made(c, ALICE, { name: "Tess Bakes" }, "tessbakes");
+  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, bakery, "tess_cafe")));
+  // The first name stays the one shown.
+  assert.equal((await profile.getProfile(c.state, bakery)).handle, "tessbakes");
+  assert.ok(c.submit(ALICE, await profile.showName(c.state, ALICE, bakery, "tess_cafe")));
+  assert.equal((await profile.getProfile(c.state, bakery)).handle, "tess_cafe");
+  await assert.rejects(profile.showName(c.state, ALICE, bakery, "nobody"), /isn't on this profile/);
+  // @tess_cafe to its own profile: it leaves showing it, the new one shows it.
+  const cafe = await made(c, ALICE, { name: "Tess Café" });
+  assert.ok(c.submit(ALICE, await profile.moveName(c.state, ALICE, "tess_cafe", cafe)));
+  assert.equal((await profile.getProfile(c.state, cafe)).handle, "tess_cafe");
+  assert.equal((await profile.getProfile(c.state, bakery)).handle, undefined);
+  assert.deepEqual((await profile.namesOf(c.state, bakery)).map((e) => e.handle), ["tessbakes"]);
+  assert.deepEqual((await profile.profilesOf(c.state, ALICE)).map((x) => x.id).sort(), [bakery, cafe].sort());
 });
 
-test("a handle is claimed once, shown only by its holder, and moves with a sale", async () => {
-  const { state, submit, coins } = chain({ [ALICE]: 100, [BOB]: 1000 });
-  assert.ok(submit(ALICE, await profile.claim(state, ALICE, "alice")));
-  await assert.rejects(profile.claim(state, BOB, "alice"), /taken/);
-  await assert.rejects(profile.claim(state, BOB, "Alice"), /lowercase/);
-  // Claimed but not on the card: resolves, not shown.
-  assert.equal((await profile.resolve(state, "alice")).holder, ALICE);
-  assert.equal((await profile.getProfile(state, ALICE)).handle, undefined);
-  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { handle: "alice" })));
-  assert.equal((await profile.getProfile(state, ALICE)).handle, "alice");
-  // Bob names it on his card without holding it: not shown.
-  assert.ok(submit(BOB, await profile.editCard(state, BOB, { handle: "alice" })));
-  assert.equal((await profile.getProfile(state, BOB)).handle, undefined);
-
-  assert.ok(submit(ALICE, profile.list(await profile.resolve(state, "alice"), 500n)));
-  assert.deepEqual(
-    (await profile.forSale(state)).map(({ handle, price }) => [handle, price]),
-    [["alice", 500n]],
-  );
-  const listed = await profile.resolve(state, "alice");
-  assert.ok(submit(BOB, profile.buy(listed, BOB)));
-  assert.equal(coins.get(ALICE), 100n - 1n - 1n - 1n + 500n);
-  assert.equal(coins.get(BOB), 1000n - 1n - 500n - 1n);
-  // Now Bob's card shows it, and Alice's no longer does.
-  assert.equal((await profile.getProfile(state, BOB)).handle, "alice");
-  assert.equal((await profile.getProfile(state, ALICE)).handle, undefined);
-  assert.deepEqual((await profile.heldBy(state, BOB)).map((e) => e.handle), ["alice"]);
+test("a sold name moves alone: the buyer's profile gets it, the seller keeps their card", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const mira = await made(c, ALICE, { name: "Mira" }, "mira");
+  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, mira, "mira_music")));
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mira", 500n)));
+  assert.deepEqual((await profile.forSale(c.state)).map(({ handle, price }) => [handle, price]), [["mira", 500n]]);
+  // Bob has no profile: one write makes it and buys the name onto it.
+  const { id: bobs, write: make } = await profile.createProfile(c.state, BOB, { card: { name: "Bob" } });
+  assert.ok(c.submit(BOB, profile.combine(make, await profile.buy(c.state, BOB, "mira", bobs, { created: true }))));
+  assert.equal(c.coins.get(BOB), 1000n - 500n - 1n);
+  assert.equal((await profile.profileOf(c.state, "mira")).name, "Bob");
+  assert.equal((await profile.getProfile(c.state, bobs)).handle, "mira");
+  // Alice's profile, card and other name stay hers; it no longer shows @mira.
+  const after = await profile.getProfile(c.state, mira);
+  assert.equal(after.name, "Mira");
+  assert.equal(after.handle, undefined);
+  assert.deepEqual((await profile.namesOf(c.state, mira)).map((e) => e.handle), ["mira_music"]);
 });
 
-test("a buyer whose price went stale is refused and pays nothing", async () => {
-  const { state, submit, coins } = chain({ [ALICE]: 100, [BOB]: 1000 });
-  assert.ok(submit(ALICE, await profile.claim(state, ALICE, "rare", 300n)));
-  const seen = await profile.resolve(state, "rare");
-  assert.ok(submit(ALICE, profile.list(seen, 900n)));
-  const before = coins.get(BOB);
-  assert.ok(!submit(BOB, profile.buy(seen, BOB)));
-  assert.equal(coins.get(BOB), before);
-  assert.equal((await profile.resolve(state, "rare")).holder, ALICE);
+test("a buyer whose price went stale, or a name not for sale, is refused and pays nothing", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const a = await made(c, ALICE, undefined, "rare");
+  const b = await made(c, BOB);
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "rare", 300n)));
+  const seen = await profile.buy(c.state, BOB, "rare", b);
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "rare", 900n)));
+  const before = c.coins.get(BOB);
+  assert.ok(!c.submit(BOB, seen));
+  assert.equal(c.coins.get(BOB), before);
+  assert.ok(c.submit(ALICE, await profile.unlist(c.state, ALICE, "rare")));
+  await assert.rejects(profile.buy(c.state, BOB, "rare", b), /not for sale/);
+  assert.equal((await profile.resolve(c.state, "rare")).profile, a);
 });
 
-test("the holder unlists, transfers and releases; a released handle is free again", async () => {
-  const { state, submit } = chain({ [ALICE]: 100, [BOB]: 100, [CAROL]: 100 });
-  assert.ok(submit(ALICE, await profile.claim(state, ALICE, "gift", 50n)));
-  assert.ok(submit(ALICE, profile.unlist(await profile.resolve(state, "gift"))));
-  assert.throws(() => profile.buy({ handle: "gift", holder: ALICE }, BOB), /not for sale/);
-  assert.ok(submit(ALICE, profile.transfer(await profile.resolve(state, "gift"), BOB)));
-  assert.equal((await profile.resolve(state, "gift")).holder, BOB);
-  // The giver can no longer change it.
-  assert.ok(!submit(ALICE, profile.release(await profile.resolve(state, "gift"))));
-  assert.ok(submit(BOB, profile.release(await profile.resolve(state, "gift"))));
-  assert.equal(await profile.resolve(state, "gift"), undefined);
-  assert.ok(submit(CAROL, await profile.claim(state, CAROL, "gift")));
-  const gift = await profile.resolve(state, "gift");
-  assert.throws(() => profile.transfer(gift, "not-an-address"), /not an address/);
+test("a name offered to a profile is taken by its owner for nothing, and by no one else", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100, [CAROL]: 100 });
+  await made(c, ALICE, undefined, "gift");
+  const b = await made(c, BOB);
+  const carols = await made(c, CAROL);
+  assert.ok(c.submit(ALICE, await profile.offerName(c.state, ALICE, "gift", b)));
+  await assert.rejects(profile.buy(c.state, CAROL, "gift", carols), /not for sale/);
+  assert.ok(c.submit(BOB, await profile.moveName(c.state, BOB, "gift", b)));
+  assert.equal((await profile.resolve(c.state, "gift")).profile, b);
+  assert.equal(c.coins.get(ALICE), 100n - 2n);
 });
 
-test("a buy and a card change go in one transaction", async () => {
-  const { state, submit } = chain({ [ALICE]: 100, [BOB]: 1000 });
-  assert.ok(submit(ALICE, await profile.claim(state, ALICE, "both", 10n)));
-  const both = profile.combine(profile.buy(await profile.resolve(state, "both"), BOB), await profile.editCard(state, BOB, { handle: "both" }));
-  assert.ok(submit(BOB, both));
-  assert.equal((await profile.getProfile(state, BOB)).handle, "both");
+test("a released name is free again, and its profile stops showing it", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  const p = await made(c, ALICE, undefined, "gone");
+  await assert.rejects(profile.release(c.state, BOB, "gone"), /isn't yours/);
+  assert.ok(c.submit(ALICE, await profile.release(c.state, ALICE, "gone")));
+  assert.equal(await profile.resolve(c.state, "gone"), undefined);
+  assert.equal((await profile.getProfile(c.state, p)).handle, undefined);
+  assert.deepEqual(await profile.namesOf(c.state, p), []);
+  await made(c, BOB, undefined, "gone");
+});
+
+test("a sold profile moves whole: card, names and all", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const p = await made(c, ALICE, { name: "Tess Bakes" }, "tessbakes");
+  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, p, "tess_cafe")));
+  assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { price: 700n })));
+  assert.ok(c.submit(BOB, await profile.takeProfile(c.state, BOB, p)));
+  assert.equal(c.coins.get(ALICE), 100n - 3n + 700n);
+  const now = await profile.getProfile(c.state, p);
+  assert.deepEqual([now.owner, now.name, now.handle], [BOB, "Tess Bakes", "tessbakes"]);
+  assert.deepEqual((await profile.namesOf(c.state, p)).map((e) => e.handle), ["tess_cafe", "tessbakes"]);
+  assert.deepEqual(await profile.profilesOf(c.state, ALICE), []);
+  assert.deepEqual((await profile.profilesOf(c.state, BOB)).map((x) => x.id), [p]);
+  // The new owner edits it; the old one no longer can.
+  assert.ok(c.submit(BOB, await profile.editCard(c.state, BOB, p, { description: "Under new ownership" })));
+  await assert.rejects(profile.editCard(c.state, ALICE, p, { name: "Mine" }), /isn't yours/);
+});
+
+test("a profile offered to an account is taken by it for nothing; that is how a lost key moves on", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100, [CAROL]: 100 });
+  const p = await made(c, ALICE, { name: "Alice" }, "alice");
+  assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { offer: BOB })));
+  await assert.rejects(profile.takeProfile(c.state, CAROL, p), /not for sale/);
+  assert.ok(c.submit(BOB, await profile.takeProfile(c.state, BOB, p)));
+  assert.equal((await profile.profileOf(c.state, "alice")).owner, BOB);
+});
+
+test("admins are set and cleared by the owner; they act for the profile, not on its records", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  const p = await made(c, ALICE, { name: "Band" }, "band");
+  assert.ok(c.submit(ALICE, await profile.setAdmin(c.state, ALICE, p, BOB)));
+  assert.deepEqual(await profile.adminsOf(c.state, p), [BOB]);
+  assert.ok(await profile.actsFor(c.state, BOB, p));
+  assert.ok(await profile.actsFor(c.state, ALICE, p));
+  // On Moniker only the owner writes the profile's records.
+  await assert.rejects(profile.editCard(c.state, BOB, p, { name: "Mine" }), /isn't yours/);
+  assert.ok(c.submit(ALICE, await profile.setAdmin(c.state, ALICE, p, BOB, false)));
+  assert.ok(!(await profile.actsFor(c.state, BOB, p)));
 });
 
 test("the wallet request carries the buy's payment", async () => {
-  const { state, submit } = chain({ [ALICE]: 100 });
-  assert.ok(submit(ALICE, await profile.claim(state, ALICE, "w", 25n)));
-  const request = wallet.writeRequest(PATH, profile.buy(await profile.resolve(state, "w"), BOB), 2n);
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  await made(c, ALICE, undefined, "w");
+  const b = await made(c, BOB);
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "w", 25n)));
+  const request = wallet.writeRequest(PATH, await profile.buy(c.state, BOB, "w", b), 2n);
   assert.deepEqual(request.chainPath, ["Nexus", "moniker"]);
   assert.deepEqual(request.payments, [{ to: ALICE, amount: "25" }]);
   assert.equal(request.fee, "2");
@@ -239,6 +252,8 @@ test("the client's address and handle checks match the policy's", () => {
     assert.ok(!profile.isAddress(bad), bad);
   }
   assert.ok(profile.isHandle("a_1"));
+  assert.ok(profile.isProfileId(profile.newProfileId()));
+  for (const bad of ["", "abcdefghijklmno", "abcdefghijklmnop1", "ABCDEFGHIJKLMNOP", "abcdefghijklmno1"]) assert.ok(!profile.isProfileId(bad), bad);
   for (const bad of ["", "A", "a-b", "a.b", "é"]) assert.ok(!profile.isHandle(bad), bad);
 });
 
