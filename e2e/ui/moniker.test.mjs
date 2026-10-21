@@ -857,3 +857,34 @@ test("your own page shows your counts but no Follow button", async ({ page }) =>
   // Your own name's page calls its owner "Your account".
   await expect(page.getByRole("link", { name: "Your account" })).toHaveAttribute("href", `#/${uma.address}`);
 });
+
+test("if Follows can't be reached, a page still shows, without counts", async ({ page }) => {
+  await page.route((url) => url.searchParams.get("chainPath") === stack.follows, (route) => route.abort());
+  await openApp(page, null, "#/@tessbakes");
+  await expect(page.locator("h1")).toHaveText("Tess Bakes");
+  await expect(page.locator("p.handle")).toHaveText("@tessbakes");
+  await expect(counts(page)).toHaveCount(0);
+}, { wallet: false, expectedErrors: /Failed to load resource|net::ERR_FAILED/ });
+
+test("a long list shows 50, then all of them on request", async ({ page }) => {
+  const fans = Array.from({ length: 55 }, newAccount);
+  for (const fan of fans) {
+    const actions = (await follows.follow(await followsState(), fan.address, "tess_cafe")).actions;
+    // The node takes so many submissions a second: wait and send again.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await submit(fan, transaction({ owner: fan.address, actions, fee: 0n, nonce: 0n, chainPath: FOLLOWS }));
+        break;
+      } catch (error) {
+        if (!/429/.test(error.message) || attempt > 20) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+  await until("55 follows of @tess_cafe", async () => (await follows.followers(await followsState(), "tess_cafe")).length >= 55, 300);
+  await openApp(page, null, "#/@tess_cafe/followers");
+  await expect(page.locator(".row.person")).toHaveCount(50);
+  await page.getByRole("button", { name: /^Show all \d+$/ }).click();
+  await expect(page.locator(".row.person")).toHaveCount(55);
+  await expect(page.getByRole("button", { name: /^Show all/ })).toHaveCount(0);
+}, { wallet: false });

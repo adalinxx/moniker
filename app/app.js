@@ -282,9 +282,11 @@ const footer = () => `
  * follows the name, on an account's page the account. Not on your own page.
  */
 async function followsBlock(target, holder, mine, label) {
+  // Follows is another chain: if it can't be reached, the page still shows, without counts.
+  const counts = await countLinks(target, holder).catch(() => "");
   return `
     <div class="follows">
-      <p class="counts" data-target="${esc(target)}" data-holder="${esc(holder)}">${await countLinks(target, holder)}</p>
+      <p class="counts" data-target="${esc(target)}" data-holder="${esc(holder)}">${counts}</p>
       ${mine ? "" : `<follows-button target="${esc(target)}" label="${esc(label)}" owner="${esc(holder)}"></follows-button>`}
     </div>`;
 }
@@ -342,17 +344,27 @@ function personRow(p, href, sub) {
     </a>`;
 }
 
+// Rows a list shows before "Show all": each row is a card to read.
+const LIST_PAGE = 50;
+let listAll = null; // the list (its route) that shows all its rows
+
 /** Who follows `who` (a @name or an address), or what its account follows. */
 async function viewFollowList(who, tab, state) {
+  const everyone = listAll === `${who}/${tab}`;
   const handle = who.startsWith("@") ? who.slice(1) : null;
   const holder = handle ? (await profile.resolve(state, handle))?.holder : who;
   let rows;
+  let total;
   if (tab === "followers") {
-    const cards = await profile.getProfiles(state, await getGraph().followers(who));
+    const all = await getGraph().followers(who);
+    total = all.length;
+    const cards = await profile.getProfiles(state, everyone ? all : all.slice(0, LIST_PAGE));
     rows = cards.map((p) => personRow(p, `#/${p.handle ? `@${p.handle}` : p.address}`, p.handle ? `@${p.handle}` : ""));
   } else {
     // Names, as whoever owns them now; accounts, marked as such.
-    const followed = holder ? await getGraph().following(holder) : [];
+    const all = holder ? await getGraph().following(holder) : [];
+    total = all.length;
+    const followed = everyone ? all : all.slice(0, LIST_PAGE);
     rows = await Promise.all(
       followed.map(async (t) => {
         if (!t.startsWith("@")) {
@@ -372,6 +384,7 @@ async function viewFollowList(who, tab, state) {
     <main class="col stack">
       <h1 style="margin: 0">${esc(tab === "followers" ? `${whose}'s followers` : `${whose} follows`)}</h1>
       ${rows.length ? rows.join("") : `<p class="empty">${empty}</p>`}
+      ${total > rows.length ? `<button class="pill" type="button" data-list-all="${esc(`${who}/${tab}`)}">Show all ${total.toLocaleString("en-US")}</button>` : ""}
     </main>`;
 }
 
@@ -766,6 +779,9 @@ document.addEventListener("click", async (event) => {
   const d = el.dataset;
   if ("retry" in d) {
     render();
+  } else if (d.listAll) {
+    listAll = d.listAll;
+    render();
   } else if ("connect" in d) {
     try {
       await connect();
@@ -975,7 +991,10 @@ window.addEventListener("hashchange", render);
 // A follow or unfollow saved: update the counts in place, keeping the button (and its "Saved.").
 window.addEventListener("follows:change", async () => {
   const counts = $(".counts[data-target]");
-  if (counts) counts.innerHTML = await countLinks(counts.dataset.target, counts.dataset.holder);
+  if (!counts) return;
+  try {
+    counts.innerHTML = await countLinks(counts.dataset.target, counts.dataset.holder);
+  } catch {} // the counts stay as they were; the next visit reads them again
 });
 // Back from adding Selfhold: reload, on the same address, so it reaches the page.
 document.addEventListener("visibilitychange", () => {
