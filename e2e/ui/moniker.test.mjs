@@ -768,7 +768,7 @@ test("a name's page counts the name's followers, and its account's page lists ev
   await expect(page.locator("h1")).toHaveText("Tess Bakes");
   await expect(page.locator("p.handle")).toHaveText("@tessbakes");
   await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
-  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveText("Follow @tessbakes");
   await expect(page.locator("main")).not.toContainText("bafyrei");
 
   await page.getByRole("link", { name: "Owner's page" }).click();
@@ -801,26 +801,29 @@ test("following a name from its page: one approval, saving, then counted", async
   const wren = newAccount();
   const context = page.context();
   await openApp(page, wren, "#/@tess_cafe");
-  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveText("Follow @tess_cafe");
   const before = context.approvals;
   await followButton(page).click();
-  await expect(followButton(page)).toHaveText("Following · saving…");
-  await expect(followButton(page)).toHaveText("Following");
+  await expect(followButton(page)).toHaveText("Following @tess_cafe");
   await expect(page.locator("follows-button .note")).toHaveText("Saved.");
   expect(context.approvals).toBe(before + 1);
   await expect(counts(page).first()).toHaveText("1 follower");
   expect(await follows.follows(await followsState(), wren.address, "tess_cafe")).toBe(true);
   // Following again unfollows.
+  await expect(page.locator("follows-button .note")).toHaveText("", { timeout: 10_000 });
   await followButton(page).click();
-  await expect(followButton(page)).toHaveText("Unfollowing…");
-  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveText("Follow @tess_cafe");
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
   await expect(counts(page).first()).toHaveText("0 followers");
 });
 
 test("following an account from its page follows the account, not its names", async ({ page }) => {
   const xan = newAccount();
   await openApp(page, xan, `#/${tess.address}`);
+  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveAccessibleName("Follow Tess Bakes");
   await followButton(page).click();
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
   await expect(followButton(page)).toHaveText("Following");
   const s = await followsState();
   expect(await follows.follows(s, xan.address, tess.address)).toBe(true);
@@ -836,7 +839,7 @@ test("declining the follow in Selfhold sends nothing and says so", async ({ page
   context.answer = "decline";
   await followButton(page).click();
   await expect(page.locator("follows-button .note")).toHaveText("Canceled in Selfhold. Nothing was sent.");
-  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveText("Follow @tessbakes");
   expect(await follows.follows(await followsState(), yara.address, "tessbakes")).toBe(false);
 });
 
@@ -851,4 +854,6 @@ test("your own page shows your counts but no Follow button", async ({ page }) =>
   await expect(page.locator("h1")).toHaveText("Uma Reyes");
   await expect(counts(page)).toHaveText(["0 followers", "3 following"]);
   await expect(followButton(page)).toHaveCount(0);
+  // Your own name's page calls its owner "Your account".
+  await expect(page.getByRole("link", { name: "Your account" })).toHaveAttribute("href", `#/${uma.address}`);
 });

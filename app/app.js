@@ -281,11 +281,11 @@ const footer = () => `
  * each count opening its list, and the Follow button: on a name's page it
  * follows the name, on an account's page the account. Not on your own page.
  */
-async function followsBlock(target, holder, mine) {
+async function followsBlock(target, holder, mine, label) {
   return `
     <div class="follows">
       <p class="counts" data-target="${esc(target)}" data-holder="${esc(holder)}">${await countLinks(target, holder)}</p>
-      ${mine ? "" : `<follows-button target="${esc(target)}"></follows-button>`}
+      ${mine ? "" : `<follows-button target="${esc(target)}" label="${esc(label)}" owner="${esc(holder)}"></follows-button>`}
     </div>`;
 }
 
@@ -308,7 +308,7 @@ async function viewProfile(address, state, handle) {
   const p = await profile.getProfile(state, address);
   const mine = connected === address;
   const target = handle ? `@${handle}` : address;
-  const [held, follows] = await Promise.all([handle ? [] : profile.heldBy(state, address), followsBlock(target, address, mine)]);
+  const [held, follows] = await Promise.all([handle ? [] : profile.heldBy(state, address), followsBlock(target, address, mine, p.name ?? (handle ? `@${handle}` : "this account"))]);
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
   const link = `${location.origin}${location.pathname}#/${p.handle ? `@${p.handle}` : address}`;
@@ -324,12 +324,12 @@ async function viewProfile(address, state, handle) {
           : ""}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${follows}
-      ${handle ? `<a class="quiet" href="#/${esc(address)}">Owner's page</a>` : ""}
+      ${handle ? `<a class="owner" href="#/${esc(address)}">${mine ? "Your account" : "Owner's page"}</a>` : ""}
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
       ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit">Make your page</a>.` : "This account hasn't made a page yet."}</p>` : ""}
       ${mine
         ? `<button class="copy" type="button" data-copy="${esc(link)}" style="margin-top: 24px">Copy your link ⧉</button>`
-        : handle ? "" : `<button class="copy" type="button" data-copy="${esc(address)}" aria-label="Copy this account's address" style="margin-top: 24px">${esc(short(address))} ⧉</button>`}
+        : handle ? "" : `<button class="copy" type="button" data-copy="${esc(`${location.origin}${location.pathname}#/${address}`)}" style="margin-top: 24px">Copy account link ⧉</button>`}
     </main>`;
 }
 
