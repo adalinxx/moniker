@@ -126,6 +126,17 @@ h1.account .mono { font-size: 0.85em; font-weight: 600; }
 .promises b { color: var(--ink); font-weight: 600; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A heading focused after a page change marks where to start reading, without a ring. */
+h1[tabindex="-1"]:focus { outline: none; }
+.toast span { overflow-wrap: anywhere; }
+.choices { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
+.choices .pill { justify-content: flex-start; }
+.pill.bad { color: var(--bad); }
+button.quiet { min-height: 44px; }
+.profile-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.profile-head .row.person { flex: 1 1 220px; }
+.profile-head .end { display: flex; gap: 8px; flex-wrap: wrap; }
+h1.empty { font-size: 18px; font-weight: 400; }
 </style>
 <script type="module" src="./app.js"></script>
 </head>
@@ -133,5 +144,6 @@ h1.account .mono { font-size: 0.85em; font-weight: 600; }
 <div id="app" class="page"></div>
 <dialog id="sheet" aria-labelledby="sheet-title"></dialog>
 <div id="toasts" role="status"></div>
+<div id="alerts" role="alert"></div>
 </body>
 </html>
