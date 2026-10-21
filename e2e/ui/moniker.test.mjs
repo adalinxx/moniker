@@ -769,13 +769,12 @@ test("a name's page counts the name's followers, and its account's page lists ev
   await expect(page.locator("p.handle")).toHaveText("@tessbakes");
   await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
   await expect(followButton(page)).toHaveText("Follow");
-  await expect(page.locator(".follows .label")).toHaveText("You follow whoever owns @tessbakes.");
+  await expect(page.locator("main")).not.toContainText("bafyrei");
 
-  await page.getByRole("link", { name: "The account that owns @tessbakes" }).click();
+  await page.getByRole("link", { name: "Owner's page" }).click();
   await expect(page).toHaveURL(new RegExp(`#/${tess.address}$`));
   await expect(page.locator(".names a")).toHaveText(["@tess_cafe", "@tessbakes"]);
   await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
-  await expect(page.locator(".follows .label")).toHaveText("You follow this account, whatever names it holds.");
   await page.getByRole("link", { name: "@tess_cafe" }).click();
   await expect(page.locator("p.handle")).toHaveText("@tess_cafe");
   await expect(counts(page).first()).toHaveText("0 followers");
@@ -787,13 +786,15 @@ test("the counts open the lists: followers as people, and what an account follow
   await openApp(page, null, "#/@tessbakes");
   await counts(page).first().click();
   await expect(page).toHaveURL(/#\/@tessbakes\/followers$/);
-  await expect(page.locator("h1")).toHaveText("Followers of @tessbakes");
+  await expect(page.locator("h1")).toHaveText("@tessbakes's followers");
   await expect(page.locator(".row.person strong")).toHaveText(["Uma Reyes"]);
   await page.locator(".row.person").click();
   await expect(page.locator("h1")).toHaveText("Uma Reyes");
   await counts(page).nth(1).click();
-  await expect(page.locator("h1")).toHaveText("Followed by @uma");
-  await expect(page.locator(".row.person .label")).toHaveText(["@nobody_owns_this · no one owns it", "@tessbakes · name", `Account · ${tess.address.slice(0, 7)}…${tess.address.slice(-5)}`]);
+  await expect(page.locator("h1")).toHaveText("@uma follows");
+  // A name, as whoever owns it now (or no one); an account, marked as one.
+  await expect(page.locator(".row.person strong")).toHaveText(["@nobody_owns_this", "Tess Bakes", "Tess Bakes"]);
+  await expect(page.locator(".row.person .label")).toHaveText(["No one owns it yet", "@tessbakes", "@tessbakes · account"]);
 }, { wallet: false });
 
 test("following a name from its page: one approval, saving, then counted", async ({ page }) => {
@@ -805,6 +806,7 @@ test("following a name from its page: one approval, saving, then counted", async
   await followButton(page).click();
   await expect(followButton(page)).toHaveText("Following · saving…");
   await expect(followButton(page)).toHaveText("Following");
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
   expect(context.approvals).toBe(before + 1);
   await expect(counts(page).first()).toHaveText("1 follower");
   expect(await follows.follows(await followsState(), wren.address, "tess_cafe")).toBe(true);
@@ -833,7 +835,7 @@ test("declining the follow in Selfhold sends nothing and says so", async ({ page
   await openApp(page, yara, "#/@tessbakes");
   context.answer = "decline";
   await followButton(page).click();
-  await expect(page.locator("follows-button .note")).toHaveText("You declined it in Selfhold. Nothing was sent.");
+  await expect(page.locator("follows-button .note")).toHaveText("Canceled in Selfhold. Nothing was sent.");
   await expect(followButton(page)).toHaveText("Follow");
   expect(await follows.follows(await followsState(), yara.address, "tessbakes")).toBe(false);
 });
