@@ -251,9 +251,18 @@ test("one payment covers one price, per seller", () => {
   const two = [proof(P, ALICE), proof(Q, CAROL), ...move("a1", P, `${P}@250`, Q), ...move("a2", P, `${P}@250`, Q)];
   assert.ok(!signedBy([CAROL], two, pay(CAROL, ALICE, 250n)));
   assert.ok(signedBy([CAROL], two, pay(CAROL, ALICE, 500n)));
-  const twoSellers = [proof(P, ALICE), proof("bbbbbbbbbbbbbbbb", BOB), proof(Q, CAROL), ...move("a1", P, `${P}@250`, Q), ...move("b1", "bbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbb@100", Q)];
+  const B = "bbbbbbbbbbbbbbbb";
+  const twoSellers = [proof(P, ALICE), proof(Q, CAROL), ...move("a1", P, `${P}@250`, Q), proof(B, BOB), ...move("b1", B, `${B}@100`, Q)];
   assert.ok(!signedBy([CAROL], twoSellers, pay(CAROL, ALICE, 350n)));
-  assert.ok(signedBy([CAROL], twoSellers, [{ owner: CAROL, delta: -350n }, { owner: ALICE, delta: 250n }, { owner: BOB, delta: 100n }]));
+  const paid = [{ owner: CAROL, delta: -350n }, { owner: ALICE, delta: 250n }, { owner: BOB, delta: 100n }];
+  assert.ok(signedBy([CAROL], twoSellers, paid));
+  // Sellers are credited in the order they are first paid.
+  assert.ok(!signedBy([CAROL], twoSellers, [paid[0], paid[2], paid[1]]));
+  // A seller's purchases come together: paid once, a seller paid again later is refused.
+  const [C, D] = ["cccccccccccccccc", "dddddddddddddddd"];
+  const back = [...twoSellers, proof(C, ALICE), proof(D, CAROL), ...move("a3", C, `${C}@50`, D)];
+  assert.ok(!signedBy([CAROL], back, [{ owner: CAROL, delta: -400n }, { owner: ALICE, delta: 300n }, { owner: BOB, delta: 100n }]));
+  assert.ok(signedBy([CAROL], back, [{ owner: CAROL, delta: -400n }, { owner: ALICE, delta: 250n }, { owner: BOB, delta: 100n }, { owner: ALICE, delta: 50n }]));
 });
 
 test("a profile bought with its names: the names stay on it and pay nothing more", () => {
@@ -305,4 +314,102 @@ test("an offer is to someone else, and well formed", () => {
   for (const value of [`${ALICE}>${ALICE}`, `${ALICE}>${P}`, `${ALICE}>`]) {
     assert.ok(!signedBy([ALICE], [{ key: profile(P), oldValue: ALICE, newValue: value }]), value);
   }
+});
+
+// ---------------------------------------------------------------- order
+
+test("each check looks only at the last two profiles written", () => {
+  // A name moves only between the last two profiles written.
+  const S = "ssssssssssssssss";
+  assert.ok(!signedBy([BOB], [proof(P, ALICE), proof(Q, BOB), proof(S, BOB), ...move("alice", P, `${P}@0`, Q)]));
+  assert.ok(signedBy([BOB], [proof(S, BOB), proof(P, ALICE), proof(Q, BOB), ...move("alice", P, `${P}@0`, Q)]));
+  // A profile's records come while it is one of the last two.
+  const card = { key: `about/${P}/card`, newValue: "{}" };
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), proof(R, ALICE), card]));
+  assert.ok(!signedBy([ALICE], [proof(P, ALICE), proof(R, ALICE), proof(Q, BOB), card]));
+  assert.ok(!signedBy([ALICE], [card, proof(P, ALICE)]));
+});
+
+test("index keys come directly after their token, the one it leaves first", () => {
+  const take = { key: profile(P), oldValue: ALICE, newValue: BOB };
+  const [leave, reach] = [{ key: owns(ALICE, P), oldValue: "1" }, { key: owns(BOB, P), newValue: "1" }];
+  assert.ok(signedBy([ALICE, BOB], [take, leave, reach]));
+  assert.ok(!signedBy([ALICE, BOB], [take, reach, leave]));
+  assert.ok(!signedBy([ALICE, BOB], [take, leave, { key: `about/${P}/card`, newValue: "{}" }, reach]));
+  assert.ok(!signedBy([ALICE, BOB], [take, leave]));
+  const moved = move("art", P, P, R);
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), proof(R, ALICE), ...moved]));
+  assert.ok(!signedBy([ALICE], [proof(P, ALICE), proof(R, ALICE), moved[0], moved[2], moved[1]]));
+});
+
+test("a profile shows a name written just before, held by it", () => {
+  const show = { key: `about/${P}/name`, newValue: "alice" };
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), { key: name("alice"), oldValue: P, newValue: P }, show]));
+  assert.ok(signedBy([ALICE], [proof(P, ALICE), ...claim("alice", P), show]));
+  assert.ok(!signedBy([ALICE], [proof(P, ALICE), show, ...claim("alice", P)]));
+  assert.ok(!signedBy([ALICE], [proof(P, ALICE), ...claim("alice", P), { key: `about/${P}/card`, newValue: "{}" }, show]));
+  // Held by another profile: refused.
+  assert.ok(!signedBy([ALICE], [proof(P, ALICE), proof(R, ALICE), ...claim("alice", R), show]));
+});
+
+test("nobody else changes the terms of a token they don't take", () => {
+  // Paying the price buys the token: it may not stay with its owner on other terms.
+  assert.ok(!signedBy([BOB], [{ key: profile(P), oldValue: `${ALICE}@5`, newValue: ALICE }], pay(BOB, ALICE, 5n)));
+  assert.ok(!signedBy([BOB], [{ key: profile(P), oldValue: `${ALICE}@0`, newValue: `${ALICE}@9` }]));
+  assert.ok(!signedBy([BOB], [proof(P, ALICE), { key: name("alice"), oldValue: `${P}@0`, newValue: P }]));
+});
+
+test("a price is one a credit can pay", () => {
+  assert.ok(signedBy([ALICE], [...create(ALICE, P, "9223372036854775807")]));
+  assert.ok(!signedBy([ALICE], [...create(ALICE, P, "9223372036854775808")]));
+});
+
+test("the work grows with the transaction, no faster", () => {
+  // Many free names taken in one transaction: every check is a lookup among
+  // the last two profiles, so twice the actions take about twice the time.
+  const time = (n) => {
+    const actions = [proof(P, ALICE), proof(Q, BOB)];
+    for (let i = 0; i < n; i++) actions.push(...move(`h${i}`, P, `${P}@0`, Q));
+    const bytes = context(body(actions, [BOB]));
+    const start = performance.now();
+    assert.ok(validate(bytes));
+    return performance.now() - start;
+  };
+  time(500);
+  const [small, large] = [time(2000), time(8000)];
+  assert.ok(large < small * 8, `${small.toFixed(1)}ms for 2000, ${large.toFixed(1)}ms for 8000`);
+});
+
+
+test("many signers: each check is a lookup, not a walk of the signers", () => {
+  // Thousands of signers (repeated ones too) and thousands of own-record
+  // writes, each asking whether its account signs.
+  const time = (n) => {
+    const key = (i) => core.addressFromPublicKey(core.publicKeyFromPrivate(Uint8Array.from({ length: 32 }, (_, b) => (b < 2 ? (i >> (8 * b)) & 255 : 7))));
+    const signers = Array.from({ length: n }, (_, i) => key(i % (n / 2)));
+    const actions = Array.from({ length: n }, (_, i) => ({ key: `user/${signers[i]}/k${i}`, newValue: "1" }));
+    const bytes = context(body(actions, signers));
+    const start = performance.now();
+    assert.ok(validate(bytes));
+    assert.ok(!validate(context(body([...actions, { key: `user/${CAROL}/x`, newValue: "1" }], signers))));
+    return performance.now() - start;
+  };
+  time(500);
+  const [small, large] = [time(1000), time(4000)];
+  assert.ok(large < small * 8, `${small.toFixed(1)}ms for 1000, ${large.toFixed(1)}ms for 4000`);
+});
+
+test("signers: any order, repeats fine, each an address", () => {
+  const write = [{ key: `user/${ALICE}/x`, newValue: "1" }];
+  assert.ok(signedBy([BOB, CAROL, ALICE], write));
+  assert.ok(signedBy([ALICE, ALICE, BOB, ALICE], write));
+  assert.ok(!signedBy([BOB, CAROL], write));
+  // An owner that only shares a signer's prefix, or extends it, is not that signer.
+  assert.ok(!signedBy([ALICE], [{ key: `user/${ALICE.slice(0, 58)}/x`, newValue: "1" }]));
+  // A signer that isn't an address: refused.
+  assert.ok(!signedBy([ALICE, "bafyrei"], write));
+  // Many addresses: every one is found, and no other.
+  const many = Array.from({ length: 240 }, (_, i) => address(10 + i));
+  for (const who of [many[0], many[120], many[239]]) assert.ok(signedBy(many, [{ key: `user/${who}/x`, newValue: "1" }]));
+  assert.ok(!signedBy(many, write));
 });
