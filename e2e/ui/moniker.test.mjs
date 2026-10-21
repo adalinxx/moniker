@@ -14,7 +14,8 @@ import { chromium, expect as baseExpect } from "@playwright/test";
 import * as profile from "../../sdk/src/records/profile.mjs";
 import { tip, view, volumeLoader } from "../../sdk/src/records/state.mjs";
 import { transaction } from "../../sdk/src/records/wallet.mjs";
-import { CHAIN, start } from "./stack.mjs";
+import * as follows from "../../follows/src/records/follows.mjs";
+import { CHAIN, FOLLOWS, start } from "./stack.mjs";
 
 const wallet = process.env.LATTICE_WALLET && fileURLToPath(new URL(process.env.LATTICE_WALLET, `file://${process.cwd()}/`));
 if (!wallet) throw new Error("LATTICE_WALLET: the built Lattice Wallet extension (its dist/ directory)");
@@ -164,11 +165,11 @@ async function walletForgetsSite(context) {
 
 /** Opens the app pointed at the stack, as `who` (connected through the wallet) or as a visitor. */
 async function openApp(page, who, hash = "#/") {
-  await page.addInitScript(({ node, chain }) => {
+  await page.addInitScript(({ node, chain, follows }) => {
     if (sessionStorage.getItem("moniker-test-seeded")) return;
     sessionStorage.setItem("moniker-test-seeded", "1");
-    localStorage.setItem("moniker.settings", JSON.stringify({ nodes: [node], chain }));
-  }, { node: stack.node, chain: stack.chain });
+    localStorage.setItem("moniker.settings", JSON.stringify({ nodes: [node], chain, follows }));
+  }, { node: stack.node, chain: stack.chain, follows: stack.follows });
   // Playwright's own clicks and reads count as the person acting, so Selfhold
   // would let a page connect at any time here. As in a page someone just
   // opened, the app sees no recent click, and must ask only from one.
@@ -720,3 +721,170 @@ test("checkout says when an account is short, and still leaves paying to the wal
   await expect(page.getByRole("button", { name: "Buy for 500" })).toBeVisible();
   await expect(page.locator("#short")).toHaveCount(0);
 });
+
+// ---------------------------------------------------------------- follows
+
+/** The Follows chain's state at the node's tip. */
+async function followsState() {
+  const volumes = new sdk.VolumeClient(new sdk.HTTPVolumeTransport(`${stack.node}/volumes`, { chainPath: FOLLOWS }));
+  const { generalStateCID } = await tip(sdk, stack.node, FOLLOWS, volumes);
+  return view(volumeLoader(volumes, sdk.decodeDagCbor), generalStateCID);
+}
+/** `who` follows each of `targets` (names or addresses), as another app would. */
+async function followAs(who, ...targets) {
+  const s = await followsState();
+  const actions = [];
+  for (const t of targets) actions.push(...(await follows.follow(s, who.address, t)).actions);
+  const nonce = BigInt((await (await fetch(`${stack.node}/api/state/account/${who.address}?chainPath=${stack.follows}`)).json().catch(() => ({}))).nonce ?? 0);
+  await submit(who, transaction({ owner: who.address, actions, fee: 0n, nonce, chainPath: FOLLOWS }));
+  await until("the follows land", async () => {
+    const now = await followsState();
+    for (const t of targets) if (!(await follows.follows(now, who.address, t))) return false;
+    return true;
+  });
+}
+/** `who` takes `handle`, and their card shows `name` and the handle. */
+async function named(who, name, handle) {
+  await fund(who.address, 100n);
+  const s = await state();
+  await writeAs(who, profile.combine(await profile.editCard(s, who.address, { name, handle }), await profile.claim(s, who.address, handle)));
+  await until(`@${handle}`, async () => (await profile.resolve(await state(), handle))?.holder === who.address);
+}
+const followButton = (page) => page.locator("follows-button button");
+const counts = (page) => page.locator(".counts a");
+
+const tess = newAccount(); // a bakery, @tessbakes and @tess_cafe
+const uma = newAccount();
+const vic = newAccount();
+
+test("a name's page counts the name's followers, and its account's page lists every name it holds", async ({ page }) => {
+  await named(tess, "Tess Bakes", "tessbakes");
+  await writeAs(tess, await profile.claim(await state(), tess.address, "tess_cafe"));
+  await until("@tess_cafe", async () => (await profile.resolve(await state(), "tess_cafe"))?.holder === tess.address);
+  await followAs(uma, "tessbakes");
+  await followAs(vic, tess.address);
+
+  await openApp(page, null, "#/@tessbakes");
+  await expect(page.locator("h1")).toHaveText("Tess Bakes");
+  await expect(page.locator("p.handle")).toHaveText("@tessbakes");
+  await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
+  await expect(followButton(page)).toHaveText("Follow @tessbakes");
+  await expect(page.locator("main")).not.toContainText("bafyrei");
+
+  await page.getByRole("link", { name: "Owner's page" }).click();
+  await expect(page).toHaveURL(new RegExp(`#/${tess.address}$`));
+  await expect(page.locator(".names a")).toHaveText(["@tess_cafe", "@tessbakes"]);
+  await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
+  await page.getByRole("link", { name: "@tess_cafe" }).click();
+  await expect(page.locator("p.handle")).toHaveText("@tess_cafe");
+  await expect(counts(page).first()).toHaveText("0 followers");
+}, { wallet: false });
+
+test("the counts open the lists: followers as people, and what an account follows as names and accounts", async ({ page }) => {
+  await named(uma, "Uma Reyes", "uma");
+  await followAs(uma, "nobody_owns_this", tess.address);
+  await openApp(page, null, "#/@tessbakes");
+  await counts(page).first().click();
+  await expect(page).toHaveURL(/#\/@tessbakes\/followers$/);
+  await expect(page.locator("h1")).toHaveText("@tessbakes's followers");
+  await expect(page.locator(".row.person strong")).toHaveText(["Uma Reyes"]);
+  await page.locator(".row.person").click();
+  await expect(page.locator("h1")).toHaveText("Uma Reyes");
+  await counts(page).nth(1).click();
+  await expect(page.locator("h1")).toHaveText("@uma follows");
+  // A name, as whoever owns it now (or no one); an account, marked as one.
+  await expect(page.locator(".row.person strong")).toHaveText(["@nobody_owns_this", "Tess Bakes", "Tess Bakes"]);
+  await expect(page.locator(".row.person .label")).toHaveText(["No one owns it yet", "@tessbakes", "@tessbakes · account"]);
+}, { wallet: false });
+
+test("following a name from its page: one approval, saving, then counted", async ({ page }) => {
+  const wren = newAccount();
+  const context = page.context();
+  await openApp(page, wren, "#/@tess_cafe");
+  await expect(followButton(page)).toHaveText("Follow @tess_cafe");
+  const before = context.approvals;
+  await followButton(page).click();
+  await expect(followButton(page)).toHaveText("Following @tess_cafe");
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
+  expect(context.approvals).toBe(before + 1);
+  await expect(counts(page).first()).toHaveText("1 follower");
+  expect(await follows.follows(await followsState(), wren.address, "tess_cafe")).toBe(true);
+  // Following again unfollows.
+  await expect(page.locator("follows-button .note")).toHaveText("", { timeout: 10_000 });
+  await followButton(page).click();
+  await expect(followButton(page)).toHaveText("Follow @tess_cafe");
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
+  await expect(counts(page).first()).toHaveText("0 followers");
+});
+
+test("following an account from its page follows the account, not its names", async ({ page }) => {
+  const xan = newAccount();
+  await openApp(page, xan, `#/${tess.address}`);
+  await expect(followButton(page)).toHaveText("Follow");
+  await expect(followButton(page)).toHaveAccessibleName("Follow Tess Bakes");
+  await followButton(page).click();
+  await expect(page.locator("follows-button .note")).toHaveText("Saved.");
+  await expect(followButton(page)).toHaveText("Following");
+  const s = await followsState();
+  expect(await follows.follows(s, xan.address, tess.address)).toBe(true);
+  expect(await follows.follows(s, xan.address, "tessbakes")).toBe(false);
+  // Vic, Uma and now Xan follow the account.
+  await expect(counts(page).first()).toHaveText("3 followers");
+});
+
+test("declining the follow in Selfhold sends nothing and says so", async ({ page }) => {
+  const yara = newAccount();
+  const context = page.context();
+  await openApp(page, yara, "#/@tessbakes");
+  context.answer = "decline";
+  await followButton(page).click();
+  await expect(page.locator("follows-button .note")).toHaveText("Canceled in Selfhold. Nothing was sent.");
+  await expect(followButton(page)).toHaveText("Follow @tessbakes");
+  expect(await follows.follows(await followsState(), yara.address, "tessbakes")).toBe(false);
+});
+
+test("a visitor without Selfhold is told how to follow", async ({ page }) => {
+  await openApp(page, null, "#/@tessbakes");
+  await followButton(page).click();
+  await expect(page.locator("follows-button .note")).toContainText("To follow, add Selfhold");
+}, { wallet: false });
+
+test("your own page shows your counts but no Follow button", async ({ page }) => {
+  await openApp(page, uma, "#/me");
+  await expect(page.locator("h1")).toHaveText("Uma Reyes");
+  await expect(counts(page)).toHaveText(["0 followers", "3 following"]);
+  await expect(followButton(page)).toHaveCount(0);
+  // Your own name's page calls its owner "Your account".
+  await expect(page.getByRole("link", { name: "Your account" })).toHaveAttribute("href", `#/${uma.address}`);
+});
+
+test("if Follows can't be reached, a page still shows, without counts", async ({ page }) => {
+  await page.route((url) => url.searchParams.get("chainPath") === stack.follows, (route) => route.abort());
+  await openApp(page, null, "#/@tessbakes");
+  await expect(page.locator("h1")).toHaveText("Tess Bakes");
+  await expect(page.locator("p.handle")).toHaveText("@tessbakes");
+  await expect(counts(page)).toHaveCount(0);
+}, { wallet: false, expectedErrors: /Failed to load resource|net::ERR_FAILED/ });
+
+test("a long list shows 50, then all of them on request", async ({ page }) => {
+  const fans = Array.from({ length: 55 }, newAccount);
+  for (const fan of fans) {
+    const actions = (await follows.follow(await followsState(), fan.address, "tess_cafe")).actions;
+    // The node takes so many submissions a second: wait and send again.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await submit(fan, transaction({ owner: fan.address, actions, fee: 0n, nonce: 0n, chainPath: FOLLOWS }));
+        break;
+      } catch (error) {
+        if (!/429/.test(error.message) || attempt > 20) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+  await until("55 follows of @tess_cafe", async () => (await follows.followers(await followsState(), "tess_cafe")).length >= 55, 300);
+  await openApp(page, null, "#/@tess_cafe/followers");
+  await expect(page.locator(".row.person")).toHaveCount(50);
+  await page.getByRole("button", { name: /^Show all \d+$/ }).click();
+  await expect(page.locator(".row.person")).toHaveCount(55);
+  await expect(page.getByRole("button", { name: /^Show all/ })).toHaveCount(0);
+}, { wallet: false });
