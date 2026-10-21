@@ -103,7 +103,10 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
 .counts a:hover { text-decoration: underline; }
 follows-button { --follows-accent: var(--accent); --follows-accent-ink: var(--accent-ink); --follows-ink: var(--ink); --follows-line: var(--line); --follows-muted: var(--muted); }
 .owner { margin-top: 10px; font-size: 14px; color: var(--accent); text-decoration: underline; padding: 10px 4px; }
-.names { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; margin-top: 4px; }
+.account { display: flex; align-items: center; justify-content: center; gap: 2px; margin: 4px 0 0; font-size: 14px; color: var(--muted); }
+.account .mono { margin-left: 6px; color: var(--ink); }
+.names { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 4px 12px; margin: 4px 0 0; }
+.names .label { font-size: 14px; color: var(--muted); }
 .names .handle { margin: 0; text-decoration: none; }
 .row.person { text-decoration: none; color: var(--ink); padding-left: 10px; }
 .row.person .who { display: flex; flex-direction: column; min-width: 0; }

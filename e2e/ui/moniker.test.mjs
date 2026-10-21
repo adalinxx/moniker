@@ -769,11 +769,21 @@ test("a name's page counts the name's followers, and its account's page lists ev
   await expect(page.locator("p.handle")).toHaveText("@tessbakes");
   await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
   await expect(followButton(page)).toHaveText("Follow @tessbakes");
+  // The owner by the end of its ID, never the whole address.
+  const id = `…${tess.address.slice(-8)}`;
   await expect(page.locator("main")).not.toContainText("bafyrei");
 
-  await page.getByRole("link", { name: "Owner's page" }).click();
+  await page.getByRole("link", { name: `Owned by ${id}` }).click();
   await expect(page).toHaveURL(new RegExp(`#/${tess.address}$`));
+  // Not the name's page: it says it is an account, with the same ID, and labels its names.
+  await expect(page.locator("p.handle")).toHaveCount(0);
+  await expect(page.locator(".account")).toHaveText(`Account ${id}⧉`);
+  await expect(page.locator(".names .label")).toHaveText("Names");
   await expect(page.locator(".names a")).toHaveText(["@tess_cafe", "@tessbakes"]);
+  await expect(followButton(page)).toHaveText("Follow account");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy account ID" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(tess.address);
   await expect(counts(page)).toHaveText(["1 follower", "0 following"]);
   await page.getByRole("link", { name: "@tess_cafe" }).click();
   await expect(page.locator("p.handle")).toHaveText("@tess_cafe");
@@ -820,11 +830,11 @@ test("following a name from its page: one approval, saving, then counted", async
 test("following an account from its page follows the account, not its names", async ({ page }) => {
   const xan = newAccount();
   await openApp(page, xan, `#/${tess.address}`);
-  await expect(followButton(page)).toHaveText("Follow");
-  await expect(followButton(page)).toHaveAccessibleName("Follow Tess Bakes");
+  await expect(followButton(page)).toHaveText("Follow account");
+  await expect(followButton(page)).toHaveAccessibleName("Follow account, Tess Bakes");
   await followButton(page).click();
   await expect(page.locator("follows-button .note")).toHaveText("Saved.");
-  await expect(followButton(page)).toHaveText("Following");
+  await expect(followButton(page)).toHaveText("Following account");
   const s = await followsState();
   expect(await follows.follows(s, xan.address, tess.address)).toBe(true);
   expect(await follows.follows(s, xan.address, "tessbakes")).toBe(false);
@@ -854,8 +864,8 @@ test("your own page shows your counts but no Follow button", async ({ page }) =>
   await expect(page.locator("h1")).toHaveText("Uma Reyes");
   await expect(counts(page)).toHaveText(["0 followers", "3 following"]);
   await expect(followButton(page)).toHaveCount(0);
-  // Your own name's page calls its owner "Your account".
-  await expect(page.getByRole("link", { name: "Your account" })).toHaveAttribute("href", `#/${uma.address}`);
+  // Your own name's page says you own it.
+  await expect(page.getByRole("link", { name: "Owned by you" })).toHaveAttribute("href", `#/${uma.address}`);
 });
 
 test("if Follows can't be reached, a page still shows, without counts", async ({ page }) => {
