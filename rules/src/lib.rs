@@ -122,7 +122,7 @@ impl<'a> Body<'a> {
     /// at least the prices of all their tokens taken. `is_token` names the
     /// keys the token rule governs; run this after every action passed it.
     pub fn check_payments(&self, is_token: impl Fn(&[u8]) -> bool) -> Option<()> {
-        let purchase = |action: &Action<'a>| -> Option<Option<(&'a [u8], u64)>> {
+        self.check_purchases(|action| {
             let Some(old) = action.old_value.filter(|_| is_token(action.key)) else {
                 return Some(None);
             };
@@ -131,24 +131,30 @@ impl<'a> Body<'a> {
                 return Some(None);
             }
             Some(Some((holder, price?)))
-        };
-        // The check runs once per holder, at the first token taken from them.
+        })
+    }
+
+    /// Every payee is credited at least the prices of all the purchases owed
+    /// to them. `purchase` reads one action: `None` when it buys nothing,
+    /// else whom it pays and how much; a rejection rejects the body.
+    pub fn check_purchases(&self, purchase: impl Fn(&Action<'a>) -> Option<Option<(&'a [u8], u64)>>) -> Option<()> {
+        // The check runs once per payee, at the first purchase owed to them.
         for (index, action) in self.actions()?.enumerate() {
-            let Some((holder, _)) = purchase(&action?)? else {
+            let Some((payee, _)) = purchase(&action?)? else {
                 continue;
             };
             let mut seen = false;
             let mut owed: u128 = 0;
             for (other, action) in self.actions()?.enumerate() {
                 match purchase(&action?)? {
-                    Some((payee, price)) if payee == holder => {
+                    Some((to, price)) if to == payee => {
                         seen |= other < index;
                         owed = owed.checked_add(price as u128)?;
                     }
                     _ => {}
                 }
             }
-            if !seen && self.credited(holder)? < owed {
+            if !seen && self.credited(payee)? < owed {
                 return None;
             }
         }
