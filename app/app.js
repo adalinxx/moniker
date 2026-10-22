@@ -45,13 +45,13 @@ const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand)));
 
 /**
- * Apps known here by name: a pointer on their chain shows the app's name,
- * and links to the profile's page where the app's address for one is known.
+ * Apps known here by name: a pointer on their chain shows the app's name.
+ * None has a page by profile id yet, so a profile shows as its id.
  */
 const APPS = [
   { name: "Rave", chain: "Nexus/testnet/rave-186079" },
   { name: "Stoa", chain: "Nexus/testnet/stoa-41d5ab" },
-  { name: "Follows", chain: "Nexus/testnet/follows-a8fa7f", page: (p) => `https://adalinxx.github.io/follows/app/#/${p}` },
+  { name: "Follows", chain: "Nexus/testnet/follows-a8fa7f" },
   { name: "Wheatpaste", chain: "Nexus/testnet/wheatpaste-acbbcf" },
   { name: "Fanfare", chain: "Nexus/testnet/fanfare-a5688b" },
 ];
@@ -296,7 +296,7 @@ function handleRow(n, end = "") {
     </div>`;
 }
 
-/** A name's pointers: one row per app chain, the profile linked where the app's page for it is known. */
+/** A name's pointers: one row per app chain, by the app's name where it is known. */
 function pointersTable(n) {
   const rows = Object.entries(n.points).sort(([a], [b]) => (a < b ? -1 : 1));
   if (!rows.length) return `<p class="note" style="margin: 0">@${esc(n.handle)} points at no profile in any app.</p>`;
@@ -306,10 +306,10 @@ function pointersTable(n) {
       <thead><tr><th scope="col">App</th><th scope="col">Profile</th></tr></thead>
       <tbody>
         ${rows.map(([chain, p]) => {
-          const app = appOf(chain);
+          const known = Boolean(appOf(chain));
           return `<tr>
-            <th scope="row"${app ? ` title="${esc(chain)}"` : ` class="mono"`}>${esc(chainLabel(chain))}</th>
-            <td class="mono">${app?.page ? `<a href="${esc(app.page(p))}" rel="noopener noreferrer" target="_blank">${esc(p)}</a>` : esc(p)}</td>
+            <th scope="row"${known ? ` title="${esc(chain)}"` : ` class="mono"`}>${esc(chainLabel(chain))}</th>
+            <td class="mono">${esc(p)}</td>
           </tr>`;
         }).join("")}
       </tbody>
