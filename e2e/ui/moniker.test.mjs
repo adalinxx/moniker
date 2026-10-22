@@ -491,6 +491,47 @@ test("Alice releases @alice after confirming in the page: it is free, with no po
   await expect(page.locator(".result .badge")).toHaveText("Available");
 });
 
+test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {
+  await claimAs(alice, "alice_switch");
+  await writeAs(alice, await names.offerName(await state(), alice.address, "alice_switch", bob.address));
+  await until("the offer", async () => (await held("alice_switch"))?.offer === bob.address);
+  const context = page.context();
+  await openApp(page, bob, "#/take/alice_switch");
+  await expect(page.getByRole("button", { name: "Take @alice_switch" })).toBeVisible();
+  // Alice takes the offer back and lists the name at 30 while Bob looks.
+  await writeAs(alice, await names.list(await state(), alice.address, "alice_switch", 30n));
+  await until("@alice_switch at 30", async () => (await held("alice_switch"))?.price === 30n);
+  const asked = context.approvals;
+  const before = await balance(bob.address);
+  await page.getByRole("button", { name: "Take @alice_switch" }).click();
+  await expect(toast(page, "@alice_switch isn't offered to you anymore. Look again.")).toBeVisible();
+  expect(context.approvals).toBe(asked);
+  expect((await held("alice_switch")).owner).toBe(alice.address);
+  expect(await balance(bob.address)).toBe(before);
+});
+
+test("Enter in a sheet confirms it: a price typed and Enter lists the name", async ({ page }) => {
+  const ivy = newAccount();
+  await claimAs(ivy, "ivy_enter");
+  await openApp(page, ivy, "#/names");
+  await menu(page, "ivy_enter", "Sell");
+  await page.locator("#sheet-input").fill("25");
+  await page.locator("#sheet-input").press("Enter");
+  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points nowhere · for sale · 25");
+  expect((await held("ivy_enter")).price).toBe(25n);
+  // Escape still cancels, sending nothing.
+  const asked = page.context().approvals;
+  await menu(page, "ivy_enter", "Stop selling");
+  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points nowhere");
+  await menu(page, "ivy_enter", "Sell");
+  await page.locator("#sheet-input").fill("7");
+  await page.locator("#sheet-input").press("Escape");
+  await expect(page.locator("#sheet")).not.toBeVisible();
+  await page.waitForTimeout(3000);
+  expect(page.context().approvals).toBe(asked + 1);
+  expect((await held("ivy_enter")).price).toBeUndefined();
+});
+
 test("declining in Selfhold sends nothing, and the page says so", async ({ page }) => {
   const frank = newAccount();
   const context = page.context();

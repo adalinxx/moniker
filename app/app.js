@@ -103,12 +103,13 @@ function walletMessage(error) {
 
 // The wallet takes one request from a page at a time.
 let walletTurn = Promise.resolve();
-function send(write) {
+/** Sends `write`, built for account `me`, through the wallet. */
+function send(write, me) {
   const turn = walletTurn.then(async () => {
-    // A write is built for the account this page shows. If Selfhold was since
-    // disconnected from this site, or connected to another account, say so and send nothing.
+    // A write is built for one account. If Selfhold was since disconnected
+    // from this site, or connected to another account, say so and send nothing.
     const now = await wallet().address();
-    if (now !== connected) {
+    if (now !== me) {
       connected = now;
       render();
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
@@ -134,7 +135,7 @@ async function act(label, build, landed, done = render) {
       setTimeout(progress.close, 2500);
       return;
     }
-    await send(write);
+    await send(write, me);
     progress.update(`${label}: waiting for the block…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
@@ -210,7 +211,7 @@ function sheet({ title, body = "", confirm, input, choices, danger = false }) {
       ${choices ? `<div class="choices">${choices.map((c) => `<button class="pill${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
       <p id="sheet-error" role="alert" style="color: var(--bad); margin: 0 0 12px"></p>
       <div class="actions">
-        <button class="pill" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button class="pill" type="button" data-sheet-cancel>Cancel</button>
         ${choices ? "" : `<button class="pill ${danger ? "danger" : "dark"}" value="ok" type="submit">${esc(confirm)}</button>`}
       </div>
     </form>`;
@@ -229,6 +230,8 @@ function sheet({ title, body = "", confirm, input, choices, danger = false }) {
         }
       }
     };
+    // Cancel is no submit button, so Enter in the input submits the confirm.
+    $("[data-sheet-cancel]", dialog).onclick = () => dialog.close("cancel");
     dialog.onclose = () => {
       const answer = dialog.returnValue;
       if (answer.startsWith("choice:")) return resolve(answer.slice("choice:".length));
@@ -688,7 +691,12 @@ document.addEventListener("click", async (event) => {
   } else if (d.take) {
     if (!(await connectFirst())) return;
     const handle = d.take;
-    act(`Taking @${handle}`, (state, me) => names.buy(state, me, handle), async (s, me) => (await held(s, handle))?.owner === me, () => {
+    act(`Taking @${handle}`, async (state, me) => {
+      const entry = await held(state, handle);
+      // Taken as a gift, for nothing, or not at all: never a purchase under "Take".
+      if (entry?.offer !== me || entry.price !== undefined) throw new Error(`@${handle} isn't offered to you anymore. Look again.`);
+      return names.buy(state, me, handle);
+    }, async (s, me) => (await held(s, handle))?.owner === me, () => {
       location.hash = `#/@${handle}`;
       render();
     });
