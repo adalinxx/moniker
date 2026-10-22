@@ -238,16 +238,11 @@ function toast(message, { bad = false } = {}) {
 }
 
 /**
- * A confirmation sheet. `rows` are `[label, value]` lines; `input` asks for
- * one value first. Resolves to the input's value (or true), or null when
- * cancelled.
- */
-/**
  * A modal question. With `input`, resolves to what was typed; with `choices`
  * (`[{ value, label, bad? }]`), to the value chosen; else to true. Resolves
  * to null when cancelled.
  */
-function sheet({ title, body = "", rows = [], confirm, input, choices }) {
+function sheet({ title, body = "", confirm, input, choices }) {
   const dialog = $("#sheet");
   dialog.setAttribute("aria-describedby", "sheet-body");
   dialog.innerHTML = `
@@ -255,7 +250,6 @@ function sheet({ title, body = "", rows = [], confirm, input, choices }) {
       <h2 id="sheet-title">${esc(title)}</h2>
       <p id="sheet-body">${esc(body)}</p>
       ${input ? `<div class="field"><label for="sheet-input">${esc(input.label)}</label><input id="sheet-input" ${input.attrs ?? ""} required></div>` : ""}
-      ${rows.length ? `<div class="sum">${rows.map(([k, v]) => `<span class="label">${esc(k)}</span><span>${esc(v)}</span>`).join("")}</div>` : ""}
       ${choices ? `<div class="choices">${choices.map((c) => `<button class="pill${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
       <p id="sheet-error" role="alert" style="color: var(--bad); margin: 0 0 12px"></p>
       <div class="actions">
@@ -379,6 +373,8 @@ async function countLinks(id) {
 async function viewProfile(p, state, via) {
   const mine = connected === p.owner;
   const follows = await followsBlock(p, mine);
+  // A name is its owner's: when that isn't the profile's owner, it is lent, and can be pointed away.
+  const lender = p.handle && (await profile.resolve(state, p.handle))?.owner;
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
   return `
@@ -387,6 +383,7 @@ async function viewProfile(p, state, via) {
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(nameOf(p))}</h1>
       ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
+      ${lender && lender !== p.owner ? `<p class="via">@${esc(p.handle)} belongs to account <a class="mono" href="#/${esc(lender)}">${esc(shortID(lender))}</a></p>` : ""}
       ${via && via !== p.handle ? `<p class="via">@${esc(via)} points here; this profile ${p.handle ? `shows @${esc(p.handle)}` : "doesn't list it as its name"}</p>` : ""}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${follows}
@@ -413,7 +410,7 @@ function viewName(entry) {
 
 /** One name in a list: the handle, linked to its page, where it points, and its terms. */
 function handleRow(n, to, end = "") {
-  const label = [pointsLabel(to), n.price !== undefined && `for sale · ${coins(n.price)}`, n.offer && "offered"].filter(Boolean).join(" · ");
+  const label = [pointsLabel(to), n.price !== undefined && `for sale · ${coins(n.price)}`, n.offer && `offered to ${shortID(n.offer)}`].filter(Boolean).join(" · ");
   return `
     <div class="row">
       <a class="mono" href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>
@@ -581,8 +578,8 @@ async function viewSearch(q, state) {
 
 const backBar = (href, label) => `
   <div class="col top" style="justify-content: flex-start; align-items: center; gap: 12px">
-    <a class="pill icon" href="${href}" aria-label="Back">‹</a>
-    <span class="label">${label}</span>
+    <a class="pill icon" href="${esc(href)}" aria-label="Back">‹</a>
+    <span class="label">${esc(label)}</span>
   </div>`;
 
 // Set once someone leaves for the wallet's store page; on their return the
@@ -614,7 +611,7 @@ function walletPanel(why, alone = false) {
     <button class="pill accent big" type="button" data-share="${esc(location.href)}">Copy this page's link</button>` : "";
   return `
     <section class="panel stack" aria-labelledby="get-wallet">
-      <h${alone ? 1 : 2} id="get-wallet">${why}</h${alone ? 1 : 2}>
+      <h${alone ? 1 : 2} id="get-wallet">${esc(why)}</h${alone ? 1 : 2}>
       <p class="lede" style="margin: 0">Selfhold is a wallet in your browser. It keeps the key that proves a name is yours, on your device, and asks you before anything is sent. Moniker never sees it.</p>
       ${steps}${elsewhere}
     </section>`;
@@ -624,7 +621,7 @@ function walletPanel(why, alone = false) {
 function connectPanel(why, alone = false) {
   return `
     <section class="panel stack" aria-labelledby="connect">
-      <h${alone ? 1 : 2} id="connect">${why}</h${alone ? 1 : 2}>
+      <h${alone ? 1 : 2} id="connect">${esc(why)}</h${alone ? 1 : 2}>
       <p class="lede" style="margin: 0">Selfhold asks you first. Moniker sees only your address, never your key.</p>
       <button class="pill accent big" type="button" data-connect>Connect Selfhold</button>
     </section>`;
@@ -643,7 +640,7 @@ function pointChoice(mine) {
     </div>`;
 }
 
-/** Profile `p`, which `me` owns, shows `handle` as its default name: written while `handle` comes to point at it. */
+/** Profile `p`, yours, shows `handle` as its default name: written while `handle` comes to point at it. */
 async function showWrite(state, p, handle) {
   const token = await profile.profileToken(state, p);
   const old = await state.get(profile.shownKey(p));
@@ -663,7 +660,8 @@ async function showWrite(state, p, handle) {
 async function getName(state, me, handle, choice) {
   const entry = await profile.resolve(state, handle);
   const get = (point) => (entry ? profile.buy(state, me, handle, { point }) : profile.claim(state, me, handle, { point }));
-  if (choice === "none") return get(undefined);
+  // Nowhere: a name that pointed somewhere stops pointing there.
+  if (choice === "none") return get(null);
   if (choice === "new") {
     if (!entry) return (await profile.createProfile(state, me, { handle })).write;
     const made = await profile.createProfile(state, me);
@@ -691,7 +689,7 @@ async function viewBuy(handle, state) {
   const balance = connected && price + FEE > 0n ? await balanceOf(connected) : undefined;
   const short = balance !== undefined && balance < price + FEE;
   return `
-    ${backBar(`#/search/${esc(handle)}`, "Back to results")}
+    ${backBar(`#/search/${handle}`, "Back to results")}
     <main class="col stack" style="margin-top: 12px">
       <h1 style="margin: 0">Checkout</h1>
       <form id="buy" class="panel stack" data-handle="${esc(handle)}" data-price="${price}">
@@ -706,7 +704,7 @@ async function viewBuy(handle, state) {
         ${short ? `<p class="note" id="short" style="margin: 0">This costs ${coins(price + FEE)}. Your account has ${coins(balance)} on this chain.</p>` : ""}
         ${ready ? `<button class="pill accent big" type="submit">${price + FEE === 0n ? `Get @${esc(handle)} free` : `Buy for ${coins(price + FEE)}`}</button>` : ""}
       </form>
-      ${ready ? "" : walletPanel(`To buy @${esc(handle)}, add Selfhold`)}
+      ${ready ? "" : walletPanel(`To buy @${handle}, add Selfhold`)}
     </main>`;
 }
 
@@ -872,7 +870,7 @@ async function viewProfiles(state) {
         <h2 id="profiles-title">Profiles</h2>
         ${mine.map((p) => `
           <div class="profile-head">
-            ${personRow(p, pageOf(p), [p.name && p.handle && `@${p.handle}`, p.price !== undefined && `for sale · ${coins(p.price)}`, p.offer && "offered"].filter(Boolean).join(" · "))}
+            ${personRow(p, pageOf(p), [p.name && p.handle && `@${p.handle}`, p.price !== undefined && `for sale · ${coins(p.price)}`, p.offer && `offered to ${shortID(p.offer)}`].filter(Boolean).join(" · "))}
             <div class="end">
               ${p.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take-profile/${p.id}`))}">Copy link<span class="sr"> to take ${esc(nameOf(p))}</span></button>` : ""}
               <a class="pill" href="#/edit/${esc(p.id)}">Edit<span class="sr"> ${esc(nameOf(p))}</span></a>
@@ -952,7 +950,7 @@ async function render() {
       if (needs && !connected && wallet() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
-      const why = page === "take" ? `To take @${arg}, connect Selfhold` : page === "take-profile" ? "To take this profile, connect Selfhold" : "Your profiles belong to your wallet's key";
+      const why = page === "take" ? (profile.isHandle(arg) ? `To take @${arg}, connect Selfhold` : "To take a name, connect Selfhold") : page === "take-profile" ? "To take this profile, connect Selfhold" : "Your profiles belong to your wallet's key";
       if (needs && !wallet()) {
         html = `<main class="col stack" style="margin-top: 24px">${walletPanel(why, true)}</main>`;
       } else if (needs && !connected) {
@@ -1080,10 +1078,9 @@ document.addEventListener("click", async (event) => {
         location.hash = `#/edit/${made.id}`;
       },
     );
-  } else if (d.nameMenu) {
-    await nameMenu(d.nameMenu);
-  } else if (d.profileMenu) {
-    await profileMenu(d.profileMenu);
+  } else if (d.nameMenu || d.profileMenu) {
+    // A menu reads the chain first: if no node answers, say so.
+    await (d.nameMenu ? nameMenu(d.nameMenu) : profileMenu(d.profileMenu)).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.takeName) {
     const me = connected;
     const choice = $("#to").value;
@@ -1141,7 +1138,7 @@ async function nameMenu(handle) {
   else if (choice === "default") {
     act(`Making @${handle} the default name`, async () => profile.showName(await readState(), me, to.id, handle), async (s) => (await profile.getProfile(s, to.id))?.handle === handle);
   } else if (choice === "keep") {
-    act(`@${handle}`, async () => profile.unlist(await readState(), me, handle), async (s) => {
+    act(entry.offer ? `Taking back the offer of @${handle}` : `Taking @${handle} off sale`, async () => profile.unlist(await readState(), me, handle), async (s) => {
       const now = await profile.resolve(s, handle);
       return now?.price === undefined && now?.offer === undefined;
     });
@@ -1173,14 +1170,16 @@ async function pointHandle(handle) {
     const typed = await sheet({
       title: `Point @${handle} at someone else's profile`,
       body: "It stays your name: you can point it back, sell it or give it away.",
-      input: { label: "Their profile: its @name or its link", attrs: 'autocomplete="off" spellcheck="false"', check: (v) => (/^@?[a-z0-9_]+$/.test(v) || profileIdIn(v) ? "" : "An @name or a profile link.") },
+      input: { label: "Their profile: its @name or its link", attrs: 'autocomplete="off" spellcheck="false"', check: (v) => (profile.isHandle(asHandle(v)) || profileIdIn(v) ? "" : "An @name or a profile link.") },
       confirm: "Point it",
     });
     if (typed === null) return;
     const now = await readState();
-    target = profileIdIn(typed) ?? (await profile.resolve(now, typed.replace(/^@/, "")))?.profile;
+    // A name first (a handle may look like a profile id), then a profile id or link.
+    target = (await profile.resolve(now, asHandle(typed)))?.profile ?? profileIdIn(typed);
     if (!target || !(await profile.getProfile(now, target))) return toast(`No profile is ${typed}.`, { bad: true });
   }
+  if (target === entry.pointer) return toast(`@${handle} already points there.`);
   const me = connected;
   act(
     `Pointing @${handle}`,
@@ -1208,7 +1207,7 @@ async function listHandle(handle) {
     input: {
       label: "Asking price",
       attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
-      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
+      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 63n ? "" : "A whole number of coins, below 9,223,372,036,854,775,808."),
     },
     confirm: "List it",
   });
@@ -1264,7 +1263,7 @@ async function profileMenu(id) {
   });
   const me = connected;
   if (choice === "keep") {
-    act(`Keeping ${nameOf(p)}`, async () => profile.setProfileTerms(await readState(), me, id), async (s) => {
+    act(p.offer ? `Taking back the offer of ${nameOf(p)}` : `Taking ${nameOf(p)} off sale`, async () => profile.setProfileTerms(await readState(), me, id), async (s) => {
       const now = await profile.getProfile(s, id);
       return now?.price === undefined && now?.offer === undefined;
     });
@@ -1280,7 +1279,7 @@ async function sellProfile(p) {
     input: {
       label: "Asking price",
       attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
-      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
+      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 63n ? "" : "A whole number of coins, below 9,223,372,036,854,775,808."),
     },
     confirm: "List it",
   });
@@ -1295,7 +1294,7 @@ async function giveProfile(p) {
   const to = await sheet({
     title: `Give ${nameOf(p)}`,
     body: "Its card and followers go to the account you name, which takes it from a link you send. Your names stay yours. To move it to a new key of your own, name that key's account.",
-    input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account ID.") },
+    input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? (v === connected ? "That is your own account." : "") : "That is not an account ID.") },
     confirm: "Offer it",
   });
   if (to === null) return;

@@ -193,6 +193,19 @@ test("a name bought without a pointer keeps pointing where it did until its new 
   assert.equal((await profile.getProfile(c.state, mira)).handle, undefined);
 });
 
+test("a name bought or claimed pointing nowhere (null) stops pointing where it did", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const mira = await made(c, ALICE, { name: "Mira" }, "mira");
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mira", 5n)));
+  assert.ok(c.submit(BOB, await profile.buy(c.state, BOB, "mira", { point: null })));
+  assert.equal((await profile.resolve(c.state, "mira")).pointer, undefined);
+  assert.equal((await profile.getProfile(c.state, mira)).handle, undefined);
+  // Nothing to clear: no pointer write at all.
+  assert.ok(c.submit(BOB, await profile.list(c.state, BOB, "mira", 5n)));
+  assert.equal((await profile.buy(c.state, ALICE, "mira", { point: null })).actions.length, 3);
+  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, "fresh", { point: null })));
+});
+
 test("a buyer whose price went stale, or a name not for sale, is refused and pays nothing", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 1000 });
   const a = await made(c, ALICE, undefined, "rare");

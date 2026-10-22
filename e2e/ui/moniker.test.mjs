@@ -468,7 +468,7 @@ test("Alice sells @alice_art; Bob buys it onto a new profile, and Alice's profil
   await nameMenu(page, "alice_art", "Sell");
   await expect(page.locator("#sheet")).toContainText("Only the name moves.");
   await answerSheet(page, "05", "List it");
-  await expect(page.locator("#sheet-error")).toHaveText("A whole number of coins.");
+  await expect(page.locator("#sheet-error")).toHaveText("A whole number of coins, below 9,223,372,036,854,775,808.");
   await answerSheet(page, "500", "List it");
   await expect(art.locator(".label")).toContainText("for sale · 500");
 
@@ -580,6 +580,21 @@ test("Alice lends @alice_lend to Bob's profile; Bob makes it his default, and th
   await choose(page, "No profile");
   await expect(nameRowOf(page, "alice_lend").locator(".label")).toHaveText("no profile");
   expect((await profile.getProfile(await state(), bobs)).handle).toBeUndefined();
+});
+
+test("a name bought with No profile for now stops pointing at its seller's profile", async ({ page }) => {
+  const [seller, buyer] = [newAccount(), newAccount()];
+  const theirs = await makeAs(seller, "secondhand");
+  await writeAs(seller, await profile.list(await state(), seller.address, "secondhand", 0n));
+  await until("listed", async () => (await profile.resolve(await state(), "secondhand"))?.price === 0n);
+  await openApp(page, buyer, "#/buy/secondhand");
+  await page.getByLabel("Point it at").selectOption("none");
+  await page.getByRole("button", { name: "Get @secondhand free" }).click();
+  await expect(page.locator("h1")).toHaveText("@secondhand is yours");
+  await expect(page.locator("main")).toContainText("It points at no profile yet.");
+  const now = await profile.resolve(await state(), "secondhand");
+  expect([now.owner, now.pointer]).toEqual([buyer.address, undefined]);
+  expect((await profile.getProfile(await state(), theirs)).handle).toBeUndefined();
 });
 
 test("a name with no profile: Ivy gets one, and its page says who owns it and that it points nowhere", async ({ page }) => {
@@ -883,6 +898,18 @@ test("a card another client wrote shows as text, long ones fit a phone, and odd 
   await expect(page.locator(".links a")).toHaveText(`<b>bold</b> ${long}`);
   expect(await page.evaluate(() => window.__hit)).toBeUndefined();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+
+  // A profile with no default name is labelled by its card's name, as text, on its lists.
+  let bare = profile.newProfileId();
+  while (await (await state()).get(profile.profileKey(bare))) bare = profile.newProfileId();
+  await writeAs(mo, { actions: [{ key: profile.profileKey(bare), newValue: mo.address }, { key: profile.ownsKey(mo.address, bare), newValue: "1" }, { key: profile.cardKey(bare), newValue: JSON.stringify({ name }) }] });
+  await until("the bare profile", async () => (await profile.getProfile(await state(), bare))?.name === name);
+  await page.goto(stack.app + `#/${bare}/followers`);
+  await expect(page.locator(".top .label")).toHaveText(name);
+  // A crafted take link shows as text too.
+  await page.goto(stack.app + `#/take/${encodeURIComponent('<img src=x onerror="window.__hit=3">')}`);
+  await expect(page.locator("h1")).toHaveText("To take a name, connect Selfhold");
+  expect(await page.evaluate(() => window.__hit)).toBeUndefined();
 
   await page.goto(stack.app + "#/");
   await page.locator("#q").fill("Ünïcode");
