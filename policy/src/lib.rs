@@ -1,30 +1,28 @@
 //! Transaction-scope validity policy for Moniker, the names chain.
 //!
-//! An account owns names; a name points at a profile on each app chain that
-//! uses it, and the profiles live on those chains. Keys:
+//! An account owns names, and points each at an account, any account. Keys:
 //!
 //! - `user/<account>/...`: the account's own records. The account must sign,
-//!   and may create, overwrite or delete them.
+//!   and may create, overwrite or delete them. `user/<account>/name` is the
+//!   handle the account shows: apps show `@<handle>` for an account only
+//!   while it names the handle and the handle points at it.
 //! - `name/<handle>`: a name, a token held by an account (see the rules
 //!   crate's `tokens`): `<owner>`, `<owner>@<price>` or `<owner>><account>`.
 //!   Its owner may also release it. A handle is lowercase letters, digits and
 //!   `_`.
 //! - `names/<account>/<handle>`: `1` while the account owns the name, so an
 //!   account's names list by prefix. It moves only with its name.
-//! - `points/<handle>/<chain>`: the profile the name points at on app chain
-//!   `<chain>`, a path such as `Nexus/testnet/rave`. Only the name's owner
-//!   writes it. This chain can't see the app chains, so readers check that
-//!   the profile exists and names the handle back.
+//! - `points/<handle>`: the account the name points at. Only the name's
+//!   owner writes it.
 //!
 //! The policy reads the actions once, in order, so it costs what the
 //! transaction's bytes do. A name is followed directly by the index keys it
-//! moves, then by its pointers. A seller's purchases come one after another,
+//! moves, then by its pointer. A seller's purchases come one after another,
 //! and sellers are credited in the order they are first paid.
 //!
 //! Coin actions pass untouched.
 #![cfg_attr(not(test), no_std)]
 
-use lattice_policy_rules::profiles::{is_profile, split};
 use lattice_policy_rules::tokens::{Held, Tokens};
 use lattice_policy_rules::{is_address, transaction_body, Action, Body};
 
@@ -47,7 +45,7 @@ fn check_body(bytes: &[u8], scratch: &mut [u32]) -> Option<()> {
 }
 
 /// The name just written: held after the transaction, or released by its
-/// owner, who may then only delete its pointers.
+/// owner, who may then only delete its pointer.
 #[derive(Clone, Copy)]
 enum Named<'a> {
     Held(Held<'a>),
@@ -57,7 +55,7 @@ enum Named<'a> {
 /// What the walk keeps from the actions read so far.
 struct Walk<'a, 'b> {
     tokens: Tokens<'a, 'b>,
-    /// The name just written, while its index keys and pointers follow.
+    /// The name just written, while its index keys and pointer follow.
     name: Option<Named<'a>>,
 }
 
@@ -70,9 +68,9 @@ impl<'a> Walk<'a, '_> {
         }
         if let Key::Points(handle) = key {
             // Only the name's owner points it, right after it; a released
-            // name's pointers are only deleted, by the owner who released it.
+            // name's pointer is only deleted, by the owner who released it.
             return match (self.name?, action.old_value, action.new_value) {
-                (Named::Held(name), _, Some(p)) if name.id == handle && name.signs => is_profile(p).then_some(()),
+                (Named::Held(name), _, Some(account)) if name.id == handle && name.signs => is_address(account).then_some(()),
                 (Named::Held(name), Some(_), None) if name.id == handle && name.signs => Some(()),
                 (Named::Released(id), Some(_), None) if id == handle => Some(()),
                 _ => None,
@@ -106,10 +104,7 @@ impl<'a> Key<'a> {
         match kind {
             b"user" => Some(Key::Own(split(rest).map_or(rest, |(account, _)| account))),
             b"name" => is_handle(rest).then_some(Key::Name(rest)),
-            b"points" => {
-                let (handle, chain) = split(rest)?;
-                (is_handle(handle) && is_chain(chain)).then_some(Key::Points(handle))
-            }
+            b"points" => is_handle(rest).then_some(Key::Points(rest)),
             b"names" => {
                 let (account, handle) = split(rest)?;
                 (is_address(account) && is_handle(handle)).then_some(Key::Names(account, handle))
@@ -124,8 +119,8 @@ fn is_handle(text: &[u8]) -> bool {
     !text.is_empty() && text.iter().all(|&byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
-/// A chain path: segments of letters, digits, `-` and `_`, joined by `/`.
-fn is_chain(text: &[u8]) -> bool {
-    text.split(|&byte| byte == b'/')
-        .all(|segment| !segment.is_empty() && segment.iter().all(|&byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
+/// `key` split at its first `/`.
+fn split(key: &[u8]) -> Option<(&[u8], &[u8])> {
+    let at = key.iter().position(|&byte| byte == b'/')?;
+    Some((&key[..at], &key[at + 1..]))
 }

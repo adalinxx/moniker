@@ -9,28 +9,12 @@
 //! one as the key not existing yet.
 #![no_std]
 
-pub mod json;
-pub mod profiles;
 pub mod tokens;
 
 const MAGIC: &[u8] = b"LWPCTX";
 const CONTEXT_ENCODING_VERSION: u16 = 2;
 /// Magic, encoding version, ABI version, scope, height, timestamp.
 const HEADER_BYTES: usize = 6 + 2 + 2 + 1 + 8 + 8;
-/// Where the block's timestamp (int64 ms, big-endian) sits in the header.
-const TIMESTAMP_AT: usize = 19;
-
-/// The timestamp of the block a context is evaluated for, in milliseconds.
-pub fn block_timestamp(context: &[u8]) -> Option<i64> {
-    Some(i64::from_be_bytes(context.get(TIMESTAMP_AT..HEADER_BYTES)?.try_into().ok()?))
-}
-
-/// The chain spec's `targetBlockTime`, in milliseconds.
-pub fn target_block_time(context: &[u8]) -> Option<u64> {
-    let (spec, _) = length_prefixed(context, HEADER_BYTES)?;
-    let (major, value, _) = head(spec, map_value(spec, 0, b"targetBlockTime")?)?;
-    (major == UNSIGNED).then_some(value)
-}
 
 /// The transaction body carried by a transaction-scope context.
 pub fn transaction_body(context: &[u8]) -> Option<&[u8]> {
