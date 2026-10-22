@@ -11,29 +11,28 @@ hand it to someone else, and only your key can change where it points. Any
 app can know you by it.
 
 Moniker (`Nexus/moniker` in tests, `Nexus/testnet/moniker-01c01f` on the
-testnet trial) is the names chain: it holds names, and where each one
-points. It holds no profiles.
+testnet trial) is the names chain: it holds names, where each one points,
+and the handle each account shows. There are no profiles and no admins:
+an account is the identity, and apps keep their own records (cards
+included) on their own chains, keyed by account.
 
-## Names, and profiles in apps
+## Names and accounts
 
 - An **account** is a key, kept in the person's wallet. It is never shown,
   only checked ("Owned by …1a2b3c"). It owns names.
 - A **name** (`@handle`) is an asset its account owns, like a domain: it
-  sells it, gives it or releases it.
-- A **profile** lives on an app's own chain (Rave, Stoa, …): each app
-  defines its profiles there. Moniker doesn't see them.
+  sells it, gives it or releases it, and points it at one account, any
+  account.
 
-A name points at one profile on each app chain, by the chain's full path
-(`Nexus/testnet/rave-186079`) and the profile's id there. Only the name's
-owner writes its pointers. A profile `p` on chain `C` shows `@h` only while
-`about/<p>/name` on `C` is `h` **and** `points/h/C` on Moniker is `p`: either
-side alone shows nothing, so no one shows a name they don't own and no name
-shows on a profile that doesn't choose it. There are no admins.
+An account `a` shows `@h` in every app only while `points/h` is `a` **and**
+`user/<a>/name` is `h`: either side alone shows nothing, so no one shows a
+name that doesn't point at them, and no name shows on an account that
+doesn't choose it. One read of Moniker decides.
 
-Selling or giving a name moves only the name, and the buyer's transaction
-deletes its pointers (setting one of its own if it likes), so no profile
-keeps showing a name its owner sold. Releasing a name deletes all its
-pointers too; anyone may claim it next.
+Selling or giving a name moves the name and clears its pointer (the buyer
+may set it, to itself, in the same transaction), so a seller stops showing
+a name it sold. Releasing a name deletes its pointer; anyone may claim it
+next.
 
 ## Records
 
@@ -41,25 +40,25 @@ pointers too; anyone may claim it next.
 | --- | --- | --- |
 | `name/<h>` | `<owner>`, `<owner>@<price>` (for sale to anyone) or `<owner>><account>` (offered to one account) | its owner, who may also release it; anyone buys at the price; the account it is offered to takes it |
 | `names/<a>/<h>` | `1` while account `<a>` owns `@h`: an account's names in one read | only together with the name it indexes |
-| `points/<h>/<chain>` | The profile id `@h` points at on app chain `<chain>` (a full path) | the name's owner, right after the name; deleted when it is released |
-| `user/<a>/...` | An account's own values, such as `key.x25519` or `app.<name>.<field>` | `<a>` |
+| `points/<h>` | The account `@h` points at | the name's owner, right after the name; deleted when it is released |
+| `user/<a>/name` | The handle account `<a>` shows, while it points at `<a>` | `<a>` |
+| `user/<a>/...` | An account's other values, such as `key.x25519` or `app.<name>.<field>` | `<a>` |
 
-A handle is lowercase letters, digits and `_`; a chain path is segments of
-letters, digits, `-` and `_` joined by `/`; a profile id is 16 characters of
-`a`–`z` and `2`–`7`. The first to claim a free name owns it. A buyer names
-the value they read, so if the price changed, the purchase is refused.
+A handle is lowercase letters, digits and `_`. The first to claim a free
+name owns it. A buyer names the value they read, so if the price changed,
+the purchase is refused.
 
 The policy sees only a transaction, so a write acting for a name rewrites
 its token to the value it has: consensus checks every old value, and the
 policy reads the owner from it. Nothing is put on an account without its
 signature, which is why a gift is an offer the receiver takes. The policy
 reads the actions once, in order: a name, then the index keys it moves (the
-one it leaves first), then its pointers; a seller's purchases one after
+one it leaves first), then its pointer; a seller's purchases one after
 another. The SDK writes this order; anyone writing transactions by hand
 follows it.
 
 The policy module is
-`bafyreieg5pneszyq5e6ygfwg2otdf5cecekbbw25sg5kkr7letnfb4jjve`
+`bafyreihnnbeuihjlw23xswfhduf23xbltsmn37oymwshmenmzsabgv4fzu`
 (`chain/spec.json`; `chain/moniker_policy.wasm` is that module).
 
 ## Use Moniker in your app
@@ -69,19 +68,18 @@ Apps read and write Moniker through
 handling, writes signed in the person's Selfhold wallet.
 
 ```js
-import { createMoniker, createProfiles } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@<release>/src/browser.mjs";
+import { createMoniker } from "https://cdn.jsdelivr.net/gh/adalinxx/moniker-sdk@<release>/src/browser.mjs";
 
 const moniker = createMoniker();
-await moniker.name("@alice");                  // { handle, owner, price?, offer?, points: { [chain]: profile id } }
-await moniker.pointer("@alice", "Nexus/testnet/rave-186079");
-await moniker.point("@alice", "Nexus/testnet/rave-186079", id, { wallet: window.lattice });
+await moniker.name("@alice");                       // { handle, owner, price?, offer?, pointer? }
+await moniker.handleOf(address);                    // "alice" while both sides agree, else undefined
+await moniker.handlesOf(addresses);                 // for a feed, in order, from one read
+await moniker.label(address, card);                 // "Alice @alice"
+await moniker.claim("@alice", { show: true }, { wallet: window.lattice }); // point it at you and show it, in one transaction
 ```
 
-Your app's chain defines its profiles with the shared rules (`rules/`, the
-`profiles` module); `createProfiles({ chain, moniker })` reads them and shows
-a profile's `@handle` only when both sides agree. This repo holds the SDK as
-the submodule `sdk/`; clone with `--recurse-submodules`, or run
-`git submodule update --init`.
+This repo holds the SDK as the submodule `sdk/`; clone with
+`--recurse-submodules`, or run `git submodule update --init`.
 
 ## The app
 
@@ -90,18 +88,22 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
 `app/` is a static names manager laid out like a domain registrar:
 
-- **Search**: a name's page says whether it is free (Claim it, optionally
-  listed at a price at once), for sale (Buy), offered to you (Take), yours or
-  taken; who owns it ("Owned by …" and the account's last 6 characters,
-  linking to its page); and where it points, one row per app chain, known
-  apps (Rave, Stoa, Follows, Wheatpaste, Fanfare) by name, others by path.
-- **My names**: each name with a menu: Point at… (a known app or any chain
-  path, then the profile id there), Stop pointing on a chain, Sell, Give to
-  an account, Stop selling or Take back the offer, and Release (confirmed in
-  the page). Claim a new name. A gift is an offer: the giver gets a link to
-  send, and the receiver takes it from there.
+- **Search**: a name's page says whether it is free (Claim it, pointed at
+  you, optionally listed at a price at once, optionally shown as your
+  handle in the same approval), for sale (Buy: it comes pointing at you),
+  offered to you (Take), yours or taken; who owns it ("Owned by …" and the
+  account's last 6 characters, linking to its page); where it points
+  ("Points at …", linking to that account) and whether that account shows
+  it. A name pointing at you offers Show this handle.
+- **My names**: the handle your account shows, with Stop showing; each
+  name with a menu: Show this handle, Point at me, Point at an account…,
+  Stop pointing, Sell, Give to an account, Stop selling or Take back the
+  offer, and Release (confirmed in the page); others' names pointing at you,
+  each with Show this handle; and Claim a new name. A gift is an offer: the
+  giver gets a link to send, and the receiver takes it from there.
 - **For sale**: names their owners are selling.
-- **Accounts** (`#/account/<address>`): the names an account owns.
+- **Accounts** (`#/account/<address>`): the handle an account shows, and
+  the names it owns.
 
 There is no log in: the page asks the wallet only where a key is needed,
 and only from a click, as Selfhold requires. Without a wallet it shows how to
@@ -120,7 +122,7 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
 ## Layout
 
 - `rules/`: `lattice-policy-rules`, the parts Lattice policies share:
-  reading the context and body, the token rule, and profiles for app chains.
+  reading the context and body, and the token rule.
 - `policy/`: the Moniker policy.
 - `chain/`: the chain spec and the built policy module it names.
 - `sdk/`: [moniker-sdk](https://github.com/adalinxx/moniker-sdk), a

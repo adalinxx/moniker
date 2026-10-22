@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Moniker</title>
-<meta name="description" content="Own your name on the internet: an @handle you keep, pointed at your profile in each app.">
+<meta name="description" content="Own your name on the internet: an @handle you keep, shown on your account in every app.">
 <link rel="icon" href="./brand/favicon.ico" sizes="any">
 <link rel="icon" href="./brand/favicon.svg" type="image/svg+xml">
 <style>
@@ -109,10 +109,10 @@ h1[tabindex="-1"]:focus { outline: none; }
 .pill.bad { color: var(--bad); }
 .pill.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }
 .owned { margin: 0; color: var(--soft); }
-.pointers { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; table-layout: fixed; }
-.pointers th, .pointers td { text-align: left; padding: 12px 16px; border-top: 1px solid var(--hair); overflow-wrap: anywhere; font-weight: 400; }
-.pointers thead th { border-top: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
-.pointers tbody th { font-weight: 600; }
+.shows { margin: 8px 0 0; color: var(--soft); }
+#shows, .shows { overflow-wrap: anywhere; }
+.check { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--soft); }
+.check input { width: 20px; height: 20px; margin: 0; }
 button.quiet { min-height: 44px; }
 h1.empty { font-size: 18px; font-weight: 400; }
 </style>

@@ -1,12 +1,11 @@
 // Moniker: @names, read from the names chain by CID and written through the
 // Selfhold wallet, which asks the owner to approve every change. An account
-// (a key) owns names; each name points at one profile on each app chain that
-// uses it (Rave, Stoa, …), where the profiles live. Reading needs no wallet.
+// (a key) owns names, and points each at an account, any account. An account
+// shows `@h` only while it names h and h points at it. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import * as names from "../sdk/src/records/names.mjs";
-import { chainPath as checkedChain } from "../sdk/src/records/shared.mjs";
 import { writeRequest } from "../sdk/src/records/wallet.mjs";
-import { createMoniker, isAddress, isHandle, isProfileId } from "../sdk/src/index.mjs";
+import { createMoniker, isAddress, isHandle } from "../sdk/src/index.mjs";
 
 // ---------------------------------------------------------------- settings
 
@@ -43,20 +42,6 @@ const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoi
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
 const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand)));
-
-/**
- * Apps known here by name: a pointer on their chain shows the app's name.
- * None has a page by profile id yet, so a profile shows as its id.
- */
-const APPS = [
-  { name: "Rave", chain: "Nexus/testnet/rave-186079" },
-  { name: "Stoa", chain: "Nexus/testnet/stoa-41d5ab" },
-  { name: "Follows", chain: "Nexus/testnet/follows-a8fa7f" },
-  { name: "Wheatpaste", chain: "Nexus/testnet/wheatpaste-acbbcf" },
-  { name: "Fanfare", chain: "Nexus/testnet/fanfare-a5688b" },
-];
-const appOf = (chain) => APPS.find((a) => a.chain === chain);
-const chainLabel = (chain) => appOf(chain)?.name ?? chain;
 
 // ---------------------------------------------------------------- reading
 
@@ -162,15 +147,6 @@ const esc = (text) =>
 const shortID = (address) => `…${address.slice(-6)}`;
 const coins = (amount) => `${amount.toLocaleString("en-US")}`;
 const priceProblem = (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 63n ? "" : "A whole number of coins, below 9,223,372,036,854,775,808.");
-function chainProblem(v) {
-  try {
-    checkedChain(v);
-  } catch {
-    return "A chain path is names of letters, digits, - and _, joined by /.";
-  }
-  return v.includes("/") ? "" : "A chain's full path, such as Nexus/testnet/rave-186079.";
-}
-
 function toast(message, { bad = false } = {}) {
   const box = document.createElement("div");
   box.className = `toast${bad ? " bad" : ""}`;
@@ -282,15 +258,14 @@ function termsOf(n) {
   return "";
 }
 
-/** Where a name points, in a few words: the apps, by name. */
+/** Where a name points, in a few words. */
 function pointsLabel(n) {
-  const chains = Object.keys(n.points);
-  return chains.length ? `points on ${chains.map(chainLabel).join(", ")}` : "points nowhere";
+  if (!n.pointer) return "points nowhere";
+  return n.pointer === connected ? "points at you" : `points at ${shortID(n.pointer)}`;
 }
 
-/** One name in a list: the handle, linked to its page, where it points, and its terms. */
-function handleRow(n, end = "") {
-  const label = [pointsLabel(n), termsOf(n)].filter(Boolean).join(" · ");
+/** One name in a list: the handle, linked to its page, and `label` (by default where it points, and its terms). */
+function handleRow(n, end = "", label = [pointsLabel(n), termsOf(n)].filter(Boolean).join(" · ")) {
   return `
     <div class="row">
       <a class="mono" href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>
@@ -299,33 +274,24 @@ function handleRow(n, end = "") {
     </div>`;
 }
 
-/** A name's pointers: one row per app chain, by the app's name where it is known. */
-function pointersTable(n) {
-  const rows = Object.entries(n.points).sort(([a], [b]) => (a < b ? -1 : 1));
-  if (!rows.length) return `<p class="note" style="margin: 0">@${esc(n.handle)} points at no profile in any app.</p>`;
-  return `
-    <table class="pointers">
-      <caption class="sr">Where @${esc(n.handle)} points</caption>
-      <thead><tr><th scope="col">App</th><th scope="col">Profile</th></tr></thead>
-      <tbody>
-        ${rows.map(([chain, p]) => {
-          const known = Boolean(appOf(chain));
-          return `<tr>
-            <th scope="row"${known ? ` title="${esc(chain)}"` : ` class="mono"`}>${esc(chainLabel(chain))}</th>
-            <td class="mono">${esc(p)}</td>
-          </tr>`;
-        }).join("")}
-      </tbody>
-    </table>`;
+/** Where a name points: the account, linked to its page, and whether that account shows it. */
+async function pointsAt(state, n) {
+  if (!n.pointer) return `<p class="note" id="points" style="margin: 0">@${esc(n.handle)} points at no account.</p>`;
+  const shown = (await names.handleOf(state, n.pointer)) === n.handle;
+  return `<p class="note" id="points" style="margin: 0">Points at ${n.pointer === connected ? `<a href="#/account/${esc(n.pointer)}">you</a>` : accountLink(n.pointer)} · ${shown ? `shown as @${esc(n.handle)}` : "not shown there"}</p>`;
 }
 
-/** An account: only its ID and its names, so anyone can check who owns what. */
+/** Show this handle: for the connected account, on a name pointing at it that it doesn't show yet. */
+const showButton = (handle) => `<button class="pill" type="button" data-show="${esc(handle)}">Show this handle<span class="sr"> @${esc(handle)}</span></button>`;
+
+/** An account: its ID, the handle it shows, and its names, so anyone can check who owns what. */
 async function viewAccount(address, state) {
   const mine = connected === address;
-  const owned = await names.namesOf(state, address);
+  const [owned, shows] = await Promise.all([names.namesOf(state, address), names.handleOf(state, address)]);
   return `
     <main class="col card account-page">
       <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span></h1>
+      <p class="shows">${shows ? `Shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>` : "Shows no handle"}</p>
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
       <p class="bio">${mine ? "An account is a private key. It owns these names, and is never shown on them." : "This key owns these names."}</p>
       <section class="names">
@@ -352,7 +318,7 @@ function viewStart(message = "") {
   return `
     <main class="col start">
       <h1 class="hero">Own your name on the internet.</h1>
-      <p class="lede">An @handle that belongs to you, not to an app. Point it at your profile in each app you use.</p>
+      <p class="lede">An @handle that belongs to you, not to an app. Point it at your account, and every app shows it.</p>
       <div class="stack" style="margin-top: 24px">
         ${searchBox()}
         <p class="note" id="search-note" aria-live="polite">${esc(message) || "Lowercase letters, digits and _."}</p>
@@ -360,7 +326,7 @@ function viewStart(message = "") {
       <ul class="promises">
         <li><b>Yours to keep.</b> No company can take it back, rename it or hand it to someone else. No renewals.</li>
         <li><b>Proof it's you.</b> Only your key can change where your name points, so an app showing your @handle is showing you.</li>
-        <li><b>One name everywhere.</b> Each app keeps its own profiles; your name points at yours in each one.</li>
+        <li><b>One name everywhere.</b> Your account shows it in every app, from one record.</li>
       </ul>
     </main>`;
 }
@@ -397,6 +363,8 @@ function claimForm(handle) {
         <label for="claim-price">Sell it right away at (optional)</label>
         <input id="claim-price" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Not for sale">
       </div>
+      <label class="check"><input type="checkbox" id="claim-show"> Show it as my handle</label>
+      <p class="note" style="margin: 0">It points at your account; you can point it elsewhere any time.</p>
       <button class="pill accent big" type="submit">Claim @${esc(handle)}</button>
     </form>`;
 }
@@ -415,7 +383,7 @@ async function viewSearch(q, state, { near = true } = {}) {
   }
   const headline = {
     available: ["Available", "No one owns it yet, so it costs 0."],
-    sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction. It comes pointing nowhere, so no profile keeps showing it; point it at yours after."],
+    sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction. It comes pointing at your account."],
     offered: ["Offered to you", "Its owner is giving it to your account. Take it, and it's yours."],
     yours: ["Yours", "Your account owns this name."],
     taken: ["Taken", "Someone owns it and isn't selling it."],
@@ -441,7 +409,8 @@ async function viewSearch(q, state, { near = true } = {}) {
       ${entry ? `
       <section class="section stack" aria-labelledby="points-title">
         <h2 id="points-title">Where it points</h2>
-        ${pointersTable(entry)}
+        ${await pointsAt(state, entry)}
+        ${connected && entry.pointer === connected && (await names.handleOf(state, connected)) !== q ? `<div>${showButton(q)}</div>` : ""}
       </section>` : ""}
       ${more.length ? `
       <section class="section stack" aria-labelledby="more">
@@ -507,7 +476,7 @@ async function viewTake(handle, state) {
     <main class="col card" style="margin-top: 48px">
       <span class="badge">A gift</span>
       <h1 class="mono">@${esc(handle)}</h1>
-      <p class="bio">Its owner is giving it to your account. Take it, and it's yours. It comes pointing nowhere; point it at yours after.</p>
+      <p class="bio">Its owner is giving it to your account. Take it, and it's yours, pointing at your account.</p>
       <div class="stack" style="width: 100%; margin-top: 28px">
         <button class="pill accent big" type="button" data-take="${esc(handle)}">Take @${esc(handle)}</button>
       </div>
@@ -517,22 +486,55 @@ async function viewTake(handle, state) {
 /** The link a receiver opens to take an offered name. */
 const takeLink = (hash) => `${location.origin}${location.pathname}${hash}`;
 
-/** My names: each name you own, with a menu, and a form to claim another. */
+/** The names other accounts own that point at `account`. Reads all of `points/`. */
+async function pointingAt(state, account) {
+  const found = [];
+  for await (const [key, value] of state.list("points/")) {
+    if (value !== account) continue;
+    const entry = await held(state, key.slice("points/".length));
+    if (entry && entry.owner !== account && entry.pointer === account) found.push(entry);
+  }
+  return found;
+}
+
+/** My names: the handle your account shows, each name you own with a menu, names others point at you, and a form to claim another. */
 async function viewNames(state) {
-  const mine = await names.namesOf(state, connected);
+  const [mine, shows, named, lent] = await Promise.all([
+    names.namesOf(state, connected),
+    names.handleOf(state, connected),
+    names.getField(state, connected, "name"),
+    pointingAt(state, connected),
+  ]);
+  const said = shows
+    ? `Your account is shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>.`
+    : named
+      ? `Your account names @${esc(named)}, but it doesn't point at you, so no handle is shown.`
+      : "Your account shows no handle. Point a name at it, then show it.";
   return `
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0">My names</h1>
+      <section class="panel stack section" aria-labelledby="account-title">
+        <h2 id="account-title" style="margin: 0">Your account <a class="mono" href="#/account/${esc(connected)}">${esc(shortID(connected))}</a></h2>
+        <p id="shows" style="margin: 0">${said}</p>
+        ${named ? `<button class="pill" type="button" data-stop-showing style="align-self: flex-start">Stop showing</button>` : ""}
+      </section>
       <section class="section stack" aria-label="Your names">
         ${mine.map((n) => handleRow(n, `
           ${n.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take/${n.handle}`))}">Copy link<span class="sr"> to take @${esc(n.handle)}</span></button>` : ""}
+          ${n.pointer === connected && n.handle !== shows ? showButton(n.handle) : ""}
           <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`)).join("")
           || `<p class="note">No names yet.</p>`}
       </section>
+      ${lent.length ? `
+      <section class="section stack" aria-labelledby="lent-title">
+        <h2 id="lent-title">Others' names pointing at you</h2>
+        ${lent.map((n) => handleRow(n, n.handle === shows ? `<span class="label">shown</span>` : showButton(n.handle), `owned by ${shortID(n.owner)}`)).join("")}
+      </section>` : ""}
       <form id="claim-new" class="panel stack section" aria-labelledby="claim-title">
         <h2 id="claim-title" style="margin: 0">Claim a name</h2>
         <div class="field"><label for="new-handle">Name</label><input id="new-handle" class="mono" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="yourname"></div>
         <div class="field"><label for="new-price">Sell it right away at (optional)</label><input id="new-price" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Not for sale"></div>
+        <label class="check"><input type="checkbox" id="new-show"> Show it as my handle</label>
         <button class="pill accent" type="submit" style="align-self: flex-start">Claim</button>
       </form>
     </main>`;
@@ -617,7 +619,6 @@ async function render() {
         html = isHandle(q) ? await viewSearch(q, state) : viewStart(q ? `“${arg}”: a name is lowercase letters, digits and _.` : "");
       } else if (page === "account" && isAddress(arg)) html = await viewAccount(arg, state);
       else if (r.startsWith("@") && isHandle(r.slice(1))) html = await viewSearch(r.slice(1), state, { near: false });
-      else if (isProfileId(r)) html = viewMessage("Profiles live in apps now", "Each app keeps its own profiles on its own chain. Moniker holds names, and where each one points.");
       else if (r === "") html = viewStart();
       else html = viewStart(`“${r}” is not a name or an account.`);
     }
@@ -684,7 +685,7 @@ document.addEventListener("click", async (event) => {
         // Bought at the price shown, or not at all.
         if (entry?.price === undefined) throw new Error(`@${handle} was just taken, and it isn't for sale.`);
         if (entry.price !== shown) throw new Error(`The price of @${handle} just changed. Look again.`);
-        return names.buy(state, me, handle);
+        return names.buy(state, me, handle, { point: true });
       },
       async (s, me) => (await held(s, handle))?.owner === me,
     );
@@ -695,34 +696,45 @@ document.addEventListener("click", async (event) => {
       const entry = await held(state, handle);
       // Taken as a gift, for nothing, or not at all: never a purchase under "Take".
       if (entry?.offer !== me || entry.price !== undefined) throw new Error(`@${handle} isn't offered to you anymore. Look again.`);
-      return names.buy(state, me, handle);
+      return names.buy(state, me, handle, { point: true });
     }, async (s, me) => (await held(s, handle))?.owner === me, () => {
       location.hash = `#/@${handle}`;
       render();
     });
+  } else if (d.show) {
+    const handle = d.show;
+    act(`Showing @${handle}`, (s, me) => names.showName(s, me, handle), async (s, me) => (await names.handleOf(s, me)) === handle);
+  } else if ("stopShowing" in d) {
+    act("Showing no handle", (s, me) => names.stopShowing(s, me), async (s, me) => (await names.getField(s, me, "name")) === undefined);
   }
 });
 
 /** What can be done with a name of yours, chosen from a sheet. */
 async function nameMenu(handle) {
-  const entry = await held(await readState(), handle);
+  const state = await readState();
+  const entry = await held(state, handle);
   if (entry?.owner !== connected) return render();
+  const shown = (await names.handleOf(state, connected)) === handle;
   const terms = entry.price !== undefined || entry.offer;
   const said = [pointsLabel(entry), termsOf(entry)].filter(Boolean).join(" · ");
   const choice = await sheet({
     title: `@${handle}`,
     body: `${said[0].toUpperCase()}${said.slice(1)}.`,
     choices: [
-      { value: "point", label: "Point at…" },
-      ...(Object.keys(entry.points).length ? [{ value: "unpoint", label: "Stop pointing on a chain" }] : []),
+      ...(shown ? [] : [{ value: "show", label: "Show this handle" }]),
+      ...(entry.pointer === connected ? [] : [{ value: "me", label: "Point at me" }]),
+      { value: "account", label: "Point at an account…" },
+      ...(entry.pointer ? [{ value: "nowhere", label: "Stop pointing" }] : []),
       ...(terms
         ? [{ value: "keep", label: entry.offer ? "Take back the offer" : "Stop selling" }]
         : [{ value: "sell", label: "Sell" }, { value: "give", label: "Give to an account" }]),
       { value: "release", label: "Release", bad: true },
     ],
   });
-  if (choice === "point") await pointHandle(handle);
-  else if (choice === "unpoint") await unpointHandle(handle, entry);
+  if (choice === "show") act(`Showing @${handle}`, (s, me) => names.showName(s, me, handle), async (s, me) => (await names.handleOf(s, me)) === handle);
+  else if (choice === "me") pointAt(handle, connected);
+  else if (choice === "account") await pointAtAccount(handle, entry);
+  else if (choice === "nowhere") pointAt(handle, null);
   else if (choice === "keep") {
     act(entry.offer ? `Taking back the offer of @${handle}` : `Taking @${handle} off sale`, (s, me) => names.unlist(s, me, handle), async (s) => {
       const now = await held(s, handle);
@@ -733,49 +745,28 @@ async function nameMenu(handle) {
   else if (choice === "release") await releaseHandle(handle, entry);
 }
 
-/** Points a name of yours at a profile on one app chain: a known app's, or any chain by its path. */
-async function pointHandle(handle) {
-  let chain = await sheet({
-    title: `Point @${handle} on`,
-    body: "Each app keeps its own profiles. Choose the app, then the profile there.",
-    choices: [...APPS.map((a) => ({ value: a.chain, label: a.name })), { value: "other", label: "Another chain…" }],
-  });
-  if (chain === null) return;
-  if (chain === "other") {
-    chain = await sheet({
-      title: `Point @${handle} on another chain`,
-      body: "The app chain's full path.",
-      input: { label: "Chain path", attrs: 'autocomplete="off" spellcheck="false" autocapitalize="none" class="mono" placeholder="Nexus/testnet/…"', check: chainProblem },
-      confirm: "Next",
-    });
-    if (chain === null) return;
-  }
-  const current = (await held(await readState(), handle))?.points[chain];
-  const p = await sheet({
-    title: `Point @${handle} on ${chainLabel(chain)}`,
-    body: `The profile's id in that app. The profile shows @${handle} once it names it too.`,
-    input: { label: "Profile id", value: current, attrs: 'autocomplete="off" spellcheck="false" autocapitalize="none" class="mono"', check: (v) => (isProfileId(v) ? "" : "A profile id is 16 characters: a–z and 2–7.") },
-    confirm: "Point it",
-  });
-  if (p === null) return;
-  act(`Pointing @${handle} on ${chainLabel(chain)}`, (s, me) => names.pointName(s, me, handle, chain, p), async (s) => (await names.pointer(s, handle, chain)) === p);
+/** Points a name of yours at account `to`, or nowhere when null. */
+function pointAt(handle, to) {
+  const where = to === null ? "nowhere" : to === connected ? "at you" : `at ${shortID(to)}`;
+  act(`Pointing @${handle} ${where}`, (s, me) => names.pointName(s, me, handle, to), async (s) => (await names.pointer(s, handle)) === (to ?? undefined));
 }
 
-/** Stops a name of yours pointing on one chain. */
-async function unpointHandle(handle, entry) {
-  const chain = await sheet({
-    title: `Stop pointing @${handle} on`,
-    body: "The profile there stops showing it.",
-    choices: Object.entries(entry.points).map(([c, p]) => ({ value: c, label: `${chainLabel(c)} · ${p}` })),
+/** Points a name of yours at any account, by its ID. */
+async function pointAtAccount(handle, entry) {
+  const to = await sheet({
+    title: `Point @${handle} at an account`,
+    body: `That account shows @${handle} once it chooses to show it. You can point it elsewhere any time.`,
+    input: { label: "Account ID", value: entry.pointer, attrs: 'autocomplete="off" spellcheck="false" autocapitalize="none" class="mono"', check: (v) => (isAddress(v) ? "" : "That is not an account ID.") },
+    confirm: "Point it",
   });
-  if (chain === null) return;
-  act(`Stopping @${handle} on ${chainLabel(chain)}`, (s, me) => names.pointName(s, me, handle, chain, null), async (s) => (await names.pointer(s, handle, chain)) === undefined);
+  if (to === null) return;
+  pointAt(handle, to);
 }
 
 async function sellHandle(handle) {
   const price = await sheet({
     title: `Sell @${handle}`,
-    body: "Anyone can buy it at this price at once, without asking you. Its pointers are cleared when it is bought, so no profile of yours keeps showing it.",
+    body: "Anyone can buy it at this price at once, without asking you. When it is bought it points at its buyer, so your account stops showing it.",
     input: { label: "Asking price", attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"', check: priceProblem },
     confirm: "List it",
   });
@@ -800,10 +791,9 @@ async function giveHandle(handle) {
 }
 
 async function releaseHandle(handle, entry) {
-  const count = Object.keys(entry.points).length;
   const ok = await sheet({
     title: `Release @${handle}?`,
-    body: `It stops being yours${count ? `, and ${count === 1 ? "its pointer is" : `its ${count} pointers are`} deleted` : ""}. Anyone may claim it next, free. This can't be undone.`,
+    body: `It stops being yours${entry.pointer ? ", and stops pointing at its account" : ""}. Anyone may claim it next, free. This can't be undone.`,
     confirm: `Release @${handle}`,
     danger: true,
   });
@@ -811,15 +801,15 @@ async function releaseHandle(handle, entry) {
   act(`Releasing @${handle}`, (s, me) => names.release(s, me, handle), async (s) => (await held(s, handle)) === undefined);
 }
 
-/** Claims `handle` if it is still free, for sale at `price` if one was typed. */
-function claim(handle, price) {
+/** Claims `handle` if it is still free, pointed at you, for sale at `price` if one was typed, and shown as your handle with `show`. */
+function claim(handle, price, show) {
   act(
     `Claiming @${handle}`,
     async (state, me) => {
       if (await held(state, handle)) throw new Error(`@${handle} was just taken.`);
-      return names.claim(state, me, handle, { price: price === "" ? undefined : BigInt(price) });
+      return names.claim(state, me, handle, { price: price === "" ? undefined : BigInt(price), point: true, show });
     },
-    async (s, me) => (await held(s, handle))?.owner === me,
+    async (s, me) => (await held(s, handle))?.owner === me && (!show || (await names.handleOf(s, me)) === handle),
     () => {
       location.hash = `#/@${handle}`;
       render();
@@ -839,10 +829,11 @@ document.addEventListener("submit", async (event) => {
     const typed = form.id === "claim-new";
     const handle = typed ? asHandle($("#new-handle").value) : form.dataset.handle;
     const price = (typed ? $("#new-price") : $("#claim-price")).value.trim();
+    const show = (typed ? $("#new-show") : $("#claim-show")).checked;
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
     if (price && priceProblem(price)) return toast(`The price: ${priceProblem(price)}`, { bad: true });
     if (!(await connectFirst())) return;
-    claim(handle, price);
+    claim(handle, price, show);
   } else if (form.id === "settings") {
     event.preventDefault();
     saveSettings({
