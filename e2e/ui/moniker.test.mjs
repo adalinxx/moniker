@@ -740,3 +740,54 @@ test("back from adding Selfhold: the page reloads at the same name, then offers 
   await expect(page.locator("#get-wallet")).toHaveCount(0);
   expect(await page.evaluate(() => sessionStorage.getItem("moniker.awaitingWallet"))).toBeNull();
 }, { wallet: false });
+
+// ---------------------------------------------------------------- the handle picker, in another app's page
+
+/** An app's page with <moniker-handle-picker>, as `who`, connected to this origin. */
+async function openPicker(page, who) {
+  await openApp(page, who, "#/names");
+  await page.goto(`${new URL(stack.app).origin}/e2e/ui/picker.html?node=${encodeURIComponent(stack.node)}&chain=${encodeURIComponent(stack.chain)}`);
+}
+
+test("the handle picker in another app: a new account claims a free name and shows it, in one approval", async ({ page }) => {
+  const pia = newAccount();
+  await openPicker(page, pia);
+  await page.getByRole("button", { name: "Use a handle" }).click();
+  const dialog = page.getByRole("dialog", { name: "Use a handle" });
+  await expect(dialog.getByText("You have no names on Moniker yet")).toBeVisible();
+  const asked = page.context().approvals;
+  await dialog.getByLabel("Or claim a free one").fill("@Pia");
+  await dialog.getByLabel("Or claim a free one").press("Enter");
+  await expect(page.locator("#result")).toHaveText("shown @pia");
+  await expect(dialog).toBeHidden();
+  expect(page.context().approvals).toBe(asked + 1);
+  expect(await names.handleOf(await state(), pia.address)).toBe("pia");
+});
+
+test("the handle picker: Cancel resolves to nothing; someone else's name is refused unasked; an owned name is shown", async ({ page }) => {
+  const quin = newAccount();
+  const rex = newAccount();
+  await claimAs(quin, "quin");
+  await claimAs(rex, "rex", { price: 5n });
+  await openPicker(page, quin);
+  const dialog = page.getByRole("dialog", { name: "Use a handle" });
+  await page.getByRole("button", { name: "Use a handle" }).click();
+  await expect(dialog.getByRole("radio", { name: "@quin" })).toBeChecked();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator("#result")).toHaveText("none");
+
+  await page.getByRole("button", { name: "Use a handle" }).click();
+  const asked = page.context().approvals;
+  await dialog.getByLabel("Or claim a free one").fill("rex");
+  await dialog.getByRole("button", { name: "Use handle" }).click();
+  await expect(dialog.getByRole("status")).toContainText("@rex is someone else's. It's for sale on Moniker for 5.");
+  expect(page.context().approvals).toBe(asked);
+
+  await dialog.getByLabel("Or claim a free one").fill("");
+  await dialog.getByRole("button", { name: "Use handle" }).click();
+  await expect(page.locator("#result")).toHaveText("shown @quin");
+  expect(page.context().approvals).toBe(asked + 1);
+  const shown = await names.resolve(await state(), "quin");
+  expect(shown.pointer).toBe(quin.address);
+  expect(await names.handleOf(await state(), quin.address)).toBe("quin");
+});

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Handle picker test</title>
+<link rel="icon" href="data:,">
+</head>
+<body>
+<!-- An app's page with the shared handle picker: ?node=…&chain=… for the stack. -->
+<div id="app">
+  <button type="button" id="use">Use a handle</button>
+  <p id="result"></p>
+</div>
+<moniker-handle-picker></moniker-handle-picker>
+<script type="module">
+  import { createMoniker, defineHandlePicker } from "../../sdk/src/browser.mjs";
+  const query = new URLSearchParams(location.search);
+  const moniker = createMoniker({ nodes: [query.get("node")], chain: query.get("chain").split("/") });
+  defineHandlePicker(moniker);
+  const picker = document.querySelector("moniker-handle-picker");
+  const result = document.querySelector("#result");
+  addEventListener("moniker:sent", (event) => (result.dataset.sent = event.detail.handle));
+  document.querySelector("#use").onclick = async () => {
+    const handle = await picker.open();
+    result.textContent = handle === undefined ? "none" : `shown @${handle}`;
+  };
+</script>
+</body>
+</html>
