@@ -113,7 +113,7 @@ at the same checkout (Selfhold reaches only pages loaded after it), and on a
 phone it offers the link to finish on a computer. The network fee is 0 on the trial chain (its hosts admit 0-fee
 transactions), so a new account needs no coins to buy a name no one owns. It reads every
 record by CID from the nodes in Settings (by default the shared testnet hosts
-`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-273339`)
+`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/testnet/moniker-01c01f`)
 and asks the Selfhold wallet extension to approve each write: a save is one
 transaction, a buy pays the owner in the same one. Reading needs no wallet.
 A photo is kept by your own node: set its URL and cookie in Settings (the node
