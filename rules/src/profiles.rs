@@ -1,32 +1,41 @@
-//! Profiles an app defines on its own chain: public identities an account
-//! owns, sells or gives as tokens, and the records written as them. Keys:
+//! Profiles an app defines on its own chain: public identities, each owned
+//! for good by the account that made it, and the records written as them.
+//! Keys:
 //!
-//! - `profile/<p>`: the profile, a token (see `tokens`). `<p>` is 16
-//!   characters of `a`–`z` and `2`–`7`. A profile is never deleted.
-//! - `owns/<account>/<p>`: `1` while the account owns the profile, so an
-//!   account's profiles list by prefix.
+//! - `profile/<p>`: the profile's owner, an account. `<p>` is 16 characters
+//!   of `a`–`z` and `2`–`7`. Whoever creates a free id owns it, and signs; a
+//!   profile never changes owner and is never deleted.
+//! - `owns/<account>/<p>`: `1`, written directly after the profile is
+//!   created and never changed, so an account's profiles list by prefix.
 //! - `about/<p>/<field>...`: the profile's records (its card, the handle it
 //!   shows, any of the app's fields), written by its owner.
 //!
-//! A transaction acting for a profile writes `profile/<p>`, unchanged if
-//! nothing moves, which proves its owner; the owner after the transaction
-//! must sign. That profile's records follow, while it is the last
-//! profile written: `about/<p>/...` here, and whatever records the app keys
-//! by profile, which ask `acts_for`.
+//! A transaction acting for a profile writes `profile/<p>`, unchanged unless
+//! it creates it, which proves its owner: consensus checks every old value
+//! against the chain. The owner must sign. That profile's records follow,
+//! while it is the last profile written: `about/<p>/...` here, and whatever
+//! records the app keys by profile, which ask `acts_for`.
 
-use crate::tokens::{Held, Tokens};
-use crate::{Action, Payments, Signers};
+use crate::{is_address, Action, Signers};
+
+/// The last profile written, and whether its owner signs.
+#[derive(Clone, Copy)]
+struct Current<'a> {
+    id: &'a [u8],
+    signs: bool,
+}
 
 /// The profile keys of a transaction, read in one pass.
 pub struct Profiles<'a, 'b> {
-    tokens: Tokens<'a, 'b>,
-    /// The last profile written.
-    current: Option<Held<'a>>,
+    signers: &'b Signers<'a, 'b>,
+    current: Option<Current<'a>>,
+    /// The `owns/<account>/<p>` key a profile just created calls for.
+    due: Option<(&'a [u8], &'a [u8])>,
 }
 
 impl<'a, 'b> Profiles<'a, 'b> {
-    pub fn new(signers: &'b Signers<'a, 'b>, payments: Payments<'a>) -> Self {
-        Profiles { tokens: Tokens::new(signers, payments), current: None }
+    pub fn new(signers: &'b Signers<'a, 'b>) -> Self {
+        Profiles { signers, current: None, due: None }
     }
 
     /// Reads one action: `Some(true)` for a profile key it allows,
@@ -34,18 +43,29 @@ impl<'a, 'b> Profiles<'a, 'b> {
     /// judges, and `None` for a refusal.
     pub fn step(&mut self, action: &Action<'a>) -> Option<bool> {
         let (kind, rest) = split(action.key).unwrap_or((action.key, b""));
-        if self.tokens.due() {
-            // Only the index key the profile before calls for.
-            (kind == b"owns").then_some(())?;
-            let (account, p) = split(rest)?;
-            self.tokens.index(account, p, action)?;
+        if let Some((owner, p)) = self.due.take() {
+            // Only the index key the profile just created calls for.
+            let created = action.old_value.is_none() && action.new_value == Some(b"1".as_slice());
+            let (account, id) = split(rest)?;
+            (kind == b"owns" && account == owner && id == p && created).then_some(())?;
             return Some(true);
         }
         match kind {
             b"profile" => {
                 is_profile(rest).then_some(())?;
-                let held = self.tokens.write(action, rest, false)??;
-                self.current = Some(held);
+                let owner = match (action.old_value, action.new_value) {
+                    // Created by its owner, who signs.
+                    (None, Some(owner)) => {
+                        self.signers.is_signer(owner)?;
+                        self.due = Some((owner, rest));
+                        owner
+                    }
+                    // Rewritten unchanged: whoever owns it.
+                    (Some(old), Some(new)) if old == new => old,
+                    _ => return None,
+                };
+                is_address(owner).then_some(())?;
+                self.current = Some(Current { id: rest, signs: self.signers.is_signer(owner).is_some() });
             }
             b"about" => {
                 let (p, field) = split(rest)?;
@@ -53,7 +73,7 @@ impl<'a, 'b> Profiles<'a, 'b> {
                 let current = self.current.filter(|current| current.id == p)?;
                 (!field.is_empty() && current.signs).then_some(())?;
             }
-            // Index keys come only where a profile's move calls for them.
+            // Index keys come only where a new profile calls for them.
             b"owns" => return None,
             _ => return Some(false),
         }
@@ -65,10 +85,9 @@ impl<'a, 'b> Profiles<'a, 'b> {
         self.current.is_some_and(|current| current.id == p && current.signs)
     }
 
-    /// Every index key called for came, and every purchase is paid: run this
-    /// after the last action.
+    /// Every index key called for came: run this after the last action.
     pub fn finish(self) -> Option<()> {
-        self.tokens.finish()
+        self.due.is_none().then_some(())
     }
 }
 
