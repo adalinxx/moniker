@@ -16,13 +16,14 @@ Any app reads and writes it; no app keeps its own profile.
 ## Accounts, profiles and names
 
 - An **account** is a key, kept in the person's wallet. It is never shown,
-  only checked ("owned by …id").
-- A **profile** is the public identity: a card (name, bio, photo, links), the
-  name it shows, and admins. An account owns profiles. A profile is sold or
-  given whole, card and names with it; giving it to a new key of your own is
-  how you recover from a lost key.
-- A **name** (`@handle`) is held by a profile, which shows one of its names.
-  A name is sold or given on its own; the profile it leaves keeps its card.
+  only checked ("owned by …id"). It owns profiles and names.
+- A **profile** is the public identity: a card (name, bio, photo, links), a
+  default name, and admins. It is sold or given whole, with its card and
+  followers; giving it to a new key of your own is how you recover from a
+  lost key.
+- A **name** (`@handle`) is an asset its account owns, like a domain. Its
+  owner points it at any profile, sells it or gives it, on its own. A
+  profile shows its default name only while that name points at it.
 
 A record an app writes says which profile it is from, and the app shows that
 profile's card.
@@ -33,27 +34,33 @@ profile's card.
 | --- | --- | --- |
 | `profile/<p>` | `<owner>`, `<owner>@<price>` or `<owner>><account>` (offered to one account) | its owner; anyone buys at the price; the account it is offered to takes it |
 | `about/<p>/card` | The card, JSON: `name`, `description`, `avatar` (CID), `header` (CID), `url` (strings) and `links` (`[{ label, url }]`, in order); all optional | the profile's owner |
-| `about/<p>/name` | The handle the profile shows, one it holds | the profile's owner |
+| `about/<p>/name` | The profile's default name, shown while it points at the profile | the profile's owner |
 | `about/<p>/admin/<a>` | `1` while account `<a>` may act as the profile in apps | the profile's owner |
-| `name/<handle>` | `<p>`, `<p>@<price>` or `<p>><profile>` (offered to one profile) | its profile's owner; anyone buys at the price; the owner of the profile it is offered to takes it |
-| `owns/<a>/<p>`, `holds/<p>/<handle>` | `1`: an account's profiles, a profile's names, each in one read | only together with the token they index |
+| `name/<handle>` | `<owner>`, `<owner>@<price>` or `<owner>><account>` (offered to one account) | its owner, who may also release it; anyone buys at the price; the account it is offered to takes it |
+| `points/<handle>` | The profile the name points at: any profile | the name's owner |
+| `owns/<a>/<p>`, `names/<a>/<handle>` | `1`: an account's profiles and names, each in one read | only together with the token they index |
 | `user/<a>/key.x25519`, `user/<a>/app.<name>.<field>` | An account's own keys and app data | `<a>` |
 
 `<p>` is 16 random characters of `a`–`z` and `2`–`7`. The policy sees only a
-transaction, so a write acting for profile `<p>` rewrites `profile/<p>` to the
-value it has: consensus checks every old value, and the policy reads the owner
-from it. Nothing is put on an account or a profile without its owner's
-signature, which is why a gift is an offer the receiver takes.
+transaction, so a write acting for a profile or a name rewrites its token to
+the value it has: consensus checks every old value, and the policy reads the
+owner from it. Nothing is put on an account without its signature, which is
+why a gift is an offer the receiver takes.
 
-The policy reads a transaction's actions once, in order, keeping only the last
-two profiles written in mind, so checking costs what the bytes do. The SDK
-writes this order; anyone writing transactions by hand follows it:
+A name may point at anyone's profile, so a profile shows a name only when it
+also chooses it as its default: both sides agree. Selling a name moves only
+the name; it keeps pointing where it did until its new owner points it.
+Selling a profile moves its card and followers and clears its admins; names
+stay with their owner.
 
-- `profile/<p>`, then the `owns/` keys it moves, the one it leaves first.
-- `about/<p>/...` while `<p>` is one of the last two profiles written;
-  `about/<p>/name`, when set, directly after the name it shows.
-- `name/<handle>` while the profiles it moves between are among the last two
-  written, then the `holds/` keys it moves, the one it leaves first.
+The policy reads a transaction's actions once, in order, so checking costs
+what the bytes do. Signers are looked up in a crit-bit tree. The SDK writes
+this order; anyone writing transactions by hand follows it:
+
+- A token (`profile/<p>`, `name/<handle>`), then the index keys it moves, the
+  one it leaves first.
+- `about/<p>/...` while `profile/<p>` is the last profile written.
+- `points/<handle>` directly after `name/<handle>` and its index keys.
 - A seller's purchases one after another, and sellers credited in the order
   they are first paid.
 
@@ -64,8 +71,8 @@ is a CID of a one-block Volume `{ type, bytes }` that the author pins; never a
 URL.
 
 A handle is lowercase letters, digits and `_`. The first to claim a free name
-puts it on one of their profiles. A buyer names the value they read, so if the
-price changed, the purchase is refused.
+owns it. A buyer names the value they read, so if the price changed, the
+purchase is refused.
 
 ## Use Moniker in your app
 

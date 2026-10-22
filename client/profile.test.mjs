@@ -60,9 +60,16 @@ test("an account makes a profile with a card and a name in one write", async () 
   assert.deepEqual(await profile.getProfile(c.state, p), { id: p, owner: ALICE, name: "Alice", description: "Builds things", avatar: "bafyreiavatar", handle: "alice" });
   assert.equal((await profile.profileOf(c.state, "alice")).id, p);
   assert.deepEqual((await profile.profilesOf(c.state, ALICE)).map((x) => x.id), [p]);
-  assert.deepEqual((await profile.namesOf(c.state, p)).map((e) => e.handle), ["alice"]);
+  // The name is Alice's, pointed at the profile.
+  assert.deepEqual((await profile.namesOf(c.state, ALICE)).map((e) => [e.handle, e.owner, e.profile]), [["alice", ALICE, p]]);
   assert.equal(await profile.getProfile(c.state, "aaaaaaaaaaaaaaaa"), undefined);
-  await assert.rejects(profile.createProfile(c.state, ALICE, { handle: "alice" }), /taken/);
+  // A second profile may take a name she owns; nobody else's.
+  const second = await made(c, ALICE, undefined, "alice");
+  assert.equal((await profile.resolve(c.state, "alice")).profile, second);
+  assert.equal((await profile.getProfile(c.state, p)).handle, undefined);
+  const b = chain({ [BOB]: 100 });
+  await made(b, BOB, undefined, "bob");
+  await assert.rejects(profile.createProfile(b.state, ALICE, { handle: "bob" }), /isn't yours/);
 });
 
 test("a card is edited field by field by the profile's owner alone", async () => {
@@ -124,91 +131,117 @@ test("an account's own fields are set, listed and removed, by it alone", async (
   assert.ok(!c.submit(BOB, await profile.setField(c.state, ALICE, "app.demo.color", "red")));
 });
 
-test("a profile holds several names, shows one, and names move between one's profiles", async () => {
-  const c = chain({ [ALICE]: 100 });
+test("an account owns names: claimed on their own, pointed at any profile, shown when pointed back", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 100 });
+  // A name with no profile at all.
+  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, "tessbread")));
+  assert.deepEqual(await profile.resolve(c.state, "tessbread"), { handle: "tessbread", value: ALICE, owner: ALICE });
+  assert.equal(await profile.profileOf(c.state, "tessbread"), undefined);
   const bakery = await made(c, ALICE, { name: "Tess Bakes" }, "tessbakes");
-  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, bakery, "tess_cafe")));
-  // The first name stays the one shown.
+  assert.ok(c.submit(ALICE, await profile.pointName(c.state, ALICE, "tessbread", bakery)));
+  assert.equal((await profile.profileOf(c.state, "tessbread")).id, bakery);
+  // The default name stays until changed, and changes only to a name pointing here.
   assert.equal((await profile.getProfile(c.state, bakery)).handle, "tessbakes");
-  assert.ok(c.submit(ALICE, await profile.showName(c.state, ALICE, bakery, "tess_cafe")));
-  assert.equal((await profile.getProfile(c.state, bakery)).handle, "tess_cafe");
-  await assert.rejects(profile.showName(c.state, ALICE, bakery, "nobody"), /isn't on this profile/);
-  // @tess_cafe to its own profile: it leaves showing it, the new one shows it.
+  assert.ok(c.submit(ALICE, await profile.showName(c.state, ALICE, bakery, "tessbread")));
+  assert.equal((await profile.getProfile(c.state, bakery)).handle, "tessbread");
+  await assert.rejects(profile.showName(c.state, ALICE, bakery, "nobody"), /doesn't point at this profile/);
+  // Re-pointed elsewhere, the old profile stops showing it.
   const cafe = await made(c, ALICE, { name: "Tess Café" });
-  assert.ok(c.submit(ALICE, await profile.moveName(c.state, ALICE, "tess_cafe", cafe)));
-  assert.equal((await profile.getProfile(c.state, cafe)).handle, "tess_cafe");
+  assert.ok(c.submit(ALICE, await profile.pointName(c.state, ALICE, "tessbread", cafe)));
   assert.equal((await profile.getProfile(c.state, bakery)).handle, undefined);
-  assert.deepEqual((await profile.namesOf(c.state, bakery)).map((e) => e.handle), ["tessbakes"]);
-  assert.deepEqual((await profile.profilesOf(c.state, ALICE)).map((x) => x.id).sort(), [bakery, cafe].sort());
+  assert.deepEqual((await profile.namesOf(c.state, ALICE)).map((e) => [e.handle, e.profile]), [["tessbakes", bakery], ["tessbread", cafe]]);
+  // Pointed at anyone's profile: lent to Bob, who may show it.
+  const bobs = await made(c, BOB, { name: "Bob" });
+  assert.ok(c.submit(ALICE, await profile.pointName(c.state, ALICE, "tessbread", bobs)));
+  assert.ok(c.submit(BOB, await profile.showName(c.state, BOB, bobs, "tessbread")));
+  assert.equal((await profile.getProfile(c.state, bobs)).handle, "tessbread");
+  // Only the owner points it, and nothing changes when it already points there.
+  await assert.rejects(profile.pointName(c.state, BOB, "tessbread", bobs), /isn't yours/);
+  assert.deepEqual((await profile.pointName(c.state, ALICE, "tessbread", bobs)).actions, []);
+  // Pointed nowhere.
+  assert.ok(c.submit(ALICE, await profile.pointName(c.state, ALICE, "tessbread", undefined)));
+  assert.equal((await profile.getProfile(c.state, bobs)).handle, undefined);
 });
 
-test("a sold name moves alone: the buyer's profile gets it, the seller keeps their card", async () => {
+test("a sold name moves alone: the buyer owns it and points it; the seller's profile stops showing it", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 1000 });
   const mira = await made(c, ALICE, { name: "Mira" }, "mira");
-  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, mira, "mira_music")));
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mira", 500n)));
   assert.deepEqual((await profile.forSale(c.state)).map(({ handle, price }) => [handle, price]), [["mira", 500n]]);
   // Bob has no profile: one write makes it and buys the name onto it.
   const { id: bobs, write: make } = await profile.createProfile(c.state, BOB, { card: { name: "Bob" } });
-  assert.ok(c.submit(BOB, profile.combine(make, await profile.buy(c.state, BOB, "mira", bobs, { created: true }))));
+  const bought = profile.combine(make, await profile.buy(c.state, BOB, "mira", { point: bobs }), { actions: [{ key: profile.shownKey(bobs), newValue: "mira" }] });
+  assert.ok(c.submit(BOB, bought));
   assert.equal(c.coins.get(BOB), 1000n - 500n - 1n);
+  assert.equal((await profile.resolve(c.state, "mira")).owner, BOB);
   assert.equal((await profile.profileOf(c.state, "mira")).name, "Bob");
   assert.equal((await profile.getProfile(c.state, bobs)).handle, "mira");
-  // Alice's profile, card and other name stay hers; it no longer shows @mira.
+  // Alice's profile and card stay hers; it no longer shows @mira.
   const after = await profile.getProfile(c.state, mira);
   assert.equal(after.name, "Mira");
   assert.equal(after.handle, undefined);
-  assert.deepEqual((await profile.namesOf(c.state, mira)).map((e) => e.handle), ["mira_music"]);
+  assert.deepEqual(await profile.namesOf(c.state, ALICE), []);
+});
+
+test("a name bought without a pointer keeps pointing where it did until its new owner points it", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const mira = await made(c, ALICE, { name: "Mira" }, "mira");
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mira", 5n)));
+  assert.ok(c.submit(BOB, await profile.buy(c.state, BOB, "mira")));
+  assert.equal((await profile.resolve(c.state, "mira")).profile, mira);
+  assert.ok(c.submit(BOB, await profile.pointName(c.state, BOB, "mira", undefined)));
+  assert.equal((await profile.getProfile(c.state, mira)).handle, undefined);
 });
 
 test("a buyer whose price went stale, or a name not for sale, is refused and pays nothing", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 1000 });
   const a = await made(c, ALICE, undefined, "rare");
-  const b = await made(c, BOB);
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "rare", 300n)));
-  const seen = await profile.buy(c.state, BOB, "rare", b);
+  const seen = await profile.buy(c.state, BOB, "rare");
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "rare", 900n)));
   const before = c.coins.get(BOB);
   assert.ok(!c.submit(BOB, seen));
   assert.equal(c.coins.get(BOB), before);
   assert.ok(c.submit(ALICE, await profile.unlist(c.state, ALICE, "rare")));
-  await assert.rejects(profile.buy(c.state, BOB, "rare", b), /not for sale/);
+  await assert.rejects(profile.buy(c.state, BOB, "rare"), /not for sale/);
   assert.equal((await profile.resolve(c.state, "rare")).profile, a);
 });
 
-test("a name offered to a profile is taken by its owner for nothing, and by no one else", async () => {
+test("a name offered to an account is taken by it for nothing, and by no one else", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 100, [CAROL]: 100 });
   await made(c, ALICE, undefined, "gift");
   const b = await made(c, BOB);
-  const carols = await made(c, CAROL);
-  assert.ok(c.submit(ALICE, await profile.offerName(c.state, ALICE, "gift", b)));
-  await assert.rejects(profile.buy(c.state, CAROL, "gift", carols), /not for sale/);
-  assert.ok(c.submit(BOB, await profile.moveName(c.state, BOB, "gift", b)));
-  assert.equal((await profile.resolve(c.state, "gift")).profile, b);
+  assert.ok(c.submit(ALICE, await profile.offerName(c.state, ALICE, "gift", BOB)));
+  await assert.rejects(profile.buy(c.state, CAROL, "gift"), /not for sale/);
+  assert.ok(c.submit(BOB, await profile.buy(c.state, BOB, "gift", { point: b })));
+  assert.deepEqual([(await profile.resolve(c.state, "gift")).owner, (await profile.resolve(c.state, "gift")).profile], [BOB, b]);
   assert.equal(c.coins.get(ALICE), 100n - 2n);
 });
 
-test("a released name is free again, and its profile stops showing it", async () => {
+test("a released name is free again, with no pointer; its profile stops showing it", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 100 });
   const p = await made(c, ALICE, undefined, "gone");
   await assert.rejects(profile.release(c.state, BOB, "gone"), /isn't yours/);
   assert.ok(c.submit(ALICE, await profile.release(c.state, ALICE, "gone")));
   assert.equal(await profile.resolve(c.state, "gone"), undefined);
+  assert.equal(c.map.get(profile.pointsKey("gone")), undefined);
   assert.equal((await profile.getProfile(c.state, p)).handle, undefined);
-  assert.deepEqual(await profile.namesOf(c.state, p), []);
+  assert.deepEqual(await profile.namesOf(c.state, ALICE), []);
   await made(c, BOB, undefined, "gone");
 });
 
-test("a sold profile moves whole: card, names and all", async () => {
+test("a sold profile moves with its card; its names stay with their owner", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 1000 });
   const p = await made(c, ALICE, { name: "Tess Bakes" }, "tessbakes");
-  assert.ok(c.submit(ALICE, await profile.claim(c.state, ALICE, p, "tess_cafe")));
   assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { price: 700n })));
   assert.ok(c.submit(BOB, await profile.takeProfile(c.state, BOB, p)));
-  assert.equal(c.coins.get(ALICE), 100n - 3n + 700n);
+  assert.equal(c.coins.get(ALICE), 100n - 2n + 700n);
   const now = await profile.getProfile(c.state, p);
+  // The name is still Alice's and still points here, until she points it elsewhere.
   assert.deepEqual([now.owner, now.name, now.handle], [BOB, "Tess Bakes", "tessbakes"]);
-  assert.deepEqual((await profile.namesOf(c.state, p)).map((e) => e.handle), ["tess_cafe", "tessbakes"]);
+  assert.equal((await profile.resolve(c.state, "tessbakes")).owner, ALICE);
+  assert.ok(c.submit(ALICE, await profile.pointName(c.state, ALICE, "tessbakes", undefined)));
+  assert.equal((await profile.getProfile(c.state, p)).handle, undefined);
   assert.deepEqual(await profile.profilesOf(c.state, ALICE), []);
   assert.deepEqual((await profile.profilesOf(c.state, BOB)).map((x) => x.id), [p]);
   // The new owner edits it; the old one no longer can.
@@ -229,9 +262,8 @@ test("a profile's admins go with a sale: the seller's other account can't act fo
 test("a name or profile priced at 0 is taken free: no payment", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 100 });
   const p = await made(c, ALICE, undefined, "gift");
-  const b = await made(c, BOB);
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "gift", 0n)));
-  const buy = await profile.buy(c.state, BOB, "gift", b);
+  const buy = await profile.buy(c.state, BOB, "gift");
   assert.deepEqual(buy.payments, []);
   assert.ok(c.submit(BOB, buy));
   assert.ok(c.submit(ALICE, await profile.setProfileTerms(c.state, ALICE, p, { price: 0n })));
@@ -243,7 +275,8 @@ test("offers go to someone else; prices fit a credit", async () => {
   const c = chain({ [ALICE]: 100 });
   const p = await made(c, ALICE, undefined, "mine");
   await assert.rejects(profile.setProfileTerms(c.state, ALICE, p, { offer: ALICE }), /someone else/);
-  await assert.rejects(profile.offerName(c.state, ALICE, "mine", p), /someone else/);
+  await assert.rejects(profile.offerName(c.state, ALICE, "mine", ALICE), /someone else/);
+  await assert.rejects(profile.offerName(c.state, ALICE, "mine", p), /not an address/);
   await assert.rejects(profile.list(c.state, ALICE, "mine", 2n ** 63n), /bad price/);
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "mine", 2n ** 63n - 1n)));
 });
@@ -251,12 +284,15 @@ test("offers go to someone else; prices fit a credit", async () => {
 test("combine keeps each key where it first comes, and refuses a key changed twice", async () => {
   const c = chain({ [ALICE]: 100 });
   const p = await made(c, ALICE, undefined, "one");
-  const both = profile.combine(await profile.list(c.state, ALICE, "one", 5n), await profile.setProfileTerms(c.state, ALICE, p, { price: 9n }));
-  assert.deepEqual(both.actions.map((a) => a.key), [`profile/${p}`, "name/one"]);
+  const both = profile.combine(await profile.showName(c.state, ALICE, p, "one"), await profile.setProfileTerms(c.state, ALICE, p, { price: 9n }));
+  assert.deepEqual(both.actions.map((a) => a.key), [`profile/${p}`, `about/${p}/name`]);
   assert.equal(both.actions[0].newValue, `${ALICE}@9`);
   assert.ok(c.submit(ALICE, both));
   const twice = [await profile.list(c.state, ALICE, "one", 1n), await profile.list(c.state, ALICE, "one", 2n)];
   assert.throws(() => profile.combine(...twice), /changed twice/);
+  const pays = (to) => ({ actions: [], payments: [{ to, amount: 5n }] });
+  assert.doesNotThrow(() => profile.combine(pays(ALICE), pays(ALICE), pays(BOB)));
+  assert.throws(() => profile.combine(pays(ALICE), pays(BOB), pays(ALICE)), /come together/);
 });
 
 test("a profile offered to an account is taken by it for nothing; that is how a lost key moves on", async () => {
@@ -284,9 +320,8 @@ test("admins are set and cleared by the owner; they act for the profile, not on 
 test("the wallet request carries the buy's payment", async () => {
   const c = chain({ [ALICE]: 100, [BOB]: 100 });
   await made(c, ALICE, undefined, "w");
-  const b = await made(c, BOB);
   assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "w", 25n)));
-  const request = wallet.writeRequest(PATH, await profile.buy(c.state, BOB, "w", b), 2n);
+  const request = wallet.writeRequest(PATH, await profile.buy(c.state, BOB, "w"), 2n);
   assert.deepEqual(request.chainPath, ["Nexus", "moniker"]);
   assert.deepEqual(request.payments, [{ to: ALICE, amount: "25" }]);
   assert.equal(request.fee, "2");

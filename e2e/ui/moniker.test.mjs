@@ -98,13 +98,28 @@ async function state() {
   const { generalStateCID } = await tip(sdk, stack.node, CHAIN, volumes);
   return view(volumeLoader(volumes, sdk.decodeDagCbor), generalStateCID);
 }
-/** `who` claims `handle` as another client would, with `card` (if any) for it in the same write. */
-/** `who` makes a profile with `handle` and `card` as another client would; resolves to its id. */
+/**
+ * `who` makes a profile with `card` (if any) and claims `handle` pointed at
+ * it, as its default name, as another client would; resolves to its id.
+ */
 async function makeAs(who, handle, card) {
   await fund(who.address, 100n);
-  const { id, write } = await profile.createProfile(await state(), who.address, { handle });
-  // The card as written, unchecked: another client may write anything.
-  await writeAs(who, card ? profile.combine(write, { actions: [{ key: profile.cardKey(id), newValue: JSON.stringify(card) }] }) : write);
+  let id = profile.newProfileId();
+  while (await (await state()).get(profile.profileKey(id))) id = profile.newProfileId();
+  // Raw records in the policy's order: the profile and its index key, its
+  // records; the name, its index key, then its pointer. The card as written,
+  // unchecked: another client may write anything.
+  await writeAs(who, {
+    actions: [
+      { key: profile.profileKey(id), newValue: who.address },
+      { key: profile.ownsKey(who.address, id), newValue: "1" },
+      ...(card ? [{ key: profile.cardKey(id), newValue: JSON.stringify(card) }] : []),
+      { key: profile.shownKey(id), newValue: handle },
+      { key: profile.nameKey(handle), newValue: who.address },
+      { key: profile.namesKey(who.address, handle), newValue: "1" },
+      { key: profile.pointsKey(handle), newValue: id },
+    ],
+  });
   await until(`@${handle}`, async () => (await profile.resolve(await state(), handle))?.profile === id);
   return id;
 }
@@ -242,19 +257,22 @@ const alice = newAccount();
 const bob = newAccount();
 const carol = newAccount();
 let alices; // Alice's profile
+let alicesSpare; // her second, made later
 
-/** The profile holding `@handle` on the chain. */
+/** The profile `@handle` points at on the chain. */
 const holding = async (handle) => profile.profileOf(await state(), handle);
 /** A name's row in My profiles. */
 const nameRowOf = (page, handle) => page.locator(".row", { has: page.getByRole("button", { name: `Options for @${handle}`, exact: true }) });
 /** Opens a name's menu and picks `choice`. */
 async function nameMenu(page, handle, choice) {
   await page.getByRole("button", { name: `Options for @${handle}`, exact: true }).click();
-  await page.locator("#sheet").getByRole("button", { name: choice }).click();
+  await page.locator("#sheet").getByRole("button", { name: choice, exact: true }).click();
 }
+/** Picks `choice` in the sheet that is open. */
+const choose = (page, choice) => page.locator("#sheet").getByRole("button", { name: choice, exact: true }).click();
 /** Opens a profile's menu and picks `choice`. */
 async function profileMenu(page, name, choice) {
-  await page.getByRole("button", { name: `Options for ${name}`, exact: true }).click();
+  await page.getByRole("button", { name: `Options for profile ${name}`, exact: true }).click();
   await page.locator("#sheet").getByRole("button", { name: choice }).click();
 }
 
@@ -308,15 +326,16 @@ test("with no wallet, checkout still shows the order, with how to add Selfhold i
   await phone.close();
 }, { wallet: false });
 
-test("Alice buys @alice for 0: it makes her first profile, in one approval", async ({ page }) => {
+test("Alice buys @alice for 0, pointed at a new profile, her first, in one approval", async ({ page }) => {
   await fund(alice.address);
   await openApp(page, alice, "#/search/alice");
   await page.getByRole("link", { name: "Buy @alice", exact: true }).click();
   await expect(page.locator("h1")).toHaveText("Checkout");
   await expect(page.locator(".order")).toHaveText("@alice");
-  // No profile yet: it goes on a new one, no choice to make.
-  await expect(page.locator("#to")).toHaveCount(0);
-  await expect(page.locator("form#buy")).toContainText("This makes your profile: the public card people follow.");
+  // No profile yet: it points at a new one unless she chooses none.
+  await expect(page.getByLabel("Point it at")).toHaveValue("new");
+  await expect(page.locator("#to option")).toHaveText(["A new profile", "No profile for now"]);
+  await expect(page.locator("form#buy")).toContainText("The name is yours: point it at a profile, or keep it for later.");
   const asked = page.context().approvals;
   await page.getByRole("button", { name: /^Get @\w+ free$/ }).click();
   await expect(page).toHaveURL(/#\/bought\/alice$/);
@@ -362,13 +381,14 @@ test("Alice sets up her profile: name, bio, website and links in her order", asy
   const visitor = await browser.newPage();
   await openApp(visitor, null, "#/search/alice");
   await expect(visitor.locator(".result .badge")).toHaveText("Taken");
-  await visitor.getByRole("link", { name: "See @alice's profile" }).click();
+  await visitor.getByRole("link", { name: "See @alice", exact: true }).click();
   await expect(visitor.locator("h1")).toHaveText("Alice Rivera");
   await expect(visitor.getByRole("link", { name: "Edit" })).toHaveCount(0);
-  // Its owner, by the end of the account's ID; that page lists the account's profiles.
+  // Its owner, by the end of the account's ID; that page lists the account's profiles and names.
   await visitor.getByRole("link", { name: `Owner: account …${alice.address.slice(-8)}` }).click();
   await expect(visitor.locator("h1.account")).toContainText(`…${alice.address.slice(-8)}`);
   await expect(visitor.locator(".names .row strong")).toHaveText(["Alice Rivera"]);
+  await expect(visitor.locator(".names .row:not(.person)")).toHaveText([/@alice\s+points at Alice Rivera · @alice/]);
   await visitor.close();
 });
 
@@ -381,33 +401,72 @@ test("another app shows Alice's profile with <moniker-name>, linked to its page"
   await expect(byline.locator("a")).toHaveAttribute("href", "https://adalinxx.github.io/moniker/app/#/%40alice");
 }, { wallet: false });
 
-test("a second name on the same profile: chosen at checkout, shown on request, listed as Also", async ({ page }) => {
+test("a second name points at Alice's profile, which keeps showing @alice until she makes it the default", async ({ page }) => {
   await openApp(page, alice, "#/buy/alice_art");
+  // Pointed at her one profile unless she chooses otherwise.
   await expect(page.locator("#to")).toHaveValue(alices);
   await page.getByRole("button", { name: /^Get @\w+ free$/ }).click();
   await expect(page.locator("h1")).toHaveText("@alice_art is yours");
-  expect((await profile.resolve(await state(), "alice_art")).profile).toBe(alices);
-  await page.goto(stack.app + `#/${alices}`);
-  // Still shows @alice; the other name is listed.
+  const art = await profile.resolve(await state(), "alice_art");
+  expect([art.owner, art.profile]).toEqual([alice.address, alices]);
+  // Its page is her profile, which says it shows another name.
+  await page.goto(stack.app + "#/@alice_art");
+  await expect(page.locator("h1")).toHaveText("Alice Rivera");
   await expect(page.locator("p.handle")).toHaveText("@alice");
-  await expect(page.locator(".also")).toHaveText("Also @alice_art");
+  await expect(page.locator(".via")).toHaveText("@alice_art points here; this profile shows @alice");
   await page.goto(stack.app + "#/profiles");
-  const [first, art] = [nameRowOf(page, "alice"), nameRowOf(page, "alice_art")];
-  await expect(first.locator(".label")).toContainText("main name");
-  await nameMenu(page, "alice_art", "Make main name");
-  await expect(art.locator(".label")).toContainText("main name");
+  await expect(nameRowOf(page, "alice_art").locator(".label")).toHaveText("points at Alice Rivera · @alice");
+  await nameMenu(page, "alice_art", "Make default name");
+  await expect(nameRowOf(page, "alice_art").locator(".label")).toHaveText("points at Alice Rivera · @alice_art");
   expect((await profile.getProfile(await state(), alices)).handle).toBe("alice_art");
   // Focus is back on the menu button that was used.
   await expect(page.getByRole("button", { name: "Options for @alice_art", exact: true })).toBeFocused();
-  await nameMenu(page, "alice", "Make main name");
-  await expect(first.locator(".label")).toContainText("main name");
+  // The default name has nothing to make default.
+  await page.getByRole("button", { name: "Options for @alice_art", exact: true }).click();
+  await expect(page.locator("#sheet").getByRole("button", { name: "Make default name" })).toHaveCount(0);
+  await choose(page, "Cancel");
+  await nameMenu(page, "alice", "Make default name");
+  await expect(nameRowOf(page, "alice").locator(".label")).toHaveText("points at Alice Rivera · @alice");
+});
+
+test("Alice points @alice at a new profile of hers: it shows @alice, and her first profile shows none", async ({ page }) => {
+  await openApp(page, alice, "#/profiles");
+  await page.getByRole("button", { name: "New profile" }).click();
+  await expect(page).toHaveURL(/#\/edit\/[a-z2-7]{16}$/);
+  alicesSpare = page.url().split("/").pop();
+  // No name points at it yet.
+  await expect(page.locator("#default-name")).toContainText("No name points at this profile.");
+  await page.goto(stack.app + "#/profiles");
+  await nameMenu(page, "alice", "Point at…");
+  await expect(page.locator("#sheet-title")).toHaveText("Point @alice at");
+  // Her other profile, someone else's, or none; not where it points now.
+  await expect(page.locator("#sheet .choices button")).toHaveText(["Unnamed profile", "Someone else's profile…", "No profile"]);
+  await choose(page, "Unnamed profile");
+  await expect(nameRowOf(page, "alice").locator(".label")).toHaveText("points at @alice");
+  let s = await state();
+  // The new profile showed no name, so it shows @alice; the first one no longer can.
+  expect((await profile.getProfile(s, alicesSpare)).handle).toBe("alice");
+  expect((await profile.getProfile(s, alices)).handle).toBeUndefined();
+  await page.goto(stack.app + "#/@alice");
+  await expect(page.locator("h1")).toHaveText("@alice");
+  await page.goto(stack.app + `#/${alices}`);
+  await expect(page.locator("h1")).toHaveText("Alice Rivera");
+  await expect(page.locator("p.handle")).toHaveCount(0);
+  // Back: Alice Rivera still names @alice as its default, so shows it again.
+  await page.goto(stack.app + "#/profiles");
+  await nameMenu(page, "alice", "Point at…");
+  await choose(page, "Alice Rivera");
+  await expect(nameRowOf(page, "alice").locator(".label")).toHaveText("points at Alice Rivera · @alice");
+  s = await state();
+  expect((await profile.getProfile(s, alices)).handle).toBe("alice");
+  expect((await profile.getProfile(s, alicesSpare)).handle).toBeUndefined();
 });
 
 test("Alice sells @alice_art; Bob buys it onto a new profile, and Alice's profile keeps its card", async ({ page }) => {
   await openApp(page, alice, "#/profiles");
   const art = nameRowOf(page, "alice_art");
   await nameMenu(page, "alice_art", "Sell");
-  await expect(page.locator("#sheet")).toContainText("Only the name moves: Alice Rivera keeps its card and followers.");
+  await expect(page.locator("#sheet")).toContainText("Only the name moves.");
   await answerSheet(page, "05", "List it");
   await expect(page.locator("#sheet-error")).toHaveText("A whole number of coins.");
   await answerSheet(page, "500", "List it");
@@ -420,7 +479,8 @@ test("Alice sells @alice_art; Bob buys it onto a new profile, and Alice's profil
     await openApp(bobPage, bob, "#/market");
     await bobPage.getByRole("link", { name: "Buy @alice_art for 500" }).click();
     await expect(bobPage.locator(".sum")).toContainText("paid to its owner");
-    await expect(bobPage.locator("main")).toContainText("Only the name moves: its old profile stays with its owner.");
+    await expect(bobPage.locator("main")).toContainText("Only the name moves.");
+    await expect(bobPage.locator("#to")).toHaveValue("new");
     await bobPage.getByRole("button", { name: "Buy for 500" }).click();
     await expect(bobPage.locator("h1")).toHaveText("@alice_art is yours");
     await expect(bobPage.getByRole("link", { name: "Set up the profile" })).toBeVisible();
@@ -430,23 +490,26 @@ test("Alice sells @alice_art; Bob buys it onto a new profile, and Alice's profil
   const bobs = await holding("alice_art");
   expect(bobs.owner).toBe(bob.address);
   expect(bobs.id).not.toBe(alices);
+  expect((await profile.resolve(await state(), "alice_art")).owner).toBe(bob.address);
   expect(BigInt((await account(alice.address)).balance)).toBeGreaterThan(2000n);
-  // @alice_art's page is Bob's empty profile; @alice's is still Alice's.
+  // @alice_art's page is Bob's new profile, which shows it; @alice's is still Alice's.
   await page.goto(stack.app + "#/@alice_art");
   await expect(page.locator("h1")).toHaveText("@alice_art");
-  await expect(page.locator(".bio, .links")).toHaveCount(0);
+  await expect(page.locator(".bio, .links, .via")).toHaveCount(0);
   await page.goto(stack.app + "#/@alice");
   await expect(page.locator("h1")).toHaveText("Alice Rivera");
-  await expect(page.locator(".also")).toHaveCount(0);
+  await expect(page.locator("p.handle")).toHaveText("@alice");
 });
 
-test("a name given by link: Alice offers @alice_gift to Bob's profile, and only Bob takes it", async ({ page }) => {
-  await writeAs(alice, await profile.claim(await state(), alice.address, alices, "alice_gift"));
+test("a name given by link: Alice offers @alice_gift to Bob's account, and only Bob takes it", async ({ page }) => {
+  await writeAs(alice, await profile.claim(await state(), alice.address, "alice_gift", { point: alices }));
   await until("@alice_gift", async () => (await profile.resolve(await state(), "alice_gift"))?.profile === alices);
   const bobs = (await profile.profilesOf(await state(), bob.address))[0];
   await openApp(page, alice, "#/profiles");
   await nameMenu(page, "alice_gift", "Give");
   await answerSheet(page, "@alice_art", "Offer it");
+  await expect(page.locator("#sheet-error")).toHaveText("That is not an account ID.");
+  await answerSheet(page, bob.address, "Offer it");
   await expect(toast(page, "Offered. Link copied: send it to them.")).toBeVisible();
   await expect(nameRowOf(page, "alice_gift").locator(".label")).toContainText("offered");
   // The link stays on the row, to copy again.
@@ -458,7 +521,7 @@ test("a name given by link: Alice offers @alice_gift to Bob's profile, and only 
   try {
     const carolPage = carolContext.pages()[0] ?? (await carolContext.newPage());
     await openApp(carolPage, carol, "#/take/alice_gift");
-    await expect(carolPage.locator("h1")).toHaveText("@alice_gift isn't offered to a profile of yours");
+    await expect(carolPage.locator("h1")).toHaveText("@alice_gift isn't offered to you");
     await expect(carolPage.locator("main")).toContainText(`Selfhold connects account …${carol.address.slice(-8)} here.`);
   } finally {
     await carolContext.close();
@@ -467,38 +530,118 @@ test("a name given by link: Alice offers @alice_gift to Bob's profile, and only 
   try {
     const bobPage = bobContext.pages()[0] ?? (await bobContext.newPage());
     await openApp(bobPage, bob, "#/take/alice_gift");
+    // Pointed at his profile unless he chooses otherwise.
+    await expect(bobPage.getByLabel("Point it at")).toHaveValue(bobs.id);
     await bobPage.getByRole("button", { name: "Take @alice_gift" }).click();
     await expect(bobPage).toHaveURL(/#\/@alice_gift$/);
   } finally {
     await bobContext.close();
   }
-  expect((await profile.resolve(await state(), "alice_gift")).profile).toBe(bobs.id);
+  const gift = await profile.resolve(await state(), "alice_gift");
+  expect([gift.owner, gift.profile]).toEqual([bob.address, bobs.id]);
 });
 
-test("Alice sells her whole profile; Carol buys it, card and names with it", async ({ page }) => {
+test("Alice lends @alice_lend to Bob's profile; Bob makes it his default, and the name stays Alice's", async ({ page }) => {
+  await writeAs(alice, await profile.claim(await state(), alice.address, "alice_lend"));
+  await until("@alice_lend", async () => (await profile.resolve(await state(), "alice_lend"))?.owner === alice.address);
+  const bobs = (await profile.resolve(await state(), "alice_art")).profile;
+  await openApp(page, alice, "#/profiles");
+  await expect(nameRowOf(page, "alice_lend").locator(".label")).toHaveText("no profile");
+  await nameMenu(page, "alice_lend", "Point at…");
+  // "No profile" only where it points somewhere.
+  await expect(page.locator("#sheet").getByRole("button", { name: "No profile", exact: true })).toHaveCount(0);
+  await choose(page, "Someone else's profile…");
+  await answerSheet(page, "@alice_art", "Point it");
+  await expect(nameRowOf(page, "alice_lend").locator(".label")).toHaveText("points at @alice_art");
+  expect((await profile.resolve(await state(), "alice_lend")).profile).toBe(bobs);
+  // Bob's profile shows its own name; the lent one says so.
+  await page.goto(stack.app + "#/@alice_lend");
+  await expect(page.locator(".via")).toHaveText("@alice_lend points here; this profile shows @alice_art");
+
+  const bobContext = await walletBrowser();
+  try {
+    const bobPage = bobContext.pages()[0] ?? (await bobContext.newPage());
+    await openApp(bobPage, bob, `#/edit/${bobs}`);
+    // Every name pointing here, whoever owns it.
+    await expect(bobPage.locator("#default option")).toHaveText(["@alice_art", "@alice_gift", "@alice_lend"]);
+    await expect(bobPage.locator("#default")).toHaveValue("alice_art");
+    await bobPage.locator("#default").selectOption("alice_lend");
+    await bobPage.getByRole("button", { name: "Use this name" }).click();
+    await until("Bob shows @alice_lend", async () => (await profile.getProfile(await state(), bobs)).handle === "alice_lend");
+  } finally {
+    await bobContext.close();
+  }
+  const s = await state();
+  expect((await profile.getProfile(s, bobs)).handle).toBe("alice_lend");
+  expect((await profile.resolve(s, "alice_lend")).owner).toBe(alice.address);
+  // Alice points it back to no profile: Bob's shows no name until he picks another.
+  await page.goto(stack.app + "#/profiles");
+  await nameMenu(page, "alice_lend", "Point at…");
+  await choose(page, "No profile");
+  await expect(nameRowOf(page, "alice_lend").locator(".label")).toHaveText("no profile");
+  expect((await profile.getProfile(await state(), bobs)).handle).toBeUndefined();
+});
+
+test("a name with no profile: Ivy gets one, and its page says who owns it and that it points nowhere", async ({ page }) => {
+  const ivy = newAccount();
+  await openApp(page, ivy, "#/buy/ivyname");
+  await page.getByLabel("Point it at").selectOption("none");
+  await page.getByRole("button", { name: "Get @ivyname free" }).click();
+  await expect(page.locator("h1")).toHaveText("@ivyname is yours");
+  await expect(page.locator("main")).toContainText("It points at no profile yet.");
+  expect(await profile.profilesOf(await state(), ivy.address)).toEqual([]);
+  expect((await profile.namesOf(await state(), ivy.address)).map((n) => n.handle)).toEqual(["ivyname"]);
+  await page.getByRole("link", { name: "Go to My profiles" }).click();
+  await expect(page.locator(".note").first()).toContainText("No profiles yet.");
+  await expect(nameRowOf(page, "ivyname").locator(".label")).toHaveText("no profile");
+  await nameMenu(page, "ivyname", "Sell");
+  await answerSheet(page, "40", "List it");
+  await expect(nameRowOf(page, "ivyname").locator(".label")).toHaveText("no profile · for sale · 40");
+
+  const visitor = await browser.newPage();
+  await openApp(visitor, null, "#/@ivyname");
+  await expect(visitor.locator("h1")).toHaveText("@ivyname");
+  await expect(visitor.locator("main .bio")).toHaveText(`@ivyname is owned by account …${ivy.address.slice(-8)} and points at no profile.`);
+  await expect(visitor.getByRole("link", { name: "Buy @ivyname" })).toHaveAttribute("href", "#/buy/ivyname");
+  await visitor.getByRole("link", { name: `…${ivy.address.slice(-8)}` }).click();
+  await expect(visitor.locator(".names .row:not(.person)")).toHaveText([/@ivyname\s+no profile · for sale · 40/]);
+  await visitor.close();
+});
+
+test("Alice sells her whole profile; Carol buys its card and followers, and Alice keeps her names", async ({ page }) => {
   await fund(carol.address);
   await openApp(page, alice, "#/profiles");
   await profileMenu(page, "Alice Rivera", "Sell profile");
   await expect(page.locator("#sheet-title")).toHaveText("Sell Alice Rivera");
-  await expect(page.locator("#sheet")).toContainText("its card, followers and names all go with it");
+  await expect(page.locator("#sheet")).toContainText("Its card and followers go to the buyer. Your names stay yours; point them elsewhere if you like.");
   await answerSheet(page, "700", "List it");
-  await expect(page.locator(".profile-head .label")).toContainText("for sale · 700");
+  await expect(page.locator(".profile-head", { hasText: "Alice Rivera" }).locator(".label")).toContainText("for sale · 700");
   const carolContext = await walletBrowser();
   try {
     const carolPage = carolContext.pages()[0] ?? (await carolContext.newPage());
     await openApp(carolPage, carol, "#/@alice");
-    await expect(carolPage.locator("main .note", { hasText: "Its owner is selling" })).toHaveText("Its owner is selling this profile, names and all, for 700. Buy it");
+    await expect(carolPage.locator("main .note", { hasText: "Its owner is selling" })).toHaveText("Its owner is selling this profile for 700. Buy it");
     await carolPage.getByRole("link", { name: "Buy it" }).click();
-    await expect(carolPage.locator("main")).toContainText("It comes whole: its card, its followers and its names, @alice");
+    await expect(carolPage.locator("main")).toContainText("Names don't come with it");
     await carolPage.getByRole("button", { name: "Buy for 700" }).click();
     await expect(carolPage.locator("h1")).toHaveText("Alice Rivera");
     await expect(carolPage.getByRole("link", { name: "Owner: you" })).toBeVisible();
   } finally {
     await carolContext.close();
   }
-  const p = await profile.getProfile(await state(), alices);
+  const s = await state();
+  const p = await profile.getProfile(s, alices);
+  // @alice still points at it, so it still shows it, but the name is Alice's.
   expect([p.owner, p.name, p.handle]).toEqual([carol.address, "Alice Rivera", "alice"]);
-  expect(await profile.profilesOf(await state(), alice.address)).toEqual([]);
+  expect((await profile.resolve(s, "alice")).owner).toBe(alice.address);
+  expect((await profile.profilesOf(s, alice.address)).map((x) => x.id)).toEqual([alicesSpare]);
+  await page.reload();
+  await expect(nameRowOf(page, "alice").locator(".label")).toHaveText("points at Alice Rivera · @alice");
+  // Alice points it at her other profile: the sold one shows no name.
+  await nameMenu(page, "alice", "Point at…");
+  await choose(page, "Unnamed profile");
+  await expect(nameRowOf(page, "alice").locator(".label")).toHaveText("points at @alice");
+  expect((await profile.getProfile(await state(), alices)).handle).toBeUndefined();
 });
 
 test("a profile moves to a new key: offered to that account, taken from a link", async ({ page }) => {
@@ -580,8 +723,9 @@ test("Your page: a new account sees My profiles, one with a profile sees it", as
   const dan = newAccount();
   await openApp(page, dan, "#/me");
   await expect(page.locator("h1")).toHaveText("My profiles");
-  await expect(page.locator(".note")).toContainText("No profiles yet.");
-  await expect(page.getByRole("button", { name: "New profile" })).toHaveCount(0);
+  await expect(page.locator(".note")).toHaveText(["No profiles yet. A profile is the public card people follow.", "No names yet. Get one."]);
+  // A profile needs no name: one can be made now.
+  await expect(page.getByRole("button", { name: "New profile" })).toBeVisible();
   const context = await walletBrowser();
   try {
     const bobPage = context.pages()[0] ?? (await context.newPage());
@@ -647,7 +791,7 @@ test("checkout refuses a price that changed, or a name just taken, and asks the 
   // A name no one owned, taken while Hal looks at it.
   await page.goto(stack.app + "#/buy/halsnext");
   await expect(page.getByRole("button", { name: /^Get @\w+ free$/ })).toBeVisible();
-  await writeAs(gwen, await profile.claim(await state(), gwen.address, gwens, "halsnext"));
+  await writeAs(gwen, await profile.claim(await state(), gwen.address, "halsnext", { point: gwens }));
   await until("@halsnext taken", async () => (await profile.resolve(await state(), "halsnext"))?.profile === gwens);
   await page.getByRole("button", { name: /^Get @\w+ free$/ }).click();
   await expect(toast(page, "@halsnext was just taken, and it isn't for sale.")).toBeVisible();
@@ -925,7 +1069,7 @@ test("an account with no profile is told to make one, and nothing is sent", asyn
   await openApp(page, zed, "#/@tessbakes");
   const before = context.approvals;
   await followButton(page).click();
-  await expect(page.locator("follows-button .note")).toHaveText("To follow, get a name first. It makes your profile.");
+  await expect(page.locator("follows-button .note")).toHaveText("To follow, make a profile first.");
   expect(context.approvals).toBe(before);
 });
 

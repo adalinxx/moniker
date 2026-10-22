@@ -285,8 +285,12 @@ impl<'a> Body<'a> {
 }
 
 impl<'a> Payments<'a> {
-    /// A purchase owes `payee` `price`.
+    /// A purchase owes `payee` `price`. A free one owes nothing, and leaves
+    /// the run as it was.
     pub fn owe(&mut self, payee: &'a [u8], price: u64) -> Option<()> {
+        if price == 0 {
+            return Some(());
+        }
         if self.payee != Some(payee) {
             self.settle()?;
             self.payee = Some(payee);

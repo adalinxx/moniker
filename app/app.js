@@ -1,7 +1,8 @@
-// Moniker: profiles and the @names they hold, read from the profile chain by
-// CID and written through the Selfhold wallet, which asks the owner to approve
-// every change. An account (a key) owns profiles; each profile has a card and
-// a page. Reading needs no wallet.
+// Moniker: profiles and @names, read from the profile chain by CID and
+// written through the Selfhold wallet, which asks the owner to approve every
+// change. An account (a key) owns profiles, each with a card and a page, and
+// names, each pointing at a profile (anyone's) or at none. Reading needs no
+// wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { mediaVolume, operator } from "../client/media.mjs";
 import * as profile from "../sdk/src/records/profile.mjs";
@@ -79,7 +80,7 @@ defineFollowButton(
       return typeof value === "function" ? (...args) => getGraph()[name](...args) : value;
     },
   }),
-  { walletURL: WALLET_URL, monikerURL: "#/" },
+  { walletURL: WALLET_URL, monikerURL: "#/profiles" },
 );
 
 /** The chain's state at the tip of the first node that answers. */
@@ -317,11 +318,27 @@ async function profileFor(state, who) {
 /** What to call a profile: its card's name, else its @handle, else that it has none. */
 const nameOf = (p) => p.name ?? (p.handle ? `@${p.handle}` : "Unnamed profile");
 
+/** A profile's name, with its @handle when it has both: for choosing one of several. */
+const withHandle = (p) => `${nameOf(p)}${p.name && p.handle ? ` · @${p.handle}` : ""}`;
+
 /** A profile's page by its @handle, else by its id. */
 const pageOf = (p) => `#/${p.handle ? `@${p.handle}` : p.id}`;
 
 /** The connected account's profiles. */
 const myProfiles = async (state) => (connected ? profile.profilesOf(state, connected) : []);
+
+/** The connected account's names. */
+const myNames = async (state) => (connected ? profile.namesOf(state, connected) : []);
+
+/** Where each name points, as `{ handle: profile }`: undefined for none, or for a profile that doesn't exist. */
+async function pointedBy(state, names) {
+  const ids = [...new Set(names.map((n) => n.profile).filter(Boolean))];
+  const found = new Map((await profile.getProfiles(state, ids)).filter((p) => p.owner).map((p) => [p.id, p]));
+  return Object.fromEntries(names.map((n) => [n.handle, found.get(n.profile)]));
+}
+
+/** Where a name points, in a few words: the profile's name, or none. */
+const pointsLabel = (p) => (p ? `points at ${withHandle(p)}` : "no profile");
 
 /** A page that is only a message: what happened, and where to go. */
 const viewMessage = (title, body, link = `<a class="pill big" href="#/" style="margin-top: 20px">Search names</a>`) => `
@@ -355,13 +372,13 @@ async function countLinks(id) {
 }
 
 /**
- * A profile's page: its card, the name it shows and its other names, who
- * follows it, and which account owns it.
+ * A profile's page: its card, the name it shows, who follows it, and which
+ * account owns it. Reached by `via`, a name pointing here that the profile
+ * doesn't show, it says so.
  */
-async function viewProfile(p, state) {
+async function viewProfile(p, state, via) {
   const mine = connected === p.owner;
-  const [names, follows] = await Promise.all([profile.namesOf(state, p.id), followsBlock(p, mine)]);
-  const others = names.filter((n) => n.handle !== p.handle);
+  const follows = await followsBlock(p, mine);
   const links = [...(p.url ? [{ label: hostOf(p.url), url: p.url }] : []), ...(p.links ?? [])];
   const empty = !p.name && !p.description && links.length === 0 && !p.avatar;
   return `
@@ -370,33 +387,65 @@ async function viewProfile(p, state) {
       ${p.avatar ? `<img class="avatar" data-photo="${esc(p.avatar)}" alt="">` : `<div class="avatar" aria-hidden="true">${esc(initial(p))}</div>`}
       <h1>${esc(nameOf(p))}</h1>
       ${p.handle ? `<p class="handle">@${esc(p.handle)}</p>` : ""}
-      ${others.length ? `<p class="also">Also ${others.map((n) => `<a href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>`).join(", ")}</p>` : ""}
+      ${via && via !== p.handle ? `<p class="via">@${esc(via)} points here; this profile ${p.handle ? `shows @${esc(p.handle)}` : "doesn't list it as its name"}</p>` : ""}
       ${p.description ? `<p class="bio">${esc(p.description)}</p>` : ""}
       ${follows}
       <a class="owner" href="#/${esc(p.owner)}">${mine ? "Owner: you" : `Owner: account <span class="mono">${esc(shortID(p.owner))}</span>`}</a>
       ${links.length ? `<nav class="links" aria-label="Links">${links.map((l) => `<a href="${esc(l.url)}" rel="noopener noreferrer nofollow" target="_blank">${esc(l.label)}</a>`).join("")}</nav>` : ""}
       ${empty ? `<p class="empty">${mine ? `Nothing here yet. <a href="#/edit/${esc(p.id)}">Set it up</a>.` : "This profile is empty so far."}</p>` : ""}
-      ${p.price !== undefined && !mine ? `<p class="note">Its owner is selling this profile, names and all, for ${coins(p.price)}. <a href="#/take-profile/${esc(p.id)}">Buy it</a></p>` : ""}
+      ${p.price !== undefined && !mine ? `<p class="note">Its owner is selling this profile for ${coins(p.price)}. <a href="#/take-profile/${esc(p.id)}">Buy it</a></p>` : ""}
     </main>`;
 }
 
+/** A name that points at no profile: who owns it, and Buy if it is for sale. */
+function viewName(entry) {
+  const { handle, owner, price } = entry;
+  const mine = connected === owner;
+  return `
+    <main class="col card">
+      <h1 class="mono">@${esc(handle)}</h1>
+      <p class="bio">${mine ? `You own @${esc(handle)}. It points at no profile.` : `@${esc(handle)} is owned by account <a href="#/${esc(owner)}" class="mono">${esc(shortID(owner))}</a> and points at no profile.`}</p>
+      ${mine
+        ? `<a class="pill big" href="#/profiles" style="margin-top: 28px">Go to My profiles</a>`
+        : price !== undefined ? `<p class="note" style="margin-top: 20px">Its owner is selling it for ${coins(price)}.</p><a class="pill accent big" href="#/buy/${esc(handle)}" style="margin-top: 12px">Buy @${esc(handle)}</a>` : ""}
+    </main>`;
+}
+
+/** One name in a list: the handle, linked to its page, where it points, and its terms. */
+function handleRow(n, to, end = "") {
+  const label = [pointsLabel(to), n.price !== undefined && `for sale · ${coins(n.price)}`, n.offer && "offered"].filter(Boolean).join(" · ");
+  return `
+    <div class="row">
+      <a class="mono" href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>
+      <span class="label">${esc(label)}</span>
+      ${end ? `<div class="end">${end}</div>` : ""}
+    </div>`;
+}
+
 /**
- * An account: only its ID and the profiles it owns, so anyone can check who
- * owns what. Accounts have no card and aren't followed.
+ * An account: only its ID, the profiles it owns and its names, so anyone can
+ * check who owns what. Accounts have no card and aren't followed.
  */
 async function viewAccount(address, state) {
   const mine = connected === address;
-  const owned = await profile.profilesOf(state, address);
+  const [owned, names] = await Promise.all([profile.profilesOf(state, address), profile.namesOf(state, address)]);
+  const to = await pointedBy(state, names);
   return `
     <main class="col card account-page">
       <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span></h1>
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
-      <p class="bio">${mine ? "An account is a private key. It owns these profiles and is never shown on them." : "This key owns these profiles."}</p>
+      <p class="bio">${mine ? "An account is a private key. It owns these profiles and names, and is never shown on them." : "This key owns these profiles and names."}</p>
       <section class="names">
         ${owned.length ? `<h2>${owned.length === 1 ? "Profile" : "Profiles"}</h2>` : ""}
         ${owned.length
           ? owned.map((p) => personRow(p, pageOf(p), p.name && p.handle ? `@${p.handle}` : "")).join("")
-          : `<p class="empty">${mine ? `No profiles yet. <a href="#/">Get a name</a> to make one.` : "This account owns no profiles."}</p>`}
+          : `<p class="empty">${mine ? `No profiles yet. <a href="#/profiles">Make one</a>.` : "This account owns no profiles."}</p>`}
+      </section>
+      <section class="names">
+        ${names.length ? `<h2>${names.length === 1 ? "Name" : "Names"}</h2>` : ""}
+        ${names.length
+          ? names.map((n) => handleRow(n, to[n.handle])).join("")
+          : `<p class="empty">${mine ? `No names yet. <a href="#/">Get one</a>.` : "This account owns no names."}</p>`}
       </section>
     </main>`;
 }
@@ -475,9 +524,9 @@ function variants(q) {
 }
 
 /** One handle's standing: available (0), for sale (its price), yours, or taken. */
-function standing(handle, entry, mine) {
+function standing(handle, entry) {
   if (!entry) return { handle, kind: "available", price: 0n };
-  if (mine.has(entry.profile)) return { handle, kind: "yours" };
+  if (entry.owner === connected) return { handle, kind: "yours" };
   if (entry.price !== undefined) return { handle, kind: "sale", price: entry.price };
   return { handle, kind: "taken" };
 }
@@ -489,23 +538,22 @@ function resultRow(r) {
     available: `<span class="price">${coins(r.price)}</span>${buyLink(r)}`,
     sale: `<span class="label">for sale by its owner</span><span class="price">${coins(r.price)}</span>${buyLink(r, "pill dark")}`,
     yours: `<span class="label">yours</span><a class="pill" href="#/profiles">My profiles</a>`,
-    taken: `<span class="label">taken</span><a class="pill" href="#/@${esc(r.handle)}">See profile</a>`,
+    taken: `<span class="label">taken</span><a class="pill" href="#/@${esc(r.handle)}">See it</a>`,
   }[r.kind];
   return `<div class="row"><span class="mono">@${esc(r.handle)}</span><div class="end">${tail}</div></div>`;
 }
 
 /** Search results: the exact name first, then names close to it. */
 async function viewSearch(q, state) {
-  const mine = new Set((await myProfiles(state)).map((p) => p.id));
-  const [exact, ...near] = await Promise.all([q, ...variants(q)].map(async (h) => standing(h, await profile.resolve(state, h), mine)));
+  const [exact, ...near] = await Promise.all([q, ...variants(q)].map(async (h) => standing(h, await profile.resolve(state, h))));
   const listed = (await profile.forSale(state))
-    .filter((h) => h.handle !== q && h.handle.includes(q) && !mine.has(h.profile))
+    .filter((h) => h.handle !== q && h.handle.includes(q) && h.owner !== connected)
     .map((h) => ({ handle: h.handle, kind: "sale", price: h.price }));
   const more = [...near.filter((r) => r.kind === "available"), ...listed].slice(0, 6);
   const headline = {
     available: ["Available", "No one owns it yet, so it costs 0."],
     sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction."],
-    yours: ["Yours", "One of your profiles holds this name."],
+    yours: ["Yours", "Your account owns this name."],
     taken: ["Taken", "Someone owns it and isn't selling it. Try one of the names below."],
   }[exact.kind];
   return `
@@ -520,7 +568,7 @@ async function viewSearch(q, state) {
             ? `<span class="price big">${coins(exact.price)}</span><a class="pill accent" href="#/buy/${esc(q)}">Buy @${esc(q)}</a>`
             : exact.kind === "yours"
               ? `<a class="pill" href="#/profiles">Go to My profiles</a>`
-              : `<a class="pill" href="#/@${esc(q)}">See @${esc(q)}'s profile</a>`}
+              : `<a class="pill" href="#/@${esc(q)}">See @${esc(q)}</a>`}
         </div>
       </section>
       ${more.length ? `
@@ -582,28 +630,61 @@ function connectPanel(why, alone = false) {
     </section>`;
 }
 
-/** Which of your profiles a name goes on: a choice when you have some, else a new one. */
-function profileChoice(mine, label) {
-  if (mine.length === 0) return `<p class="note" style="margin: 0">This makes your profile: the public card people follow. Add a photo and bio next.</p>`;
+/** Where a name you get points: one of your profiles (the first, unless you choose), a new one, or none yet. */
+function pointChoice(mine) {
   return `
     <div class="field">
-      <label for="to">${label}</label>
+      <label for="to">Point it at</label>
       <select id="to">
-        ${mine.map((p) => `<option value="${esc(p.id)}">${esc(nameOf(p))}${p.handle && p.name ? ` · @${esc(p.handle)}` : ""}</option>`).join("")}
+        ${mine.map((p) => `<option value="${esc(p.id)}">${esc(withHandle(p))}</option>`).join("")}
         <option value="new">A new profile</option>
+        <option value="none">No profile for now</option>
       </select>
     </div>`;
 }
 
+/** Profile `p`, which `me` owns, shows `handle` as its default name: written while `handle` comes to point at it. */
+async function showWrite(state, p, handle) {
+  const token = await profile.profileToken(state, p);
+  const old = await state.get(profile.shownKey(p));
+  return {
+    actions: [
+      { key: profile.profileKey(p), oldValue: token.value, newValue: token.value },
+      { key: profile.shownKey(p), ...(old !== undefined && { oldValue: old }), newValue: handle },
+    ],
+  };
+}
+
+/**
+ * The write that puts `handle` on `me`'s account: free, bought at its price,
+ * or taken as offered. It points as chosen: at a profile of yours (which
+ * shows it, if it shows no name yet), at a new profile, or nowhere.
+ */
+async function getName(state, me, handle, choice) {
+  const entry = await profile.resolve(state, handle);
+  const get = (point) => (entry ? profile.buy(state, me, handle, { point }) : profile.claim(state, me, handle, { point }));
+  if (choice === "none") return get(undefined);
+  if (choice === "new") {
+    if (!entry) return (await profile.createProfile(state, me, { handle })).write;
+    const made = await profile.createProfile(state, me);
+    return profile.combine(made.write, await get(made.id), { actions: [{ key: profile.shownKey(made.id), newValue: handle }] });
+  }
+  const to = await profile.getProfile(state, choice);
+  if (to?.owner !== me) throw new Error("That profile isn't yours anymore. Look again.");
+  const write = await get(choice);
+  return to.handle ? write : profile.combine(write, await showWrite(state, choice, handle));
+}
+
 /**
  * Checkout: only the order. A handle no one owns costs 0, a listed one its
- * asking price, paid to its owner. It goes on a profile of yours.
+ * asking price, paid to its owner. It goes on your account, pointed at a
+ * profile if you like.
  */
 async function viewBuy(handle, state) {
   const entry = await profile.resolve(state, handle);
+  if (entry && entry.owner === connected) return viewBought(handle, state);
+  if (entry && entry.price === undefined) return entry.offer === connected ? viewTake(handle, state) : viewStart(`@${handle} was just taken and is not for sale.`);
   const mine = await myProfiles(state);
-  if (entry && mine.some((p) => p.id === entry.profile)) return viewBought(handle, state);
-  if (entry && entry.price === undefined) return viewStart(`@${handle} was just taken and is not for sale.`);
   const price = entry?.price ?? 0n;
   const ready = Boolean(wallet()); // Buy connects first if this site isn't connected yet
   // Short on this chain: said here; whether and how to pay is the wallet's to decide.
@@ -620,8 +701,8 @@ async function viewBuy(handle, state) {
           ${FEE > 0n ? `<span class="label">Network fee</span><span>${coins(FEE)}</span>
           <span style="font-weight: 600">Total</span><span style="font-weight: 600">${coins(price + FEE)}</span>` : ""}
         </div>
-        ${connected ? profileChoice(mine, "Put it on") : ""}
-        <p class="note" style="margin: 0">Yours until you sell it or give it away. No renewals.${entry ? " Only the name moves: its old profile stays with its owner. If the owner changes the price before it lands, nothing is taken." : ""}</p>
+        ${connected ? pointChoice(mine) : ""}
+        <p class="note" style="margin: 0">The name is yours: point it at a profile, or keep it for later. No renewals.${entry ? " Only the name moves. If the owner changes the price before it lands, nothing is taken." : ""}</p>
         ${short ? `<p class="note" id="short" style="margin: 0">This costs ${coins(price + FEE)}. Your account has ${coins(balance)} on this chain.</p>` : ""}
         ${ready ? `<button class="pill accent big" type="submit">${price + FEE === 0n ? `Get @${esc(handle)} free` : `Buy for ${coins(price + FEE)}`}</button>` : ""}
       </form>
@@ -629,42 +710,47 @@ async function viewBuy(handle, state) {
     </main>`;
 }
 
-/** Just bought: say so, then the next step. */
+/** Just got a name: say so, then the next step. */
 async function viewBought(handle, state) {
-  const p = await profile.profileOf(state, handle);
+  const entry = await profile.resolve(state, handle);
+  const p = entry?.profile && (await profile.getProfile(state, entry.profile));
+  const yours = p?.owner === connected;
+  const next = !yours
+    ? `<a class="pill accent big" href="#/profiles">Go to My profiles</a>`
+    : `${p.name
+        ? `<a class="pill accent big" href="#/@${esc(handle)}">View the profile</a>`
+        : `<a class="pill accent big" href="#/edit/${esc(p.id)}">Set up the profile</a>`}
+       <a class="pill big" href="#/profiles">Go to My profiles</a>`;
   return `
     <main class="col card" style="margin-top: 48px">
-      <span class="badge">Bought</span>
+      <span class="badge">Yours</span>
       <h1 class="mono">@${esc(handle)} is yours</h1>
-      <p class="bio">It stays yours until you sell it or give it away. Any app can now find your profile by it.</p>
-      <div class="stack" style="width: 100%; margin-top: 28px">
-        ${p?.name
-          ? `<a class="pill accent big" href="#/@${esc(handle)}">View the profile</a>`
-          : `<a class="pill accent big" href="#/edit/${esc(p?.id ?? "")}">Set up the profile</a>`}
-        <a class="pill big" href="#/profiles">Go to My profiles</a>
-      </div>
+      <p class="bio">It stays yours until you sell it or give it away. ${yours ? "Any app can now find your profile by it." : p ? `It points at ${esc(nameOf(p))} until you point it elsewhere.` : "It points at no profile yet."}</p>
+      <div class="stack" style="width: 100%; margin-top: 28px">${next}</div>
     </main>`;
 }
 
-/** A name offered to one of your profiles: take it, for nothing. */
+/** A name offered to your account: take it, for nothing, and point it. */
 async function viewTake(handle, state) {
   const entry = await profile.resolve(state, handle);
-  const mine = await myProfiles(state);
-  const to = mine.find((p) => p.id === entry?.offer);
-  if (entry && mine.some((p) => p.id === entry.profile)) return viewMessage(`@${handle} is yours`, "", `<a class="pill big" href="#/@${esc(handle)}" style="margin-top: 20px">See it</a>`);
-  if (!entry || !to) {
-    return viewMessage(`@${handle} isn't offered to a profile of yours`, `Selfhold connects account <span class="mono">${esc(shortID(connected))}</span> here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`);
+  if (entry && entry.owner === connected) return viewMessage(`@${handle} is yours`, "", `<a class="pill big" href="#/@${esc(handle)}" style="margin-top: 20px">See it</a>`);
+  if (!entry || entry.offer !== connected) {
+    return viewMessage(`@${handle} isn't offered to you`, `Selfhold connects account <span class="mono">${esc(shortID(connected))}</span> here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`);
   }
+  const mine = await myProfiles(state);
   return `
     <main class="col card" style="margin-top: 48px">
       <span class="badge">A gift</span>
       <h1 class="mono">@${esc(handle)}</h1>
-      <p class="bio">Its owner is giving it to your profile ${esc(nameOf(to))}. Take it, and it's yours.</p>
-      <button class="pill accent big" type="button" data-take-name="${esc(handle)}" data-to="${esc(to.id)}" style="margin-top: 28px">Take @${esc(handle)}</button>
+      <p class="bio">Its owner is giving it to your account. Take it, and it's yours.</p>
+      <div class="stack" style="width: 100%; margin-top: 28px; text-align: left">
+        ${pointChoice(mine)}
+        <button class="pill accent big" type="button" data-take-name="${esc(handle)}">Take @${esc(handle)}</button>
+      </div>
     </main>`;
 }
 
-/** A profile for sale, or offered to you: take it, with its card and names. */
+/** A profile for sale, or offered to you: take it, with its card and followers. */
 async function viewTakeProfile(id, state) {
   const p = await profile.getProfile(state, id);
   if (!p) return viewMessage("No such profile", "Its link may be mistyped.");
@@ -673,14 +759,13 @@ async function viewTakeProfile(id, state) {
   if (!offered && p.price === undefined) {
     return viewMessage(`${nameOf(p)} isn't for sale`, `Selfhold connects account <span class="mono">${esc(shortID(connected))}</span> here. If it was offered to another of your accounts, switch to it in Selfhold and open the link again.`);
   }
-  const names = await profile.namesOf(state, id);
   return `
     ${backBar(pageOf(p), nameOf(p))}
     <main class="col stack" style="margin-top: 12px">
       <h1 style="margin: 0">${offered ? "A profile for you" : "Buy this profile"}</h1>
       <section class="panel stack">
         ${personRow(p, pageOf(p), p.handle && p.name ? `@${p.handle}` : "")}
-        <p class="note" style="margin: 0">It comes whole: its card, its followers${names.length ? ` and its names, ${names.map((n) => `@${esc(n.handle)}`).join(", ")}` : ""}.</p>
+        <p class="note" style="margin: 0">It comes with its card and followers. Names don't come with it: they stay with their owners, who may point them elsewhere.</p>
         ${offered ? "" : `<div class="sum" style="margin: 0"><span class="label">Price · paid to its owner</span><span>${coins(p.price)}</span><span class="label">Network fee</span><span>${coins(FEE)}</span></div>`}
         ${wallet() ? `<button class="pill accent big" type="button" data-take-profile="${esc(id)}">${offered ? "Take it" : `Buy for ${coins(p.price + FEE)}`}</button>` : walletPanel("To take a profile, add Selfhold")}
       </section>
@@ -692,7 +777,7 @@ async function viewEdit(id, state) {
   if (p?.owner !== connected) {
     return `<main class="col card" style="margin-top: 48px"><h1>This profile isn't yours</h1><p class="bio">Only its owner edits it.</p><a class="pill big" href="#/profiles" style="margin-top: 20px">Go to My profiles</a></main>`;
   }
-  const admins = await profile.adminsOf(state, id);
+  const [admins, pointing] = await Promise.all([profile.adminsOf(state, id), namesPointingAt(state, id)]);
   // Links and photo being edited survive a redraw until saved.
   draft = draft?.id === id ? draft : { id, links: [...(p.links ?? [])], avatar: p.avatar };
   return `
@@ -723,6 +808,20 @@ async function viewEdit(id, state) {
           <div class="end"><button class="pill dark" type="submit">Save</button></div>
         </div>
       </form>
+      <form id="default-name" class="panel stack" data-profile="${esc(id)}" aria-labelledby="default-title">
+        <h2 id="default-title" style="margin: 0">Default name</h2>
+        ${pointing.length
+          ? `<p class="note" style="margin: 0">The @name this profile shows, of the names that point at it.</p>
+        <div class="field">
+          <label for="default" class="sr">Default name</label>
+          <select id="default">
+            ${p.handle ? "" : `<option value="" selected disabled>Choose a name</option>`}
+            ${pointing.map((h) => `<option value="${esc(h)}"${h === p.handle ? " selected" : ""}>@${esc(h)}</option>`).join("")}
+          </select>
+        </div>
+        <button class="pill" type="submit" style="align-self: flex-start">Use this name</button>`
+          : `<p class="note" style="margin: 0">No name points at this profile. Point one of yours at it from <a href="#/profiles">My profiles</a>.</p>`}
+      </form>
       <section class="panel stack" aria-labelledby="admins-title">
         <h2 id="admins-title" style="margin: 0">Admins</h2>
         <p class="note" style="margin: 0">Admins post as this profile in apps, with their own key. Only you edit it, sell it or change admins.</p>
@@ -732,6 +831,13 @@ async function viewEdit(id, state) {
     </main>`;
 }
 let draft = null;
+
+/** The names pointing at profile `p`, whoever owns them: one prefix read of `points/`. */
+async function namesPointingAt(state, p) {
+  const found = [];
+  for await (const [key, value] of state.list("points/")) if (value === p) found.push(key.slice("points/".length));
+  return found;
+}
 
 
 const linkRow = (link, i) => `
@@ -752,52 +858,41 @@ const linkRow = (link, i) => `
 /** The link a receiver opens to take an offered name or profile. */
 const takeLink = (hash) => `${location.origin}${location.pathname}${hash}`;
 
-/** One name on a profile of yours: its state, and a menu of what you can do. */
-function nameRow(n, p) {
-  const main = n.handle === p.handle;
-  const label = [main && "main name", n.price !== undefined && `for sale · ${coins(n.price)}`, n.offer && "offered"].filter(Boolean).join(" · ");
-  return `
-    <div class="row">
-      <span class="mono">@${esc(n.handle)}</span>
-      <span class="label">${label}</span>
-      <div class="end">
-        ${n.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take/${n.handle}`))}">Copy link<span class="sr"> to take @${esc(n.handle)}</span></button>` : ""}
-        <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" data-profile="${esc(p.id)}" aria-label="Options for @${esc(n.handle)}">⋯</button>
-      </div>
-    </div>`;
-}
-
-/** My profiles: each profile you own, its names, and a menu for each. */
+/** My profiles: each profile you own, then each name, each with a menu. */
 async function viewProfiles(state) {
-  const mine = await myProfiles(state);
-  const names = await Promise.all(mine.map((p) => profile.namesOf(state, p.id)));
+  const [mine, names] = await Promise.all([myProfiles(state), myNames(state)]);
+  const to = await pointedBy(state, names);
   return `
     <main class="col" style="margin-top: 12px">
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap">
         <h1 style="margin: 0">My profiles</h1>
-        ${mine.length ? `<button class="pill" type="button" data-new-profile>New profile</button>` : ""}
+        <button class="pill" type="button" data-new-profile>New profile</button>
       </div>
-      ${mine.length ? "" : `<p class="note">No profiles yet. <a href="#/">Get a name</a> to make your first one.</p>`}
-      ${mine.map((p, i) => `
-        <section class="section stack" aria-labelledby="p-${esc(p.id)}">
-          <h2 id="p-${esc(p.id)}" class="sr">${esc(nameOf(p))}</h2>
+      <section class="section stack" aria-labelledby="profiles-title">
+        <h2 id="profiles-title">Profiles</h2>
+        ${mine.map((p) => `
           <div class="profile-head">
             ${personRow(p, pageOf(p), [p.name && p.handle && `@${p.handle}`, p.price !== undefined && `for sale · ${coins(p.price)}`, p.offer && "offered"].filter(Boolean).join(" · "))}
             <div class="end">
               ${p.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take-profile/${p.id}`))}">Copy link<span class="sr"> to take ${esc(nameOf(p))}</span></button>` : ""}
               <a class="pill" href="#/edit/${esc(p.id)}">Edit<span class="sr"> ${esc(nameOf(p))}</span></a>
-              <button class="pill icon" type="button" data-profile-menu="${esc(p.id)}" aria-label="Options for ${esc(nameOf(p))}">⋯</button>
+              <button class="pill icon" type="button" data-profile-menu="${esc(p.id)}" aria-label="Options for profile ${esc(nameOf(p))}">⋯</button>
             </div>
-          </div>
-          ${names[i].map((n) => nameRow(n, p)).join("") || `<p class="note" style="margin: 0">No name yet. <a href="#/">Get one</a> for it.</p>`}
-        </section>`).join("")}
+          </div>`).join("") || `<p class="note">No profiles yet. A profile is the public card people follow.</p>`}
+      </section>
+      <section class="section stack" aria-labelledby="names-title">
+        <h2 id="names-title">Names</h2>
+        ${names.map((n) => handleRow(n, to[n.handle], `
+          ${n.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take/${n.handle}`))}">Copy link<span class="sr"> to take @${esc(n.handle)}</span></button>` : ""}
+          <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`)).join("")
+          || `<p class="note">No names yet. <a href="#/">Get one</a>.</p>`}
+      </section>
     </main>`;
 }
 
 /** The marketplace: names their owners are selling. */
 async function viewMarket(state) {
   const sale = await profile.forSale(state);
-  const mine = new Set((await myProfiles(state)).map((p) => p.id));
   return `
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0">Marketplace</h1>
@@ -806,7 +901,7 @@ async function viewMarket(state) {
         ${sale.map((h) => `
           <div class="row">
             <span class="mono">@${esc(h.handle)}</span>
-            <div class="end">${mine.has(h.profile)
+            <div class="end">${h.owner === connected
               ? `<span class="label">yours · ${coins(h.price)}</span>`
               : `<span class="price">${coins(h.price)}</span><a class="pill dark" href="#/buy/${esc(h.handle)}" aria-label="Buy @${esc(h.handle)} for ${coins(h.price)}">Buy</a>`}</div>
           </div>`).join("") || `<p class="note">Nothing for sale right now. <a href="#/">Search for a name</a>: one no one owns costs 0.</p>`}
@@ -876,9 +971,14 @@ async function render() {
       } else if (page === "bought" && connected && profile.isHandle(arg)) html = await viewBought(arg, state);
       else if (/^(@[a-z0-9_]+|[a-z2-7]{16})\/(followers|following)$/.test(r)) {
         html = await viewFollowList(page, arg, state);
-      } else if (r.startsWith("@") || profile.isProfileId(r)) {
-        const p = await profileFor(state, r);
-        html = p ? await viewProfile(p, state) : profile.isHandle(r.slice(1)) ? await viewSearch(r.slice(1), state) : viewMessage("No such profile", "Its link may be mistyped.");
+      } else if (r.startsWith("@") && profile.isHandle(r.slice(1))) {
+        // A name: the profile it points at, else who owns it, else a search for it.
+        const entry = await profile.resolve(state, r.slice(1));
+        const p = entry?.profile && (await profile.getProfile(state, entry.profile));
+        html = p ? await viewProfile(p, state, entry.handle) : entry ? viewName(entry) : await viewSearch(r.slice(1), state);
+      } else if (profile.isProfileId(r)) {
+        const p = await profile.getProfile(state, r);
+        html = p ? await viewProfile(p, state) : viewMessage("No such profile", "Its link may be mistyped.");
       } else if (profile.isAddress(r)) html = await viewAccount(r, state);
       else if (r === "") html = viewStart();
       else html = viewStart(`“${r}” is not a name, a profile or an account.`);
@@ -981,12 +1081,13 @@ document.addEventListener("click", async (event) => {
       },
     );
   } else if (d.nameMenu) {
-    await nameMenu(d.nameMenu, d.profile);
+    await nameMenu(d.nameMenu);
   } else if (d.profileMenu) {
     await profileMenu(d.profileMenu);
   } else if (d.takeName) {
     const me = connected;
-    act(`Taking @${d.takeName}`, async () => profile.moveName(await readState(), me, d.takeName, d.to), async (s) => (await profile.resolve(s, d.takeName))?.profile === d.to, () => {
+    const choice = $("#to").value;
+    act(`Taking @${d.takeName}`, async () => getName(await readState(), me, d.takeName, choice), async (s) => (await profile.resolve(s, d.takeName))?.owner === me, () => {
       location.hash = `#/@${d.takeName}`;
     });
   } else if (d.takeProfile) {
@@ -1018,34 +1119,135 @@ document.addEventListener("click", async (event) => {
 });
 
 /** What can be done with a name of yours, chosen from a sheet. */
-async function nameMenu(handle, id) {
+async function nameMenu(handle) {
   const state = await readState();
-  const [entry, p, mine] = await Promise.all([profile.resolve(state, handle), profile.getProfile(state, id), myProfiles(state)]);
-  if (!entry || !p) return;
+  const entry = await profile.resolve(state, handle);
+  if (!entry) return;
+  const to = entry.profile && (await profile.getProfile(state, entry.profile));
   const terms = entry.price !== undefined || entry.offer;
   const choice = await sheet({
     title: `@${handle}`,
-    body: `On ${nameOf(p)}.`,
+    body: to ? `Points at ${withHandle(to)}.` : "Points at no profile.",
     choices: [
-      ...(p.handle === handle ? [] : [{ value: "main", label: "Make main name" }]),
+      { value: "point", label: "Point at…" },
+      ...(to?.owner === connected && to.handle !== handle ? [{ value: "default", label: "Make default name" }] : []),
       terms ? { value: "keep", label: entry.offer ? "Take back the offer" : "Stop selling" } : { value: "sell", label: "Sell" },
       ...(terms ? [] : [{ value: "give", label: "Give" }]),
-      ...(mine.length > 1 ? [{ value: "move", label: "Move to another profile" }] : []),
       { value: "release", label: "Release", bad: true },
     ],
   });
   const me = connected;
-  if (choice === "main") {
-    act(`Making @${handle} the main name`, async () => profile.showName(await readState(), me, id, handle), async (s) => (await profile.getProfile(s, id))?.handle === handle);
+  if (choice === "point") await pointHandle(handle);
+  else if (choice === "default") {
+    act(`Making @${handle} the default name`, async () => profile.showName(await readState(), me, to.id, handle), async (s) => (await profile.getProfile(s, to.id))?.handle === handle);
   } else if (choice === "keep") {
     act(`@${handle}`, async () => profile.unlist(await readState(), me, handle), async (s) => {
       const now = await profile.resolve(s, handle);
       return now?.price === undefined && now?.offer === undefined;
     });
-  } else if (choice === "sell") await listHandle(handle, p);
+  } else if (choice === "sell") await listHandle(handle);
   else if (choice === "give") await giveHandle(handle);
-  else if (choice === "move") await moveHandle(handle);
-  else if (choice === "release") await releaseHandle(handle, p);
+  else if (choice === "release") await releaseHandle(handle);
+}
+
+/**
+ * Points a name of yours: at one of your profiles (which shows it, if it
+ * shows no name yet), at someone else's, or at none.
+ */
+async function pointHandle(handle) {
+  const state = await readState();
+  const [entry, mine] = await Promise.all([profile.resolve(state, handle), myProfiles(state)]);
+  if (!entry) return;
+  const choice = await sheet({
+    title: `Point @${handle} at`,
+    body: "The profile people find by this name. You can point it elsewhere any time.",
+    choices: [
+      ...mine.filter((p) => p.id !== entry.profile).map((p) => ({ value: p.id, label: withHandle(p) })),
+      { value: "other", label: "Someone else's profile…" },
+      ...(entry.pointer !== undefined ? [{ value: "none", label: "No profile" }] : []),
+    ],
+  });
+  if (!choice) return;
+  let target = choice === "none" ? undefined : choice;
+  if (choice === "other") {
+    const typed = await sheet({
+      title: `Point @${handle} at someone else's profile`,
+      body: "It stays your name: you can point it back, sell it or give it away.",
+      input: { label: "Their profile: its @name or its link", attrs: 'autocomplete="off" spellcheck="false"', check: (v) => (/^@?[a-z0-9_]+$/.test(v) || profileIdIn(v) ? "" : "An @name or a profile link.") },
+      confirm: "Point it",
+    });
+    if (typed === null) return;
+    const now = await readState();
+    target = profileIdIn(typed) ?? (await profile.resolve(now, typed.replace(/^@/, "")))?.profile;
+    if (!target || !(await profile.getProfile(now, target))) return toast(`No profile is ${typed}.`, { bad: true });
+  }
+  const me = connected;
+  act(
+    `Pointing @${handle}`,
+    async () => {
+      const now = await readState();
+      const write = await profile.pointName(now, me, handle, target);
+      const p = target && (await profile.getProfile(now, target));
+      // A profile of yours with no name to show shows this one.
+      return p?.owner === me && !p.handle ? profile.combine(write, await showWrite(now, target, handle)) : write;
+    },
+    async (s) => (await profile.resolve(s, handle))?.pointer === target,
+  );
+}
+
+/** Copies a link the receiver opens, and says so; the link stays on the row to copy again. */
+function shareLink(hash) {
+  navigator.clipboard?.writeText(takeLink(hash)).catch(() => {});
+  toast("Offered. Link copied: send it to them.");
+}
+
+async function listHandle(handle) {
+  const price = await sheet({
+    title: `Sell @${handle}`,
+    body: "Anyone can buy it at this price at once, without asking you. Only the name moves.",
+    input: {
+      label: "Asking price",
+      attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
+      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
+    },
+    confirm: "List it",
+  });
+  if (price === null) return;
+  const me = connected;
+  act(`Listing @${handle}`, async () => profile.list(await readState(), me, handle, BigInt(price)), async (s) => (await profile.resolve(s, handle))?.price === BigInt(price));
+}
+
+/** Gives a name to another account: it takes the name from a link you send. */
+async function giveHandle(handle) {
+  const to = await sheet({
+    title: `Give @${handle}`,
+    body: "Only the name moves, to the account you name. It takes it from a link you send; until then you can take it back.",
+    input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? (v === connected ? "That is your own account." : "") : "That is not an account ID.") },
+    confirm: "Offer it",
+  });
+  if (to === null) return;
+  const me = connected;
+  act(`Offering @${handle}`, async () => profile.offerName(await readState(), me, handle, to), async (s) => (await profile.resolve(s, handle))?.offer === to, () => {
+    shareLink(`#/take/${handle}`);
+    render();
+  });
+}
+
+/** A profile id in what someone typed: the id itself, or a link ending in it. */
+function profileIdIn(text) {
+  const id = text.trim().split(/[#/]/).pop();
+  return profile.isProfileId(id) ? id : undefined;
+}
+
+async function releaseHandle(handle) {
+  const ok = await sheet({
+    title: `Release @${handle}`,
+    body: "It stops being yours and points nowhere. Anyone may get it next, free.",
+    confirm: "Release it",
+  });
+  if (!ok) return;
+  const me = connected;
+  act(`Releasing @${handle}`, async () => profile.release(await readState(), me, handle), async (s) => (await profile.resolve(s, handle)) === undefined);
 }
 
 /** What can be done with a whole profile of yours, chosen from a sheet. */
@@ -1055,7 +1257,7 @@ async function profileMenu(id) {
   const terms = p.price !== undefined || p.offer;
   const choice = await sheet({
     title: nameOf(p),
-    body: "The whole profile: its card, followers and names.",
+    body: "The profile: its card and followers. Your names stay yours.",
     choices: terms
       ? [{ value: "keep", label: p.offer ? "Take back the offer" : "Stop selling" }]
       : [{ value: "sell", label: "Sell profile" }, { value: "give", label: "Give profile" }],
@@ -1070,92 +1272,11 @@ async function profileMenu(id) {
   else if (choice === "give") await giveProfile(p);
 }
 
-/** Copies a link the receiver opens, and says so; the link stays on the row to copy again. */
-function shareLink(hash) {
-  navigator.clipboard?.writeText(takeLink(hash)).catch(() => {});
-  toast("Offered. Link copied: send it to them.");
-}
-
-/** What a profile keeps when `handle` leaves it: always its card, and maybe no name. */
-async function leftWith(p, handle) {
-  const names = await profile.namesOf(await readState(), p.id);
-  const alone = names.length === 1 && names[0].handle === handle;
-  return `${nameOf(p)} keeps its card and followers.${alone ? ` It will have no @name until you get another.` : ""}`;
-}
-
-async function listHandle(handle, p) {
-  const price = await sheet({
-    title: `Sell @${handle}`,
-    body: `Anyone can buy it at this price at once, without asking you. Only the name moves: ${await leftWith(p, handle)}`,
-    input: {
-      label: "Asking price",
-      attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
-      check: (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 64n ? "" : "A whole number of coins."),
-    },
-    confirm: "List it",
-  });
-  if (price === null) return;
-  const me = connected;
-  act(`Listing @${handle}`, async () => profile.list(await readState(), me, handle, BigInt(price)), async (s) => (await profile.resolve(s, handle))?.price === BigInt(price));
-}
-
-/** Gives a name to someone's profile: they take it from a link you send them. */
-async function giveHandle(handle) {
-  const to = await sheet({
-    title: `Give @${handle}`,
-    body: "Name the profile it goes to, by @name or by its link. Its owner takes it from a link you send them; until then you can take it back.",
-    input: { label: "Their profile", attrs: 'autocomplete="off" spellcheck="false"', check: (v) => (/^@?[a-z0-9_]+$/.test(v.trim()) || profileIdIn(v) ? "" : "An @name or a profile link.") },
-    confirm: "Offer it",
-  });
-  if (to === null) return;
-  const state = await readState();
-  const id = profileIdIn(to) ?? (await profile.resolve(state, to.trim().replace(/^@/, "")))?.profile;
-  if (!id) return toast(`No profile is ${to.trim()}.`, { bad: true });
-  const me = connected;
-  act(`Offering @${handle}`, async () => profile.offerName(await readState(), me, handle, id), async (s) => (await profile.resolve(s, handle))?.offer === id, () => {
-    shareLink(`#/take/${handle}`);
-    render();
-  });
-}
-
-/** A profile id in what someone typed: the id itself, or a link ending in it. */
-function profileIdIn(text) {
-  const id = text.trim().split(/[#/]/).pop();
-  return profile.isProfileId(id) ? id : undefined;
-}
-
-/** Moves a name to another of your profiles. */
-async function moveHandle(handle) {
-  const state = await readState();
-  const entry = await profile.resolve(state, handle);
-  const others = (await myProfiles(state)).filter((p) => p.id !== entry?.profile);
-  if (!entry || others.length === 0) return;
-  const to = await sheet({
-    title: `Move @${handle}`,
-    body: "To which of your profiles?",
-    choices: others.map((p) => ({ value: p.id, label: `${nameOf(p)}${p.name && p.handle ? ` · @${p.handle}` : ""}` })),
-  });
-  if (!to) return;
-  const me = connected;
-  act(`Moving @${handle}`, async () => profile.moveName(await readState(), me, handle, to), async (s) => (await profile.resolve(s, handle))?.profile === to);
-}
-
-async function releaseHandle(handle, p) {
-  const ok = await sheet({
-    title: `Release @${handle}`,
-    body: `It stops being yours, and anyone may get it next, free. ${await leftWith(p, handle)}`,
-    confirm: "Release it",
-  });
-  if (!ok) return;
-  const me = connected;
-  act(`Releasing @${handle}`, async () => profile.release(await readState(), me, handle), async (s) => (await profile.resolve(s, handle)) === undefined);
-}
-
 async function sellProfile(p) {
   const id = p.id;
   const price = await sheet({
     title: `Sell ${nameOf(p)}`,
-    body: "Anyone can buy it at this price at once: its card, followers and names all go with it.",
+    body: "Anyone can buy it at this price at once. Its card and followers go to the buyer. Your names stay yours; point them elsewhere if you like.",
     input: {
       label: "Asking price",
       attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"',
@@ -1173,7 +1294,7 @@ async function giveProfile(p) {
   const id = p.id;
   const to = await sheet({
     title: `Give ${nameOf(p)}`,
-    body: "Its card, followers and names go to the account you name, which takes it from a link you send. To move it to a new key of your own, name that key's account.",
+    body: "Its card and followers go to the account you name, which takes it from a link you send. Your names stay yours. To move it to a new key of your own, name that key's account.",
     input: { label: "Their account ID", attrs: 'autocomplete="off" spellcheck="false" class="mono"', check: (v) => (profile.isAddress(v) ? "" : "That is not an account ID.") },
     confirm: "Offer it",
   });
@@ -1224,7 +1345,7 @@ document.addEventListener("submit", async (event) => {
       }
     }
     const me = connected;
-    const choice = $("#to")?.value ?? "new";
+    const chosen = $("#to")?.value;
     act(
       `Buying @${want}`,
       async () => {
@@ -1233,20 +1354,22 @@ document.addEventListener("submit", async (event) => {
         // Bought at the price shown, or not at all.
         if (entry && entry.price === undefined) throw new Error(`@${want} was just taken, and it isn't for sale.`);
         if (entry && entry.price !== BigInt(form.dataset.price)) throw new Error(`The price of @${want} just changed. Look again.`);
-        if (choice !== "new") return entry ? profile.buy(state, me, want, choice) : profile.claim(state, me, choice, want);
-        // Onto a new profile, made in the same approval.
-        if (!entry) return (await profile.createProfile(state, me, { handle: want })).write;
-        const made = await profile.createProfile(state, me);
-        return profile.combine(made.write, await profile.buy(state, me, want, made.id, { created: true }));
+        // Connected only now, with no choice shown: your first profile, else a new one.
+        const choice = chosen ?? (await profile.profilesOf(state, me))[0]?.id ?? "new";
+        return getName(state, me, want, choice);
       },
-      async (s) => {
-        const holder = (await profile.resolve(s, want))?.profile;
-        return (await profile.profileToken(s, holder))?.owner === me;
-      },
+      async (s) => (await profile.resolve(s, want))?.owner === me,
       () => {
         location.hash = `#/bought/${want}`;
       },
     );
+  } else if (form.id === "default-name") {
+    event.preventDefault();
+    const id = form.dataset.profile;
+    const handle = $("#default").value;
+    if (!handle) return toast("Choose a name first.", { bad: true });
+    const me = connected;
+    act(`Showing @${handle}`, async () => profile.showName(await readState(), me, id, handle), async (s) => (await profile.getProfile(s, id))?.handle === handle);
   } else if (form.id === "edit") {
     event.preventDefault();
     const links = readDraftLinks().filter((l) => l.label || l.url);
