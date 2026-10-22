@@ -156,6 +156,176 @@ impl<'a> Body<'a> {
     }
 }
 
+/// The signers in a crit-bit tree (a compressed binary trie), so that asking
+/// whether an account signs follows one path rather than walking every signer.
+/// Each internal node holds the first bit where the keys below it differ, and
+/// a path visits ever later bits: every signer is an address, 59 characters,
+/// so no path is longer than its bits, whatever addresses a signer grinds.
+///
+/// Built in scratch words: word 0 is the root, then four words per internal
+/// node: byte index, the mask of every bit but the critical one, two children.
+/// A reference is 0 (none), `offset << 1` for a leaf (the signer's text at
+/// that offset in the body, which is never 0), or `node << 1 | 1`.
+pub struct Signers<'a, 's> {
+    bytes: &'a [u8],
+    words: &'s mut [u32],
+}
+
+impl<'a> Body<'a> {
+    /// The signers, in a tree built in `scratch`, which must hold at least
+    /// `signer_words` of the body's bytes. Every signer is an address.
+    pub fn signers<'s>(&self, scratch: &'s mut [u32]) -> Option<Signers<'a, 's>> {
+        let (major, count, mut at) = head(self.bytes, self.signers)?;
+        if major != ARRAY {
+            return None;
+        }
+        let words = scratch.get_mut(..signer_words(count as usize)?)?;
+        words[0] = 0;
+        let mut tree = Signers { bytes: self.bytes, words };
+        for node in 0..count as u32 {
+            if !is_address(text(self.bytes, at)?) {
+                return None;
+            }
+            tree.insert(at, node)?;
+            at = skip(self.bytes, at)?;
+        }
+        Some(tree)
+    }
+}
+
+impl Signers<'_, '_> {
+    pub fn is_signer(&self, owner: &[u8]) -> Option<()> {
+        let leaf = self.closest(owner)?;
+        (text(self.bytes, leaf)? == owner).then_some(())
+    }
+
+    /// The offset of the signer whose path `key` follows.
+    fn closest(&self, key: &[u8]) -> Option<usize> {
+        let mut reference = self.words[0];
+        if reference == 0 {
+            return None;
+        }
+        while reference & 1 == 1 {
+            let node = 1 + 4 * (reference >> 1) as usize;
+            reference = self.words[node + 2 + self.direction(key, node)];
+        }
+        Some((reference >> 1) as usize)
+    }
+
+    /// Which child of internal node `node` (its first word) `key` goes to.
+    fn direction(&self, key: &[u8], node: usize) -> usize {
+        let byte = key.get(self.words[node] as usize).copied().unwrap_or(0) as u32;
+        ((1 + (self.words[node + 1] | byte)) >> 8) as usize
+    }
+
+    /// Adds the signer whose text is at `at`, as internal node `node` if one
+    /// is needed. A signer listed twice is added once.
+    fn insert(&mut self, at: usize, node: u32) -> Option<()> {
+        let leaf = u32::try_from(at).ok()?.checked_mul(2)?;
+        let key = text(self.bytes, at)?;
+        let Some(best) = self.closest(key) else {
+            self.words[0] = leaf;
+            return Some(());
+        };
+        let best = text(self.bytes, best)?;
+        let byte_at = |text: &[u8], index: usize| text.get(index).copied().unwrap_or(0) as u32;
+        let Some(index) = (0..key.len().max(best.len())).find(|&i| byte_at(key, i) != byte_at(best, i)) else {
+            return Some(());
+        };
+        let mut differ = byte_at(key, index) ^ byte_at(best, index);
+        differ |= differ >> 1;
+        differ |= differ >> 2;
+        differ |= differ >> 4;
+        let others = (differ & !(differ >> 1)) ^ 0xff;
+        let direction = ((1 + (others | byte_at(key, index))) >> 8) as usize;
+        // Down to where the new node goes: above the first node that tests a
+        // later bit.
+        let mut slot = 0;
+        while self.words[slot] & 1 == 1 {
+            let below = 1 + 4 * (self.words[slot] >> 1) as usize;
+            let (byte, mask) = (self.words[below] as usize, self.words[below + 1]);
+            if byte > index || (byte == index && mask > others) {
+                break;
+            }
+            slot = below + 2 + self.direction(key, below);
+        }
+        let new = 1 + 4 * node as usize;
+        self.words[new] = index as u32;
+        self.words[new + 1] = others;
+        self.words[new + 2 + direction] = leaf;
+        self.words[new + 2 + (1 - direction)] = self.words[slot];
+        self.words[slot] = node << 1 | 1;
+        Some(())
+    }
+}
+
+/// Scratch words for a tree of `count` signers: the root, and four for each
+/// internal node, of which there are fewer than signers.
+pub fn signer_words(count: usize) -> Option<usize> {
+    count.checked_mul(4)?.checked_add(1)
+}
+
+/// What purchases owe, checked against the account actions in one pass: a
+/// payee's purchases come one after another, and payees are credited in the
+/// order they are first owed. Each credit pays one run of purchases.
+pub struct Payments<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    remaining: u64,
+    payee: Option<&'a [u8]>,
+    owed: u128,
+}
+
+impl<'a> Body<'a> {
+    /// Nothing owed yet; the credits from the first account action on.
+    pub fn payments(&self) -> Option<Payments<'a>> {
+        let (major, remaining, at) = head(self.bytes, self.credits)?;
+        (major == ARRAY).then_some(Payments { bytes: self.bytes, at, remaining, payee: None, owed: 0 })
+    }
+}
+
+impl<'a> Payments<'a> {
+    /// A purchase owes `payee` `price`. A free one owes nothing, and leaves
+    /// the run as it was.
+    pub fn owe(&mut self, payee: &'a [u8], price: u64) -> Option<()> {
+        if price == 0 {
+            return Some(());
+        }
+        if self.payee != Some(payee) {
+            self.settle()?;
+            self.payee = Some(payee);
+        }
+        self.owed = self.owed.checked_add(price as u128)?;
+        Some(())
+    }
+
+    /// Every run of purchases paid: run this after the last action.
+    pub fn finish(mut self) -> Option<()> {
+        self.settle()
+    }
+
+    /// The run owed to the current payee is paid by their next credit.
+    fn settle(&mut self) -> Option<()> {
+        let (Some(payee), owed) = (self.payee.take(), core::mem::take(&mut self.owed)) else {
+            return Some(());
+        };
+        if owed == 0 {
+            return Some(());
+        }
+        let bytes = self.bytes;
+        while self.remaining > 0 {
+            self.remaining -= 1;
+            let at = self.at;
+            self.at = skip(bytes, at)?;
+            if text(bytes, map_value(bytes, at, b"owner")?)? == payee {
+                let (sign, amount, _) = head(bytes, map_value(bytes, at, b"delta")?)?;
+                return (sign == UNSIGNED && amount as u128 >= owed).then_some(());
+            }
+        }
+        None
+    }
+}
+
 pub struct Action<'a> {
     pub key: &'a [u8],
     pub old_value: Option<&'a [u8]>,
@@ -379,10 +549,20 @@ macro_rules! lattice_policy_abi {
                 if pointer < 0 || length < 0 {
                     return 0;
                 }
-                let context = unsafe {
-                    core::slice::from_raw_parts(pointer as usize as *const u8, length as usize)
-                };
-                $validate(context) as i32
+                let (start, length) = (pointer as usize, length as usize);
+                let context = unsafe { core::slice::from_raw_parts(start as *const u8, length) };
+                // Scratch for the signer tree, above the context: room for as
+                // many signers as the context could hold (an address takes
+                // 61 bytes); the policy uses only what it needs.
+                let Some(slots) = $crate::signer_words(length / 61) else { return 0 };
+                let Some(from) = start.checked_add(length).map(|end| end.next_multiple_of(4)) else { return 0 };
+                let Some(end) = slots.checked_mul(4).and_then(|bytes| from.checked_add(bytes)) else { return 0 };
+                let have = memory_size(0) * PAGE_BYTES;
+                if end > have && memory_grow(0, (end - have).div_ceil(PAGE_BYTES)) == usize::MAX {
+                    return 0;
+                }
+                let scratch = unsafe { core::slice::from_raw_parts_mut(from as *mut u32, slots) };
+                $validate(context, scratch) as i32
             }
 
             #[panic_handler]
