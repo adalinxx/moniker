@@ -3,10 +3,10 @@
 // whose genesis pays the premine to Alice. Alice claims @alice and points it
 // at a profile on two app chains. Every way of taking a name, or writing its
 // pointers or index keys, without the right is refused. A sale moves only
-// the name: Bob buys @alice at its new price and repoints it on one chain,
-// and the other pointer stays. A name offered to an account is taken by it
-// alone. Releasing a name deletes its pointers. Last, moniker-sdk does the
-// same through a wallet.
+// the name and clears its pointers: Bob buys @alice at its new price,
+// pointing it on one chain, and the other pointer is gone. A name offered to
+// an account is taken by it alone, pointing nowhere. Releasing a name
+// deletes its pointers. Last, moniker-sdk does the same through a wallet.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
@@ -125,6 +125,7 @@ try {
     const spec = await chainSpec(sdk, client, (await tip(sdk, node, CHAIN, client)).specCID);
     const want = JSON.parse(readFileSync(SPEC, "utf8")).wasmPolicies[0].moduleCID;
     assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [want]);
+    assert.ok(names.runsMoniker(spec), "the SDK finds the Moniker policy in the spec");
     console.log(`Moniker launched under policy ${want}; Alice holds ${await balance(alice)}`);
   }
   await admitted("Alice funds Bob", alice, { actions: [], payments: [{ to: bob.address, amount: 2000n }] });
@@ -168,7 +169,7 @@ try {
     await refused("Alice writes a profile on Moniker", alice, { actions: [{ key: `profile/${alicesRave}`, newValue: alice.address }] });
   }
 
-  // A sale moves only the name: the buyer repoints one chain, the other stays.
+  // A sale moves only the name, and clears its pointers but the one the buyer sets.
   await admitted("Alice lists @alice at 500", alice, await names.list(await state(), alice.address, "alice", 500n));
   await until("the listing is mined", async () => (await name("alice"))?.price === 500n);
   const seenAt500 = await names.buy(await state(), bob.address, "alice", { point: { chain: RAVE, profile: bobsRave } });
@@ -182,18 +183,16 @@ try {
     assert.equal(await balance(alice), aliceBefore + 600n);
     assert.equal(await balance(bob), bobBefore - 601n);
     const s = await state();
-    assert.deepEqual((await names.resolve(s, "alice")).points, { [RAVE]: bobsRave, [STOA]: alicesStoa });
+    assert.deepEqual((await names.resolve(s, "alice")).points, { [RAVE]: bobsRave });
     assert.deepEqual(await names.namesOf(s, alice.address), []);
     assert.deepEqual((await names.namesOf(s, bob.address)).map((n) => n.handle), ["alice"]);
   }
-  console.log("Bob bought @alice at 600 and repointed it on Rave; it still points at Alice's Stoa profile until he changes it");
-  await refused("Alice, its seller, stops @alice pointing on Stoa", alice, {
-    actions: [{ key: names.nameKey("alice"), oldValue: bob.address, newValue: bob.address }, { key: names.pointsKey("alice", STOA), oldValue: alicesStoa }],
+  console.log("Bob bought @alice at 600 pointing it on Rave; its Stoa pointer, Alice's, is gone");
+  await refused("Alice, its seller, points @alice on Stoa again", alice, {
+    actions: [{ key: names.nameKey("alice"), oldValue: bob.address, newValue: bob.address }, { key: names.pointsKey("alice", STOA), newValue: alicesStoa }],
   });
-  await admitted("Bob stops @alice pointing on Stoa", bob, await names.pointName(await state(), bob.address, "alice", STOA, null));
-  await until("@alice points nowhere on Stoa", async () => (await names.pointer(await state(), "alice", STOA)) === undefined);
 
-  // A name offered to an account: only that account takes it, and its pointers stay.
+  // A name offered to an account: only that account takes it, and it comes pointing nowhere.
   await admitted("Alice claims @alice_gift, pointed on Rave", alice, await names.claim(await state(), alice.address, "alice_gift", { point: { chain: RAVE, profile: alicesRave } }));
   await until("@alice_gift is mined", async () => (await name("alice_gift"))?.owner === alice.address);
   await admitted("Alice offers @alice_gift to Bob", alice, await names.offerName(await state(), alice.address, "alice_gift", bob.address));
@@ -204,8 +203,10 @@ try {
   });
   await admitted("Bob takes @alice_gift", bob, await names.buy(await state(), bob.address, "alice_gift"));
   await until("Bob holds @alice_gift", async () => (await name("alice_gift"))?.owner === bob.address);
-  assert.deepEqual((await name("alice_gift")).points, { [RAVE]: alicesRave });
-  console.log("a name offered to Bob: the miner can't take it, Bob does, and it points where it did");
+  assert.deepEqual((await name("alice_gift")).points, {});
+  console.log("a name offered to Bob: the miner can't take it, Bob does, and it points nowhere");
+  await admitted("Bob points @alice_gift on Rave", bob, await names.pointName(await state(), bob.address, "alice_gift", RAVE, alicesRave));
+  await until("@alice_gift points on Rave", async () => (await names.pointer(await state(), "alice_gift", RAVE)) === alicesRave);
 
   // Releasing a name deletes its pointers; anyone may claim it next.
   await refused("Bob releases @alice_gift and repoints it", bob, {
@@ -249,7 +250,7 @@ try {
   await until("the library's listing", async () => (await moniker.forSale()).some((n) => n.handle === "carol" && n.price === 7n && n.owner === carol.address));
   await moniker.buy("carol", { point: { chain: STOA, profile: profileId("f") } }, { wallet: walletOf(bob) });
   await until("the library's buy", async () => (await moniker.name("carol"))?.owner === bob.address);
-  assert.deepEqual((await moniker.name("carol")).points, { [RAVE]: profileId("d"), [STOA]: profileId("f") });
+  assert.deepEqual((await moniker.name("carol")).points, { [STOA]: profileId("f") });
   assert.deepEqual((await moniker.names(bob.address)).map((n) => n.handle), ["alice", "carol"]);
   await assert.rejects(moniker.point("carol", RAVE, profileId("g"), { wallet: walletOf(carol) }), /isn't yours/);
   await moniker.release("carol", { wallet: walletOf(bob) });

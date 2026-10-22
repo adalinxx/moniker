@@ -415,7 +415,7 @@ async function viewSearch(q, state, { near = true } = {}) {
   }
   const headline = {
     available: ["Available", "No one owns it yet, so it costs 0."],
-    sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction. Only the name moves: where it points stays until you change it."],
+    sale: ["For sale", "Its owner is selling it. You pay them directly, in the same transaction. It comes pointing nowhere, so no profile keeps showing it; point it at yours after."],
     offered: ["Offered to you", "Its owner is giving it to your account. Take it, and it's yours."],
     yours: ["Yours", "Your account owns this name."],
     taken: ["Taken", "Someone owns it and isn't selling it."],
@@ -507,7 +507,7 @@ async function viewTake(handle, state) {
     <main class="col card" style="margin-top: 48px">
       <span class="badge">A gift</span>
       <h1 class="mono">@${esc(handle)}</h1>
-      <p class="bio">Its owner is giving it to your account. Take it, and it's yours. Where it points stays until you change it.</p>
+      <p class="bio">Its owner is giving it to your account. Take it, and it's yours. It comes pointing nowhere; point it at yours after.</p>
       <div class="stack" style="width: 100%; margin-top: 28px">
         <button class="pill accent big" type="button" data-take="${esc(handle)}">Take @${esc(handle)}</button>
       </div>
@@ -775,7 +775,7 @@ async function unpointHandle(handle, entry) {
 async function sellHandle(handle) {
   const price = await sheet({
     title: `Sell @${handle}`,
-    body: "Anyone can buy it at this price at once, without asking you. Only the name moves: where it points stays until its new owner changes it.",
+    body: "Anyone can buy it at this price at once, without asking you. Its pointers are cleared when it is bought, so no profile of yours keeps showing it.",
     input: { label: "Asking price", attrs: 'inputmode="numeric" pattern="[0-9]*" autocomplete="off"', check: priceProblem },
     confirm: "List it",
   });

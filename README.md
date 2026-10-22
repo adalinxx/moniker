@@ -30,9 +30,10 @@ owner writes its pointers. A profile `p` on chain `C` shows `@h` only while
 side alone shows nothing, so no one shows a name they don't own and no name
 shows on a profile that doesn't choose it. There are no admins.
 
-Selling or giving a name moves only the name: its pointers stay until its
-new owner changes them. Releasing a name deletes all its pointers; anyone
-may claim it next.
+Selling or giving a name moves only the name, and the buyer's transaction
+deletes its pointers (setting one of its own if it likes), so no profile
+keeps showing a name its owner sold. Releasing a name deletes all its
+pointers too; anyone may claim it next.
 
 ## Records
 

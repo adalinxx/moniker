@@ -389,7 +389,7 @@ test("a visitor sees who owns @alice and where it points, known apps by name", a
   await expect(page.locator(".account-page")).toContainText("This account owns no names.");
 }, { wallet: false });
 
-test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and its pointers stay", async ({ page }) => {
+test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and it comes pointing nowhere", async ({ page }) => {
   await openApp(page, alice, "#/names");
   await page.getByLabel("Name", { exact: true }).fill("@Alice_Art");
   await page.getByLabel("Sell it right away at (optional)").fill("05");
@@ -416,13 +416,13 @@ test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and its 
     await expect(bobPage.locator("h1")).toHaveText("Names for sale");
     await bobPage.getByRole("link", { name: "See @alice_art for 40" }).click();
     await expect(bobPage.locator(".result .badge")).toHaveText("For sale");
-    await expect(bobPage.locator(".result")).toContainText("Only the name moves");
+    await expect(bobPage.locator(".result")).toContainText("It comes pointing nowhere");
     await bobPage.getByRole("button", { name: "Buy @alice_art for 40" }).click();
     await expect(bobPage.locator(".result .badge")).toHaveText("Yours");
-    await expect(bobPage.locator("table.pointers")).toContainText(profileId("e"));
+    await expect(bobPage.locator("main")).toContainText("@alice_art points at no profile in any app.");
   });
   const entry = await held("alice_art");
-  expect([entry.owner, entry.price, entry.points]).toEqual([bob.address, undefined, { [RAVE]: profileId("e") }]);
+  expect([entry.owner, entry.price, entry.points]).toEqual([bob.address, undefined, {}]);
   expect(await balance(alice.address)).toBe(aliceBefore + 40n);
   // Gone from Alice's names.
   await page.reload();
@@ -455,7 +455,7 @@ test("Alice gives @alice_gift to Bob's account; only Bob takes it, from the link
     await expect(bobPage.locator(".result .badge")).toHaveText("Yours");
   });
   const entry = await held("alice_gift");
-  expect([entry.owner, entry.offer, entry.points]).toEqual([bob.address, undefined, { [RAVE]: profileId("f") }]);
+  expect([entry.owner, entry.offer, entry.points]).toEqual([bob.address, undefined, {}]);
 });
 
 test("Alice offers @alice_back to Carol, then takes the offer back", async ({ page }) => {
