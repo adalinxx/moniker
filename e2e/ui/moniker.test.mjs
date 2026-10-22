@@ -693,12 +693,12 @@ test("Settings: a node that is down is skipped, and with none reachable the page
   await page.goto(stack.app + "#/settings");
   await page.getByRole("button", { name: "Defaults" }).click();
   await expect(page.locator("#s-nodes")).toHaveValue("https://lattice-testnet-apps-iad.fly.dev\nhttps://lattice-testnet-apps-ams.fly.dev");
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-01c01f");
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
 }, { wallet: false, expectedErrors: /ERR_CONNECTION_REFUSED/ });
 
 test("Settings saved for a trial chain since moved follow the move, and keep their nodes", async ({ page }) => {
   await openApp(page, null, "#/settings", { nodes: [stack.node], chain: "Nexus/testnet/moniker-273339", follows: "Nexus/testnet/follows-f53551", ownNode: "http://127.0.0.1:1" });
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-01c01f");
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
   await expect(page.locator("#s-nodes")).toHaveValue(stack.node);
   // A chain of one's own choosing is kept.
   await page.locator("#s-chain").fill(stack.chain);

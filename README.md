@@ -10,7 +10,7 @@ belongs to you, not to an app: no company can take it back, rename it or
 hand it to someone else, and only your key can change where it points. Any
 app can know you by it.
 
-Moniker (`Nexus/moniker` in tests, `Nexus/testnet/moniker-01c01f` on the
+Moniker (`Nexus/moniker` in tests, `Nexus/testnet/moniker-307b2c` on the
 testnet trial) is the names chain: it holds names, where each one points,
 and the handle each account shows. There are no profiles and no admins:
 an account is the identity, and apps keep their own records (cards
@@ -112,7 +112,7 @@ page reloads at the same place, and on a phone it offers the link to finish
 on a computer. Writes are free on the trial chain (its hosts admit 0-fee
 transactions). It reads every record by CID from the nodes in Settings (by
 default the shared testnet hosts `lattice-testnet-apps-iad` and `-ams`,
-chain `Nexus/testnet/moniker-01c01f`); settings saved for an older trial
+chain `Nexus/testnet/moniker-307b2c`); settings saved for an older trial
 chain follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
 
 ```sh

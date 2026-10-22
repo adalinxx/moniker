@@ -11,13 +11,13 @@ import { createMoniker, isAddress, isHandle } from "../sdk/src/index.mjs";
 
 const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/moniker-01c01f",
+  chain: "Nexus/testnet/moniker-307b2c",
 };
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
     // Settings saved before the trials moved name old ones; follow the move.
-    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339"].includes(saved.chain)) delete saved.chain;
+    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339", "Nexus/testnet/moniker-01c01f"].includes(saved.chain)) delete saved.chain;
     return {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
