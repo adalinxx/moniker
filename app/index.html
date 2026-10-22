@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Moniker</title>
-<meta name="description" content="Own your name on the internet: an @handle you buy and keep, that any app can recognize.">
+<meta name="description" content="Own your name on the internet: an @handle you keep, pointed at your profile in each app.">
 <link rel="icon" href="./brand/favicon.ico" sizes="any">
 <link rel="icon" href="./brand/favicon.svg" type="image/svg+xml">
 <style>
@@ -43,7 +43,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .result-end .pill { min-height: 52px; padding: 0 24px; font-size: 16px; }
 .badge { align-self: flex-start; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--hair); color: var(--soft); }
 .result.available .badge, .result.sale .badge { background: var(--accent); color: var(--accent-ink); }
-.card .badge { align-self: center; }
 .price { font-weight: 600; font-variant-numeric: tabular-nums; }
 .price.big { font-size: 28px; }
 .order { margin: 0; font-size: 22px; }
@@ -55,16 +54,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .pill[disabled] { opacity: 0.55; cursor: default; }
 .icon { width: 44px; padding: 0; border-color: transparent; background: transparent; }
 .card { text-align: center; display: flex; flex-direction: column; align-items: center; margin-top: 16px; }
-.avatar { width: 104px; height: 104px; border-radius: 50%; background: var(--avatar); object-fit: cover; display: flex; align-items: center; justify-content: center; font-size: 36px; font-weight: 600; color: var(--soft); overflow: hidden; }
-.avatar.small { width: 72px; height: 72px; font-size: 26px; }
 h1 { margin: 20px 0 0; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.handle { margin: 4px 0 0; font-family: var(--mono); font-size: 15px; color: var(--accent); }
-.via { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
 .bio { margin: 14px 0 0; max-width: 44ch; color: var(--soft); white-space: pre-line; overflow-wrap: anywhere; }
-.links { width: 100%; display: flex; flex-direction: column; gap: 14px; margin-top: 32px; }
-.links a { display: flex; align-items: center; justify-content: center; min-height: 60px; padding: 8px 24px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-weight: 500; overflow-wrap: anywhere; }
-.links a:hover { border-color: var(--ink); }
 footer { margin-top: auto; padding-top: 48px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 footer nav { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
 footer nav a, .quiet { color: var(--muted); font-size: 13px; text-decoration: none; padding: 10px 8px; }
@@ -82,29 +74,16 @@ footer nav a, .quiet { color: var(--muted); font-size: 13px; text-decoration: no
 .field label, .label { font-size: 14px; color: var(--muted); }
 .field input, .field textarea, .field select { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .field textarea { resize: vertical; line-height: 1.5; }
-.link-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; }
-.link-row .inputs { display: flex; flex-direction: column; gap: 6px; }
-.link-row input { min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.link-row .tools { display: flex; gap: 2px; }
-.bar { position: sticky; bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; padding: 12px 12px 12px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; }
-.bar .end { margin-left: auto; display: flex; gap: 8px; }
 dialog { border: 0; border-radius: 24px; padding: 24px; width: min(480px, calc(100% - 32px)); background: var(--surface); color: var(--ink); }
 dialog::backdrop { background: rgba(22, 24, 29, 0.45); }
 dialog h2 { font-size: 20px; }
 dialog p { color: var(--soft); }
-.sum { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; padding: 12px 0; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); margin: 14px 0; }
 dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px); background: var(--ink); color: var(--bg); padding: 12px 18px; border-radius: 14px; display: flex; gap: 12px; align-items: center; z-index: 10; }
 .toast.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
 .toast button { border: 0; background: transparent; color: inherit; min-width: 32px; min-height: 32px; cursor: pointer; font-size: 18px; }
 .empty { color: var(--muted); text-align: center; margin-top: 48px; }
 button.link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; min-height: 0; }
-.follows { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; }
-.counts { margin: 0; display: flex; gap: 20px; }
-.counts a { color: var(--ink); text-decoration: none; padding: 10px 4px; }
-.counts a:hover { text-decoration: underline; }
-follows-button { --follows-accent: var(--accent); --follows-accent-ink: var(--accent-ink); --follows-ink: var(--ink); --follows-line: var(--line); --follows-muted: var(--muted); }
-.owner { margin-top: 10px; font-size: 14px; color: var(--accent); text-decoration: underline; padding: 10px 4px; }
 h1.account { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 8px 0 0; }
 h1.account .label { font-size: 14px; font-weight: 400; color: var(--muted); }
 .account-page > .copy { min-width: 44px; font-family: var(--body); text-decoration: underline; }
@@ -113,9 +92,6 @@ h1.account .mono { font-size: 0.85em; font-weight: 600; }
 .account-page .names h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 0 0 4px; text-align: left; }
 .account-page .names .row { text-align: left; }
 .account-page .names .empty { margin-top: 8px; }
-.row.person { text-decoration: none; color: var(--ink); padding-left: 10px; }
-.row.person .who { display: flex; flex-direction: column; min-width: 0; }
-.avatar.sm { width: 40px; height: 40px; font-size: 16px; margin: 0; flex: none; }
 .start { margin-top: 12vh; }
 .hero { margin: 0; font-size: clamp(30px, 7vw, 40px); line-height: 1.12; letter-spacing: -0.02em; }
 .lede { margin: 0; color: var(--soft); }
@@ -131,10 +107,13 @@ h1[tabindex="-1"]:focus { outline: none; }
 .choices { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
 .choices .pill { justify-content: flex-start; }
 .pill.bad { color: var(--bad); }
+.pill.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }
+.owned { margin: 0; color: var(--soft); }
+.pointers { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; table-layout: fixed; }
+.pointers th, .pointers td { text-align: left; padding: 12px 16px; border-top: 1px solid var(--hair); overflow-wrap: anywhere; font-weight: 400; }
+.pointers thead th { border-top: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
+.pointers tbody th { font-weight: 600; }
 button.quiet { min-height: 44px; }
-.profile-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.profile-head .row.person { flex: 1 1 220px; }
-.profile-head .end { display: flex; gap: 8px; flex-wrap: wrap; }
 h1.empty { font-size: 18px; font-weight: 400; }
 </style>
 <script type="module" src="./app.js"></script>
