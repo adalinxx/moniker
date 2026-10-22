@@ -55,11 +55,7 @@ const pay = (from, to, amount) => [
 ];
 const name = (handle) => `name/${handle}`;
 const names = (owner, handle) => `names/${owner}/${handle}`;
-const P = "abcdefghijklmnop"; // a profile id on an app chain
-const Q = "qrstuvwxyz234567"; // another
-const RAVE = "Nexus/testnet/rave-186079";
-const FANFARE = "Nexus/testnet/fanfare";
-const SOCIAL = "Nexus/social_2";
+const P = "abcdefghijklmnop"; // a profile id, which is not an account
 
 /** `name/<handle>` rewritten to its value: who owns the name, for the policy. */
 const held = (handle, value) => ({ key: name(handle), oldValue: value, newValue: value });
@@ -79,8 +75,8 @@ const release = (handle, owner) => [
   { key: name(handle), oldValue: owner },
   { key: names(owner, handle), oldValue: "1" },
 ];
-/** `points/<handle>/<chain>` set to profile `p` (or deleted), from `old`. */
-const point = (handle, chain, p, old) => ({ key: `points/${handle}/${chain}`, ...(old && { oldValue: old }), ...(p && { newValue: p }) });
+/** `points/<handle>` set to account `to` (or deleted), from `old`. */
+const point = (handle, to, old) => ({ key: `points/${handle}`, ...(old && { oldValue: old }), ...(to && { newValue: to }) });
 
 test("an account writes, edits and deletes its own records", () => {
   assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/key.x25519`, newValue: "abcd" }]));
@@ -96,7 +92,7 @@ test("nobody writes or deletes another account's records", () => {
 });
 
 test("keys outside the shapes are rejected", () => {
-  for (const key of ["user", "user/", ALICE, `index/topic/${ALICE}`, `users/${ALICE}`, `/user/${ALICE}`, "name", "name/", `names/${P}/alice`, `names/${ALICE}`, "points/", "points/alice", `points/Alice/${RAVE}`, `point/alice/${RAVE}`, `card/${P}`]) {
+  for (const key of ["user", "user/", ALICE, `index/topic/${ALICE}`, `users/${ALICE}`, `/user/${ALICE}`, "name", "name/", `names/${P}/alice`, `names/${ALICE}`, "points", "points/", "points/Alice", "points/al-ice", "point/alice", `card/${P}`]) {
     assert.ok(!signedBy([ALICE], [{ key, newValue: "1" }]), key);
   }
 });
@@ -112,7 +108,7 @@ test("profile, owns/ and about/ keys are no longer Moniker's: refused", () => {
   assert.ok(!signedBy([ALICE], [{ key: `profile/${P}`, newValue: ALICE }, { key: `owns/${ALICE}/${P}`, newValue: "1" }]));
   assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `about/${P}/card`, newValue: "{}" }]));
   assert.ok(!signedBy([ALICE], [...claim("alice", ALICE), { key: `owns/${ALICE}/${P}`, newValue: "1" }]));
-  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `profile/${P}`, oldValue: ALICE, newValue: ALICE }, point("alice", RAVE, P)]));
+  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `profile/${P}`, oldValue: ALICE, newValue: ALICE }, point("alice", ALICE)]));
 });
 
 test("coin actions pass untouched", () => {
@@ -270,77 +266,87 @@ test("index keys come directly after their name, the one it leaves first", () =>
   assert.ok(!signedBy([ALICE, BOB], moved.slice(0, 2)));
   assert.ok(!signedBy([ALICE, BOB], [moved[0], moved[1], { key: `user/${ALICE}/x`, newValue: "1" }, moved[2]]));
   // A pointer doesn't come before the index keys are done.
-  assert.ok(!signedBy([ALICE, BOB], [moved[0], point("art", RAVE, Q), moved[1], moved[2]]));
-  assert.ok(!signedBy([ALICE, BOB], [moved[0], moved[1], point("art", RAVE, Q), moved[2]]));
+  assert.ok(!signedBy([ALICE, BOB], [moved[0], point("art", BOB), moved[1], moved[2]]));
+  assert.ok(!signedBy([ALICE, BOB], [moved[0], moved[1], point("art", BOB), moved[2]]));
 });
 
 // ---------------------------------------------------------------- pointers
 
-test("a name's owner points it at a profile on each of several chains, right after the name", () => {
-  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, P)]));
-  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, P), point("alice", FANFARE, Q), point("alice", SOCIAL, P), point("alice", "Nexus", Q)]));
-  assert.ok(signedBy([ALICE], [...claim("alice", ALICE), point("alice", RAVE, P), point("alice", FANFARE, Q)]));
+test("an account shows a handle with its own user/<a>/name record", () => {
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/name`, newValue: "alice" }]));
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/name`, oldValue: "alice", newValue: "al" }]));
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/name`, oldValue: "al" }]));
+  // With the name it claims and points at itself, in one transaction.
+  assert.ok(signedBy([ALICE], [...claim("alice", ALICE), point("alice", ALICE), { key: `user/${ALICE}/name`, newValue: "alice" }]));
+  // Nobody else writes or deletes it.
+  assert.ok(!signedBy([BOB], [{ key: `user/${ALICE}/name`, newValue: "bob" }]));
+  assert.ok(!signedBy([BOB], [{ key: `user/${ALICE}/name`, oldValue: "alice" }]));
+  assert.ok(!signedBy([BOB], [held("alice", ALICE), { key: `user/${ALICE}/name`, newValue: "alice" }]));
+});
+
+test("a name's owner points it at any account, right after the name", () => {
+  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", ALICE)]));
+  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", BOB)]));
+  assert.ok(signedBy([ALICE], [...claim("alice", ALICE), point("alice", CAROL)]));
   // Re-pointed and deleted, on a priced name too.
-  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, Q, P), point("alice", FANFARE, undefined, Q)]));
-  assert.ok(signedBy([ALICE], [held("alice", `${ALICE}@5`), point("alice", RAVE, undefined, Q)]));
-  // Two names, each followed by its own pointers.
-  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, P), held("al", ALICE), point("al", RAVE, Q)]));
+  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", BOB, ALICE)]));
+  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", undefined, BOB)]));
+  assert.ok(signedBy([ALICE], [held("alice", `${ALICE}@5`), point("alice", ALICE, BOB)]));
+  // Two names, each followed by its own pointer.
+  assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", ALICE), held("al", ALICE), point("al", BOB)]));
   // A deletion has something to delete.
-  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `points/alice/${RAVE}` }]));
+  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: "points/alice" }]));
 });
 
 test("a pointer comes only right after its own name", () => {
   // Without the name before it.
-  assert.ok(!signedBy([ALICE], [point("alice", RAVE, P)]));
-  assert.ok(!signedBy([ALICE], [point("alice", RAVE, P), held("alice", ALICE)]));
+  assert.ok(!signedBy([ALICE], [point("alice", ALICE)]));
+  assert.ok(!signedBy([ALICE], [point("alice", ALICE), held("alice", ALICE)]));
   // Another key in between.
-  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `user/${ALICE}/x`, newValue: "1" }, point("alice", RAVE, P)]));
+  assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key: `user/${ALICE}/x`, newValue: "1" }, point("alice", ALICE)]));
   // For a different handle.
-  assert.ok(!signedBy([ALICE], [held("bob", ALICE), point("alice", RAVE, P)]));
-  assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, P), point("bob", RAVE, P)]));
-  assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice_", RAVE, P)]));
+  assert.ok(!signedBy([ALICE], [held("bob", ALICE), point("alice", ALICE)]));
+  assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", ALICE), point("bob", ALICE)]));
+  assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice_", ALICE)]));
 });
 
 test("only the name's owner points it", () => {
-  assert.ok(!signedBy([BOB], [held("alice", ALICE), point("alice", RAVE, Q)]));
-  assert.ok(!signedBy([BOB], [held("alice", ALICE), point("alice", RAVE, undefined, P)]));
-  assert.ok(!signedBy([BOB], [held("alice", `${ALICE}@5`), point("alice", RAVE, Q)]));
+  assert.ok(!signedBy([BOB], [held("alice", ALICE), point("alice", BOB)]));
+  assert.ok(!signedBy([BOB], [held("alice", ALICE), point("alice", undefined, ALICE)]));
+  assert.ok(!signedBy([BOB], [held("alice", `${ALICE}@5`), point("alice", BOB)]));
   // A name offered to Bob is still Alice's until Bob takes it.
-  assert.ok(!signedBy([BOB], [held("alice", `${ALICE}>${BOB}`), point("alice", RAVE, Q)]));
+  assert.ok(!signedBy([BOB], [held("alice", `${ALICE}>${BOB}`), point("alice", BOB)]));
 });
 
-test("a pointer's chain is a path of non-empty segments of letters, digits, - and _", () => {
-  for (const chain of ["Nexus", "Nexus/testnet", RAVE, "a-b_C9/x"]) {
-    assert.ok(signedBy([ALICE], [held("alice", ALICE), point("alice", chain, P)]), chain);
-  }
-  for (const chain of ["", "/", "Nexus//rave", "/Nexus/rave", "Nexus/rave/", "Nexus/ra ve", "Nexus/ra.ve", "Nexus/rave!", "Nexus/ravé", "Nexus/@rave"]) {
-    assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", chain, P)]), JSON.stringify(chain));
-    assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", chain, undefined, P)]), JSON.stringify(chain));
+test("a pointer is the one key points/<handle>: anything after the handle is refused", () => {
+  for (const key of [`points/alice/Nexus`, `points/alice/Nexus/testnet/rave-186079`, "points/alice/", `points/alice/${ALICE}`]) {
+    assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key, newValue: ALICE }]), key);
+    assert.ok(!signedBy([ALICE], [held("alice", ALICE), { key, oldValue: ALICE }]), key);
   }
 });
 
-test("a pointer's value is a profile id: 16 characters of a–z and 2–7", () => {
-  for (const value of [ALICE, "", "x", `${P}x`, P.slice(1), "abcdefghijklmno1", "abcdefghijklmno8", "abcdefghijklmnoP", "abcdefghijklmno_"]) {
-    assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", RAVE, value)]), value);
+test("a pointer's value is an account address", () => {
+  for (const value of [P, "", "x", "alice", ALICE.toUpperCase(), ALICE.slice(0, 58), `${ALICE}x`, `${ALICE}@5`, `${ALICE}>${BOB}`]) {
+    assert.ok(!signedBy([ALICE], [held("alice", ALICE), point("alice", value)]), value);
   }
 });
 
-test("a release deletes the name's pointers, and sets none", () => {
-  assert.ok(signedBy([ALICE], [...release("alice", ALICE), point("alice", RAVE, undefined, P)]));
-  assert.ok(signedBy([ALICE], [...release("alice", ALICE), point("alice", RAVE, undefined, P), point("alice", FANFARE, undefined, Q)]));
-  assert.ok(!signedBy([ALICE], [...release("alice", ALICE), point("alice", RAVE, Q, P)]));
-  assert.ok(!signedBy([ALICE], [...release("alice", ALICE), point("alice", RAVE, Q)]));
-  assert.ok(!signedBy([ALICE], [...release("alice", ALICE), point("alice", RAVE, undefined, P), point("alice", FANFARE, Q)]));
-  // The pointers come after the names/ key the release calls for.
-  assert.ok(!signedBy([ALICE], [{ key: name("alice"), oldValue: ALICE }, point("alice", RAVE, undefined, P), { key: names(ALICE, "alice"), oldValue: "1" }]));
+test("a release deletes the name's pointer, and sets none", () => {
+  assert.ok(signedBy([ALICE], [...release("alice", ALICE), point("alice", undefined, ALICE)]));
+  assert.ok(signedBy([ALICE], [...release("alice", ALICE), point("alice", undefined, BOB)]));
+  assert.ok(!signedBy([ALICE], [...release("alice", ALICE), point("alice", BOB, ALICE)]));
+  assert.ok(!signedBy([ALICE], [...release("alice", ALICE), point("alice", ALICE)]));
+  // The pointer comes after the names/ key the release calls for.
+  assert.ok(!signedBy([ALICE], [{ key: name("alice"), oldValue: ALICE }, point("alice", undefined, ALICE), { key: names(ALICE, "alice"), oldValue: "1" }]));
 });
 
-test("a buyer re-points the name in the same transaction as the purchase", () => {
+test("a taker points the name in the same transaction as taking it", () => {
   const buy = move("alice", ALICE, `${ALICE}@500`, BOB);
-  assert.ok(signedBy([BOB], [...buy, point("alice", RAVE, Q, P), point("alice", FANFARE, undefined, P)], pay(BOB, ALICE, 500n)));
-  assert.ok(signedBy([BOB], [...move("gift", ALICE, `${ALICE}>${BOB}`, BOB), point("gift", RAVE, Q, P)]));
-  // Without the purchase, the would-be buyer can't point it.
-  assert.ok(!signedBy([BOB], [{ key: name("alice"), oldValue: ALICE, newValue: ALICE }, point("alice", RAVE, Q)], pay(BOB, ALICE, 500n)));
+  assert.ok(signedBy([BOB], [...buy, point("alice", BOB, ALICE)], pay(BOB, ALICE, 500n)));
+  assert.ok(signedBy([BOB], [...buy, point("alice", undefined, ALICE)], pay(BOB, ALICE, 500n)));
+  assert.ok(signedBy([BOB], [...move("gift", ALICE, `${ALICE}>${BOB}`, BOB), point("gift", BOB, ALICE)]));
+  // Without taking it, the would-be buyer can't point it.
+  assert.ok(!signedBy([BOB], [{ key: name("alice"), oldValue: ALICE, newValue: ALICE }, point("alice", BOB)], pay(BOB, ALICE, 500n)));
 });
 
 // ---------------------------------------------------------------- scaling
@@ -350,7 +356,7 @@ test("the work grows with the transaction, no faster", () => {
   // only at the actions just before, so twice the actions take about twice the time.
   const time = (n) => {
     const actions = [];
-    for (let i = 0; i < n; i++) actions.push(...move(`h${i}`, ALICE, `${ALICE}@0`, BOB), point(`h${i}`, RAVE, Q, P), point(`h${i}`, FANFARE, Q));
+    for (let i = 0; i < n; i++) actions.push(...move(`h${i}`, ALICE, `${ALICE}@0`, BOB), point(`h${i}`, BOB, ALICE));
     const bytes = context(body(actions, [BOB]));
     const start = performance.now();
     assert.ok(validate(bytes));
