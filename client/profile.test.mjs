@@ -340,6 +340,18 @@ test("the wallet request carries the buy's payment", async () => {
   assert.equal(request.fee, "2");
 });
 
+test("a name bought by request passes the policy once the wallet fills in the account", async () => {
+  const c = chain({ [ALICE]: 100, [BOB]: 1000 });
+  const fill = (w, who) => JSON.parse(JSON.stringify(w, (k, v) => (typeof v === "bigint" ? `${v}n` : v)).replaceAll(profile.ACCOUNT, who), (k, v) => (typeof v === "string" && /^\d+n$/.test(v) ? BigInt(v.slice(0, -1)) : v));
+  assert.ok(c.submit(BOB, fill(profile.acquire("fresh"), BOB)));
+  assert.equal((await profile.resolve(c.state, "fresh")).owner, BOB);
+  await made(c, ALICE, undefined, "listed");
+  assert.ok(c.submit(ALICE, await profile.list(c.state, ALICE, "listed", 7n)));
+  assert.ok(c.submit(BOB, fill(profile.acquire("listed", await profile.resolve(c.state, "listed")), BOB)));
+  assert.deepEqual((await profile.namesOf(c.state, BOB)).map((e) => e.handle), ["fresh", "listed"]);
+  assert.equal(c.coins.get(ALICE), 100n - 2n + 7n);
+});
+
 test("the client's address and handle checks match the policy's", () => {
   assert.ok(profile.isAddress(ALICE));
   for (const bad of [ALICE.toUpperCase(), ALICE.slice(0, 58), `${ALICE.slice(0, 7)}z${ALICE.slice(8)}`, `${ALICE.slice(0, 58)}b`]) {
