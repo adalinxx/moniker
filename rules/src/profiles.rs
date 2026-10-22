@@ -8,7 +8,8 @@
 //! - `about/<p>/admin/<account>`: an admin, who acts for the profile as its
 //!   owner does except over its admins. The value is the owner who named
 //!   them, and they act only while that account still owns the profile, so a
-//!   sale ends every admin at once.
+//!   sale ends every admin at once. If the profile comes back to that
+//!   account, its admins act again unless it removed them.
 //! - `about/<p>/<field>...`: the profile's other records (its card, the
 //!   handle it shows, any of the app's fields), written by its owner or an
 //!   admin.
