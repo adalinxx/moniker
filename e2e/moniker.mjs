@@ -1,15 +1,13 @@
-// Moniker against a real node: a private host mines Nexus and a Moniker
-// chain launched from chain/spec.json with the built policy, whose genesis
-// pays the premine to Alice. Alice funds Bob, pins an avatar, makes a profile
-// with a card and @alice, and a second name, @alice_art, pointed at it. Every
-// way of taking or forging a profile, name, pointer or index key without the
-// right is refused. A name sale moves only the name: Bob buys @alice_art and
-// points it at his profile, and Alice's keeps its card and @alice. A name may
-// point at anyone's profile, which may show it; a name may point nowhere. A
-// profile sale moves its card: Bob buys Alice's profile, and @alice stays
-// hers, still pointing at it. A lost key is replaced by offering the profile
-// to a new key, which takes it. Last, the library does the same through a
-// wallet.
+// Moniker, the names chain, against a real node: a private host mines Nexus
+// and a Moniker chain launched from chain/spec.json with the built policy,
+// whose genesis pays the premine to Alice. Alice claims @alice pointed at
+// herself and shows it. A name points at any account, which shows it only
+// once it names it too. Every way of taking a name, or writing its pointer,
+// index keys or another account's records, without the right is refused. A
+// sale moves the name and clears its pointer: Alice stops showing it until
+// she points another name at herself; Bob shows it once he points it at
+// himself. A name offered to an account is taken by it alone. Releasing a
+// name deletes its pointer. Last, moniker-sdk does the same through a wallet.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
@@ -18,15 +16,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { mediaVolume, operator, readMedia } from "../client/media.mjs";
-import * as profile from "../sdk/src/records/profile.mjs";
+import * as names from "../sdk/src/records/names.mjs";
 import { chainSpec, tip, view, volumeLoader } from "../sdk/src/records/state.mjs";
 import * as wallet from "../sdk/src/records/wallet.mjs";
 import { createMoniker } from "../sdk/src/index.mjs";
 
 const sdk = await import(process.env.LATTICE_SDK);
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
-const CHAIN = profile.MONIKER_CHAIN;
+const CHAIN = ["Nexus", "moniker"];
 const [listen, rpc, publicRead] = [25021, 29190, 29191];
 const node = `http://127.0.0.1:${publicRead}`;
 const MODULE = here("../policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm");
@@ -42,7 +39,7 @@ function configure(change) {
 }
 
 const account = () => sdk.accountFromPrivateKey(sdk.generatePrivateKey());
-const [miner, alice, bob, newKey] = [account(), account(), account(), account()];
+const [miner, alice, bob, carol] = [account(), account(), account(), account()];
 
 async function until(label, condition, seconds = Number(process.env.E2E_SECONDS ?? 300)) {
   const deadline = Date.now() + seconds * 1000;
@@ -72,6 +69,8 @@ async function state() {
   const { generalStateCID } = await tip(sdk, node, CHAIN, client);
   return view(volumeLoader(client, sdk.decodeDagCbor), generalStateCID);
 }
+const name = async (handle) => names.resolve(await state(), handle);
+const shows = async (who) => names.handleOf(await state(), who.address);
 
 /** Signs a body by `who` and submits it. Resolves to `{ ok, status, text }`. */
 async function submit(who, body) {
@@ -101,9 +100,6 @@ async function refused(label, who, write) {
   console.log(`  refused: ${label} (${result.status} ${result.text.trim()})`);
 }
 
-/** The profile holding `@handle`, as any app reads it. */
-const page = async (handle) => profile.profileOf(await state(), handle);
-
 try {
   lattice("init");
   configure((topology) => {
@@ -122,154 +118,123 @@ try {
   await until("the Moniker genesis is mined", async () => (await balance(alice)) > 0n);
   {
     const client = volumes();
-    assert.ok(profile.runsMoniker(await chainSpec(sdk, client, (await tip(sdk, node, CHAIN, client)).specCID)));
-    console.log(`Moniker launched; the client finds the Moniker policy in its spec; Alice holds ${await balance(alice)}`);
+    const spec = await chainSpec(sdk, client, (await tip(sdk, node, CHAIN, client)).specCID);
+    const want = JSON.parse(readFileSync(SPEC, "utf8")).wasmPolicies[0].moduleCID;
+    assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [want]);
+    assert.ok(names.runsMoniker(spec), "the SDK finds the Moniker policy in the spec");
+    console.log(`Moniker launched under policy ${want}; Alice holds ${await balance(alice)}`);
   }
   await admitted("Alice funds Bob", alice, { actions: [], payments: [{ to: bob.address, amount: 2000n }] });
   await until("Bob is funded", async () => (await balance(bob)) === 2000n);
 
-  // A profile with a pinned avatar, links and @alice, in one write.
-  const links = [{ label: "Website", url: "https://alice.example" }, { label: "GitHub", url: "https://github.com/alice" }];
-  const avatar = mediaVolume(sdk, "image/png", Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
-  const host = operator(`http://127.0.0.1:${rpc}`, readFileSync(`${root}/chains/Nexus/.cookie`, "utf8"));
-  assert.ok((await host.pin(avatar)).pins.includes(avatar.cid));
-  const made = await profile.createProfile(await state(), alice.address, { card: { name: "Alice", description: "Builds things", avatar: avatar.cid, links }, handle: "alice" });
-  const P = made.id;
-  await admitted("Alice's profile with @alice", alice, profile.combine(made.write, await profile.setField(await state(), alice.address, "key.x25519", "alice-public-key")));
-  await until("Alice's profile is mined", async () => (await page("alice"))?.id === P);
-  await admitted("@alice_art pointed at the same profile", alice, await profile.claim(await state(), alice.address, "alice_art", { point: P }));
-  await until("@alice_art is mined", async () => (await profile.resolve(await state(), "alice_art"))?.profile === P);
+  // A name pointed at its owner, then shown by her.
+  await admitted("Alice claims @alice, pointed at herself", alice, await names.claim(await state(), alice.address, "alice", { point: true }));
+  await until("@alice is mined", async () => (await name("alice"))?.pointer === alice.address);
+  assert.equal(await shows(alice), undefined);
+  await admitted("Alice shows @alice", alice, await names.showName(await state(), alice.address, "alice"));
+  await until("Alice shows @alice", async () => (await shows(alice)) === "alice");
   {
     const s = await state();
-    assert.deepEqual(await profile.getProfile(s, P), { id: P, owner: alice.address, name: "Alice", description: "Builds things", avatar: avatar.cid, links, handle: "alice" });
-    assert.deepEqual((await profile.namesOf(s, alice.address)).map((e) => [e.handle, e.profile]), [["alice", P], ["alice_art", P]]);
-    assert.deepEqual((await profile.profilesOf(s, alice.address)).map((x) => x.id), [P]);
-    assert.deepEqual(await profile.getFields(s, alice.address), { "key.x25519": "alice-public-key" });
-    const file = readMedia(sdk, await host.fetch(avatar.cid), { accept: (type) => type.startsWith("image/"), maxBytes: 1 << 20 });
-    assert.equal(file?.type, "image/png");
+    const held = await names.resolve(s, "alice");
+    assert.deepEqual([held.owner, held.pointer], [alice.address, alice.address]);
+    assert.deepEqual((await names.namesOf(s, alice.address)).map((n) => n.handle), ["alice"]);
+    assert.equal(await names.getField(s, alice.address, "name"), "alice");
   }
-  console.log("Alice's profile: card, avatar, links, key, and two names pointing at it, read back through the client");
+  console.log("@alice is Alice's, points at her, and her account shows it");
 
-  // New records on a profile that exists: an admin, and its default name.
-  await admitted("Alice makes Bob an admin", alice, await profile.setAdmin(await state(), alice.address, P, bob.address));
-  await until("the admin is mined", async () => profile.actsFor(await state(), bob.address, P));
-  await admitted("Alice shows @alice_art", alice, await profile.showName(await state(), alice.address, P, "alice_art"));
-  await until("@alice_art is shown", async () => (await page("alice")).handle === "alice_art");
-  await admitted("Alice shows @alice again", alice, await profile.showName(await state(), alice.address, P, "alice"));
-  await until("@alice is shown again", async () => (await page("alice")).handle === "alice");
-  console.log("an admin and a default name written onto the existing profile");
+  // A name pointed at another account shows there once that account names it; pointed away, it stops.
+  await admitted("Alice claims @alice_lend, pointed at Bob", alice, await names.claim(await state(), alice.address, "alice_lend", { point: bob.address }));
+  await until("@alice_lend points at Bob", async () => (await name("alice_lend"))?.pointer === bob.address);
+  assert.equal(await shows(bob), undefined);
+  await admitted("Bob shows @alice_lend", bob, await names.showName(await state(), bob.address, "alice_lend"));
+  await until("Bob shows @alice_lend", async () => (await shows(bob)) === "alice_lend");
+  await admitted("Alice points @alice_lend at herself", alice, await names.pointName(await state(), alice.address, "alice_lend", true));
+  await until("@alice_lend points at Alice", async () => (await name("alice_lend"))?.pointer === alice.address);
+  assert.equal(await shows(bob), undefined);
+  assert.equal(await shows(alice), "alice");
+  // Naming a handle that points elsewhere shows nothing.
+  await admitted("Bob names @alice on his account", bob, { actions: [{ key: names.shownKey(bob.address), oldValue: "alice_lend", newValue: "alice" }] });
+  await until("Bob names @alice", async () => (await names.getField(await state(), bob.address, "name")) === "alice");
+  assert.equal(await shows(bob), undefined);
+  await admitted("Bob stops showing", bob, await names.stopShowing(await state(), bob.address));
+  await until("Bob names nothing", async () => (await names.getField(await state(), bob.address, "name")) === undefined);
+  console.log("a name lent to Bob showed on his account until pointed away; naming a handle alone shows nothing");
 
-  const bobs = await profile.createProfile(await state(), bob.address, { card: { name: "Bob" } });
-  await admitted("Bob's profile", bob, bobs.write);
-  await until("Bob's profile is mined", async () => (await profile.getProfile(await state(), bobs.id))?.owner === bob.address);
-
-  // Ways of forging a profile, a name, a pointer or an index.
+  // Ways of taking a name, or writing its pointer, index keys or another's records, without the right.
   {
     const s = await state();
-    const token = await profile.profileToken(s, P);
-    const held = await profile.resolve(s, "alice");
-    await refused("Bob edits Alice's card", bob, {
-      actions: [{ key: profile.profileKey(P), oldValue: token.value, newValue: token.value }, { key: profile.cardKey(P), oldValue: await s.get(profile.cardKey(P)), newValue: '{"name":"Not Alice"}' }],
-    });
-    await refused("Bob takes Alice's unpriced profile", bob, {
-      actions: [{ key: profile.profileKey(P), oldValue: token.value, newValue: bob.address }, { key: profile.ownsKey(alice.address, P), oldValue: "1" }, { key: profile.ownsKey(bob.address, P), newValue: "1" }],
+    const held = await names.resolve(s, "alice");
+    const proof = { key: names.nameKey("alice"), oldValue: held.value, newValue: held.value };
+    await refused("Bob points @alice at himself", bob, { actions: [proof, { key: names.pointsKey("alice"), oldValue: alice.address, newValue: bob.address }] });
+    await refused("Bob writes @alice's pointer alone", bob, { actions: [{ key: names.pointsKey("alice"), oldValue: alice.address, newValue: bob.address }] });
+    await refused("Alice points @alice at something not an account", alice, { actions: [proof, { key: names.pointsKey("alice"), oldValue: alice.address, newValue: "not an account" }] });
+    await refused("Bob releases @alice", bob, { actions: [{ key: names.nameKey("alice"), oldValue: held.value }, { key: names.namesKey(alice.address, "alice"), oldValue: "1" }, { key: names.pointsKey("alice"), oldValue: alice.address }] });
+    await refused("Bob takes @alice, unpriced, paying her", bob, {
+      actions: [{ key: names.nameKey("alice"), oldValue: held.value, newValue: bob.address }, { key: names.namesKey(alice.address, "alice"), oldValue: "1" }, { key: names.namesKey(bob.address, "alice"), newValue: "1" }],
       payments: [{ to: alice.address, amount: 1000n }],
     });
-    await refused("Bob lists Alice's profile among his", bob, { actions: [{ key: profile.ownsKey(bob.address, P), newValue: "1" }] });
-    await refused("Bob points @alice at his profile", bob, { actions: [{ key: profile.nameKey("alice"), oldValue: held.value, newValue: held.value }, { key: profile.pointsKey("alice"), oldValue: P, newValue: bobs.id }] });
-    await refused("Bob writes @alice's pointer alone", bob, { actions: [{ key: profile.pointsKey("alice"), oldValue: P, newValue: bobs.id }] });
-    await refused("Bob releases @alice", bob, { actions: [{ key: profile.nameKey("alice"), oldValue: held.value }, { key: profile.namesKey(alice.address, "alice"), oldValue: "1" }, { key: profile.pointsKey("alice"), oldValue: P }] });
-    await refused("Bob claims a name without its index key", bob, { actions: [{ key: profile.nameKey("bob"), newValue: bob.address }] });
-    await refused("Bob claims a name onto Alice's account", bob, { actions: [{ key: profile.nameKey("bob"), newValue: alice.address }, { key: profile.namesKey(alice.address, "bob"), newValue: "1" }] });
-    await refused("Bob lists @alice among his names", bob, { actions: [{ key: profile.namesKey(bob.address, "alice"), newValue: "1" }] });
+    await refused("Bob claims a name without its index key", bob, { actions: [{ key: names.nameKey("bob"), newValue: bob.address }] });
+    await refused("Bob claims a name onto Alice's account", bob, { actions: [{ key: names.nameKey("bob"), newValue: alice.address }, { key: names.namesKey(alice.address, "bob"), newValue: "1" }] });
+    await refused("Bob lists @alice among his names", bob, { actions: [{ key: names.namesKey(bob.address, "alice"), newValue: "1" }] });
+    await refused("Bob changes the handle Alice shows", bob, { actions: [{ key: names.shownKey(alice.address), oldValue: "alice", newValue: "alice_lend" }] });
+    await refused("Alice writes a per-chain pointer", alice, { actions: [proof, { key: "points/alice/Nexus/testnet/rave", newValue: alice.address }] });
   }
 
-  // A name sale moves only the name.
-  await admitted("Alice lists @alice_art at 500", alice, await profile.list(await state(), alice.address, "alice_art", 500n));
-  await until("the listing is mined", async () => (await profile.resolve(await state(), "alice_art"))?.price === 500n);
-  const seenAt500 = await profile.buy(await state(), bob.address, "alice_art", { point: bobs.id });
-  await admitted("Alice reprices @alice_art to 600", alice, await profile.list(await state(), alice.address, "alice_art", 600n));
-  await until("the new price is mined", async () => (await profile.resolve(await state(), "alice_art"))?.price === 600n);
-  await refused("Bob buys @alice_art at the price he saw, 500", bob, seenAt500);
+  // A sale moves the name and clears its pointer: the seller stops showing it.
+  await admitted("Alice lists @alice at 500", alice, await names.list(await state(), alice.address, "alice", 500n));
+  await until("the listing is mined", async () => (await name("alice"))?.price === 500n);
+  const seenAt500 = await names.buy(await state(), bob.address, "alice");
+  await admitted("Alice reprices @alice to 600", alice, await names.list(await state(), alice.address, "alice", 600n));
+  await until("the new price is mined", async () => (await name("alice"))?.price === 600n);
+  await refused("Bob buys @alice at the price he saw, 500", bob, seenAt500);
   {
     const [aliceBefore, bobBefore] = [await balance(alice), await balance(bob)];
-    await admitted("Bob buys @alice_art at 600, pointing it at his profile", bob, await profile.buy(await state(), bob.address, "alice_art", { point: bobs.id }));
-    await until("Bob's buy is mined", async () => (await profile.resolve(await state(), "alice_art"))?.profile === bobs.id);
+    await admitted("Bob buys @alice at 600", bob, await names.buy(await state(), bob.address, "alice"));
+    await until("Bob's buy is mined", async () => (await name("alice"))?.owner === bob.address);
     assert.equal(await balance(alice), aliceBefore + 600n);
     assert.equal(await balance(bob), bobBefore - 601n);
-    assert.equal((await profile.resolve(await state(), "alice_art")).owner, bob.address);
-    assert.deepEqual((await profile.namesOf(await state(), alice.address)).map((e) => e.handle), ["alice"]);
-    assert.equal((await page("alice_art")).name, "Bob");
-    assert.equal((await page("alice")).name, "Alice");
+    const s = await state();
+    assert.equal((await names.resolve(s, "alice")).pointer, undefined);
+    assert.equal(await names.handleOf(s, alice.address), undefined);
+    assert.deepEqual((await names.namesOf(s, alice.address)).map((n) => n.handle), ["alice_lend"]);
   }
-  console.log("Bob bought @alice_art alone at 600 and pointed it at his card; Alice's profile keeps its card and @alice");
+  await refused("Alice, its seller, points @alice back at herself", alice, {
+    actions: [{ key: names.nameKey("alice"), oldValue: bob.address, newValue: bob.address }, { key: names.pointsKey("alice"), newValue: alice.address }],
+  });
+  await admitted("Bob shows @alice, pointing it at himself in the same write", bob, await names.showName(await state(), bob.address, "alice"));
+  await until("Bob shows @alice", async () => (await shows(bob)) === "alice");
+  await admitted("Alice shows @alice_lend", alice, await names.showName(await state(), alice.address, "alice_lend"));
+  await until("Alice shows @alice_lend", async () => (await shows(alice)) === "alice_lend");
+  console.log("Bob bought @alice at 600: its pointer cleared, Alice stopped showing it, and Bob shows it now");
 
-  // A name lent to someone else's profile, which shows it; then pointed nowhere.
-  await admitted("Alice claims @alice_lend pointed at Bob's profile", alice, await profile.claim(await state(), alice.address, "alice_lend", { point: bobs.id }));
-  await until("@alice_lend points at Bob's", async () => (await profile.resolve(await state(), "alice_lend"))?.profile === bobs.id);
-  await admitted("Bob shows @alice_lend", bob, await profile.showName(await state(), bob.address, bobs.id, "alice_lend"));
-  await until("Bob's profile shows @alice_lend", async () => (await profile.getProfile(await state(), bobs.id))?.handle === "alice_lend");
-  await admitted("Alice points @alice_lend nowhere", alice, await profile.pointName(await state(), alice.address, "alice_lend", undefined));
-  await until("@alice_lend points nowhere", async () => (await profile.resolve(await state(), "alice_lend"))?.pointer === undefined);
-  assert.equal((await profile.getProfile(await state(), bobs.id)).handle, undefined);
-  assert.equal(await profile.profileOf(await state(), "alice_lend"), undefined);
-  console.log("a name lent to Bob's profile was shown there, and stopped showing once pointed nowhere");
-
-  // A name offered to an account: taken, it keeps pointing where it did.
-  await admitted("Alice points @alice_lend at her profile", alice, await profile.pointName(await state(), alice.address, "alice_lend", P));
-  await until("@alice_lend points at Alice's", async () => (await profile.resolve(await state(), "alice_lend"))?.profile === P);
-  await admitted("Alice offers @alice_lend to Bob", alice, await profile.offerName(await state(), alice.address, "alice_lend", bob.address));
-  await until("the name offer is mined", async () => (await profile.resolve(await state(), "alice_lend"))?.offer === bob.address);
+  // A name offered to an account: only that account takes it.
+  await admitted("Alice claims @alice_gift, pointed at herself", alice, await names.claim(await state(), alice.address, "alice_gift", { point: true }));
+  await until("@alice_gift is mined", async () => (await name("alice_gift"))?.owner === alice.address);
+  await admitted("Alice offers @alice_gift to Bob", alice, await names.offerName(await state(), alice.address, "alice_gift", bob.address));
+  await until("the offer is mined", async () => (await name("alice_gift"))?.offer === bob.address);
   // The miner, paid on this chain, so only the policy stands in the way.
   await refused("the miner takes the name offered to Bob", miner, {
-    actions: [{ key: profile.nameKey("alice_lend"), oldValue: `${alice.address}>${bob.address}`, newValue: miner.address }, { key: profile.namesKey(alice.address, "alice_lend"), oldValue: "1" }, { key: profile.namesKey(miner.address, "alice_lend"), newValue: "1" }],
+    actions: [{ key: names.nameKey("alice_gift"), oldValue: `${alice.address}>${bob.address}`, newValue: miner.address }, { key: names.namesKey(alice.address, "alice_gift"), oldValue: "1" }, { key: names.namesKey(miner.address, "alice_gift"), newValue: "1" }],
   });
-  await admitted("Bob takes @alice_lend", bob, await profile.buy(await state(), bob.address, "alice_lend"));
-  await until("Bob holds @alice_lend", async () => (await profile.resolve(await state(), "alice_lend"))?.owner === bob.address);
-  assert.equal((await profile.resolve(await state(), "alice_lend")).profile, P);
-  console.log("a name offered to Bob's account: taken, still pointing at Alice's profile until he points it");
+  await admitted("Bob takes @alice_gift, pointing it at himself", bob, await names.buy(await state(), bob.address, "alice_gift", { point: true }));
+  await until("Bob holds @alice_gift", async () => (await name("alice_gift"))?.owner === bob.address);
+  assert.equal((await name("alice_gift")).pointer, bob.address);
+  console.log("a name offered to Bob: the miner can't take it, Bob does, pointing it at himself");
 
-  // A name with no profile.
-  await admitted("Bob releases @alice_lend", bob, await profile.release(await state(), bob.address, "alice_lend"));
-  await until("@alice_lend is free", async () => (await profile.resolve(await state(), "alice_lend")) === undefined);
-  await admitted("Bob claims @bobs_spare, pointing nowhere", bob, await profile.claim(await state(), bob.address, "bobs_spare"));
-  await until("@bobs_spare is mined", async () => (await profile.resolve(await state(), "bobs_spare"))?.owner === bob.address);
-  assert.equal((await profile.resolve(await state(), "bobs_spare")).profile, undefined);
-  console.log("a name released frees it and its pointer; a name may point at no profile");
-
-  // A profile sale moves its card; names stay with their owner.
-  await admitted("Alice puts her profile up at 900", alice, await profile.setProfileTerms(await state(), alice.address, P, { price: 900n }));
-  await until("the profile listing is mined", async () => (await profile.getProfile(await state(), P))?.price === 900n);
-  await admitted("Bob buys Alice's profile at 900", bob, await profile.takeProfile(await state(), bob.address, P));
-  await until("Bob's profile buy is mined", async () => (await profile.getProfile(await state(), P))?.owner === bob.address);
-  {
-    const s = await state();
-    const bought = await profile.getProfile(s, P);
-    // @alice is still Alice's, still pointing at it, so it still shows it.
-    assert.deepEqual([bought.name, bought.handle], ["Alice", "alice"]);
-    assert.equal((await profile.resolve(s, "alice")).owner, alice.address);
-    assert.equal(await profile.actsFor(s, bob.address, P), true);
-    assert.deepEqual(await profile.adminsOf(s, P), []);
-    assert.deepEqual(await profile.profilesOf(s, alice.address), []);
-    assert.deepEqual((await profile.profilesOf(s, bob.address)).map((x) => x.id).sort(), [P, bobs.id].sort());
-  }
-  console.log("Bob bought Alice's profile: its card came, its admins were cleared, and @alice stayed Alice's");
-
-  // A lost key: Bob offers the profile to a new key of his, which takes it.
-  await admitted("Bob offers the profile to his new key", bob, await profile.setProfileTerms(await state(), bob.address, P, { offer: newKey.address }));
-  await until("the offer is mined", async () => (await profile.getProfile(await state(), P))?.offer === newKey.address);
-  // The SDK won't build it; written by hand, the policy refuses it.
-  await refused("Alice takes the profile offered to Bob's new key", alice, {
-    actions: [{ key: profile.profileKey(P), oldValue: `${bob.address}>${newKey.address}`, newValue: alice.address }, { key: profile.ownsKey(bob.address, P), oldValue: "1" }, { key: profile.ownsKey(alice.address, P), newValue: "1" }],
+  // Releasing a name deletes its pointer; anyone may claim it next.
+  await refused("Bob releases @alice_gift and repoints it", bob, {
+    actions: [{ key: names.nameKey("alice_gift"), oldValue: bob.address }, { key: names.namesKey(bob.address, "alice_gift"), oldValue: "1" }, { key: names.pointsKey("alice_gift"), oldValue: bob.address, newValue: alice.address }],
   });
-  await admitted("Bob funds the new key", bob, { actions: [], payments: [{ to: newKey.address, amount: 10n }] });
-  await until("the new key is funded", async () => (await balance(newKey)) === 10n);
-  await admitted("The new key takes the profile", newKey, await profile.takeProfile(await state(), newKey.address, P));
-  await until("the move is mined", async () => (await profile.getProfile(await state(), P))?.owner === newKey.address);
-  console.log("the profile moved to a new key");
+  await admitted("Bob releases @alice_gift", bob, await names.release(await state(), bob.address, "alice_gift"));
+  await until("@alice_gift is free", async () => (await name("alice_gift")) === undefined);
+  assert.equal(await names.pointer(await state(), "alice_gift"), undefined);
+  await admitted("Alice claims the released @alice_gift", alice, await names.claim(await state(), alice.address, "alice_gift"));
+  await until("@alice_gift is Alice's again", async () => (await name("alice_gift"))?.owner === alice.address);
+  assert.equal((await name("alice_gift")).pointer, undefined);
+  console.log("a released name loses its pointer, and is claimed again pointing nowhere");
 
   // The library, as another app uses it: reads, and writes through a wallet.
-  const moniker = createMoniker({ sdk, nodes: [node], chain: CHAIN, freshFor: 0 });
+  const moniker = createMoniker({ sdk, nodes: [node], chain: CHAIN, freshFor: 0, fee: 1n });
   /** A stand-in for window.lattice holding `who`'s key: it signs what a wallet would. */
   const walletOf = (who) => ({
     address: async () => who.address,
@@ -282,25 +247,31 @@ try {
       return JSON.parse(result.text);
     },
   });
-  assert.equal(await moniker.resolve("@alice"), P);
-  assert.equal((await moniker.profileOf("alice")).owner, newKey.address);
-  assert.equal((await moniker.name("alice")).owner, alice.address);
-  // Bob's profile shows @alice_lend, released since: it shows no name.
-  assert.deepEqual((await moniker.profiles([bobs.id, P])).map((p) => p.handle), [undefined, "alice"]);
-  assert.equal(moniker.label(await moniker.profile(bobs.id)), "Bob");
-  const { id: carols } = await moniker.createProfile({ card: { name: "Carol" }, handle: "carol" }, { wallet: walletOf(alice) });
-  await until("the library's profile", async () => (await moniker.profileOf("carol"))?.id === carols);
-  await moniker.save(carols, { links: [{ label: "Carol's site", url: "https://carol.example" }] }, { wallet: walletOf(alice) });
-  await until("the library's save", async () => (await moniker.profile(carols))?.links?.length === 1);
-  await moniker.sell("@carol", 7n, { wallet: walletOf(alice) });
-  await until("the library's listing", async () => (await moniker.forSale()).some((e) => e.handle === "carol" && e.price === 7n && e.owner === alice.address));
-  await moniker.buy("carol", { point: bobs.id }, { wallet: walletOf(bob) });
-  await until("the library's buy", async () => (await moniker.resolve("carol")) === bobs.id);
-  assert.deepEqual((await moniker.names(bob.address)).map((n) => n.handle), ["alice_art", "bobs_spare", "carol"]);
-  await moniker.point("carol", carols, { wallet: walletOf(bob) });
-  await until("the library's pointer", async () => (await moniker.resolve("carol")) === carols);
-  await assert.rejects(moniker.save(carols, { name: "x" }, {}), /needs the Lattice Wallet/);
-  console.log("the library reads profiles and names, makes and saves a profile, and sells, buys and points a name through a wallet");
+  await admitted("Alice funds Carol", alice, { actions: [], payments: [{ to: carol.address, amount: 100n }] });
+  await until("Carol is funded", async () => (await balance(carol)) === 100n);
+  await moniker.claim("@carol", { point: true }, { wallet: walletOf(carol) });
+  await until("the library's claim", async () => (await moniker.pointer("carol")) === carol.address);
+  await moniker.showName("@carol", { wallet: walletOf(carol) });
+  await until("the library's show", async () => (await moniker.handleOf(carol.address)) === "carol");
+  assert.deepEqual(await moniker.handlesOf([carol.address, bob.address, miner.address]), ["carol", "alice", undefined]);
+  assert.equal(await moniker.label(carol.address, { name: "Carol" }), "Carol @carol");
+  await moniker.sell("@carol", 7n, { wallet: walletOf(carol) });
+  await until("the library's listing", async () => (await moniker.forSale()).some((n) => n.handle === "carol" && n.price === 7n && n.owner === carol.address));
+  await moniker.buy("carol", {}, { wallet: walletOf(bob) });
+  await until("the library's buy", async () => (await moniker.name("carol"))?.owner === bob.address);
+  assert.equal((await moniker.name("carol")).pointer, undefined);
+  assert.equal(await moniker.handleOf(carol.address), undefined);
+  assert.deepEqual((await moniker.names(bob.address)).map((n) => n.handle), ["alice", "carol"]);
+  await assert.rejects(moniker.point("carol", true, { wallet: walletOf(carol) }), /isn't yours/);
+  await moniker.point("carol", carol.address, { wallet: walletOf(bob) });
+  await until("the library's pointer", async () => (await moniker.handleOf(carol.address)) === "carol");
+  await moniker.stopShowing({ wallet: walletOf(carol) });
+  await until("the library's stop", async () => (await moniker.handleOf(carol.address)) === undefined);
+  await moniker.release("carol", { wallet: walletOf(bob) });
+  await until("the library's release", async () => (await moniker.name("carol")) === undefined);
+  assert.equal(await moniker.pointer("carol"), undefined);
+  await assert.rejects(moniker.claim("carol", {}, {}), /needs the Lattice Wallet/);
+  console.log("the library claims, shows, sells, buys, points, stops showing and releases a name through a wallet");
 } finally {
   try { lattice("mine", "stop"); } catch {}
   try { lattice("down"); } catch {}

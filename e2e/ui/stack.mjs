@@ -1,6 +1,5 @@
-// A private Moniker stack for the UI tests: one Lattice host mining Nexus, a
-// Moniker chain from a fast test spec and a Follows chain (from the follows/
-// submodule, sped up the same way), with public reads and submits, and a
+// A private Moniker stack for the UI tests: one Lattice host mining Nexus and
+// a Moniker chain from a fast test spec, with public reads and submits, and a
 // static server for the repository so the real app/ page runs against it.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice
@@ -13,7 +12,6 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHAIN = ["Nexus", "moniker"];
-export const FOLLOWS = ["Nexus", "follows"];
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const repo = here("../../");
 const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190 };
@@ -63,8 +61,6 @@ export async function start() {
     Object.assign(t, { listen: ports.listen, rpc: ports.rpc, publicRead: ports.publicRead, webSocket: 0, publicSubmit: true });
     // As the testnet hosts: any fee, 0 included.
     t.minRelayFee = 0;
-    // The page keeps a photo on this node, as on someone's own node.
-    t.rpcAllowedOrigins = [`http://127.0.0.1:${ports.web}`];
     // Reads are many (one per trie node): no rate ceilings in the way.
     t.publicReadExpensiveRate = 10000;
     t.publicReadRate = 10000;
@@ -73,11 +69,8 @@ export async function start() {
     t.mine = { worker: "cpu", workers: 1, batchSize: 100000 };
   });
   lattice("child", "create", CHAIN.join("/"), "--spec", here("./spec.json"), "--policy-module", here("../../chain/moniker_policy.wasm"));
-  const followsSpec = { ...JSON.parse(readFileSync(here("../../follows/chain/spec.json"), "utf8")), targetBlockTime: 2000, premine: 0 };
-  writeFileSync(`${root}/follows-spec.json`, JSON.stringify(followsSpec));
-  lattice("child", "create", FOLLOWS.join("/"), "--spec", `${root}/follows-spec.json`, "--policy-module", here("../../follows/chain/follows_policy.wasm"));
   configure((t) => {
-    t.mine.recipients = { Nexus: miner.address, [CHAIN.join("/")]: miner.address, [FOLLOWS.join("/")]: miner.address };
+    t.mine.recipients = { Nexus: miner.address, [CHAIN.join("/")]: miner.address };
   });
   lattice("up");
   lattice("mine", "start");
@@ -88,8 +81,8 @@ export async function start() {
   });
   const web = await serve(ports.web);
   const info = {
-    root, node, rpc: `http://127.0.0.1:${ports.rpc}`, app: `http://127.0.0.1:${ports.web}/app/`,
-    chain: CHAIN.join("/"), follows: FOLLOWS.join("/"), minerKey: Buffer.from(minerKey).toString("hex"), miner: miner.address,
+    root, node, app: `http://127.0.0.1:${ports.web}/app/`,
+    chain: CHAIN.join("/"), minerKey: Buffer.from(minerKey).toString("hex"), miner: miner.address,
   };
   return {
     info,
