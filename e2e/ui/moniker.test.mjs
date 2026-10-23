@@ -379,7 +379,7 @@ test("a visitor sees who owns @alice, where it points and that it is shown; the 
   await expect(page.locator("#points")).toHaveText(`Points at ${short(alice)} · shown as @alice`);
   await page.locator(".owned").getByRole("link", { name: short(alice) }).click();
   await expect(page).toHaveURL(new RegExp(`#/account/${alice.address}$`));
-  await expect(page.locator("h1")).toHaveText(`Account ${short(alice)}`);
+  await expect(page.locator("h1")).toHaveText(`Account ${alice.address}`);
   await expect(page.locator(".shows")).toHaveText("Shown as @alice");
   await expect(row(page, "alice").locator(".label")).toHaveText(`points at ${short(alice)}`);
   await expect(row(page, "alice_lend").locator(".label")).toHaveText("points nowhere");

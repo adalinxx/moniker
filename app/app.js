@@ -290,7 +290,7 @@ async function viewAccount(address, state) {
   const [owned, shows] = await Promise.all([names.namesOf(state, address), names.handleOf(state, address)]);
   return `
     <main class="col card account-page">
-      <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono" title="${esc(address)}">${esc(shortID(address))}</span></h1>
+      <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
       <p class="shows">${shows ? `Shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>` : "Shows no handle"}</p>
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
       <p class="bio">${mine ? "An account is a private key. It owns these names, and is never shown on them." : "This key owns these names."}</p>
