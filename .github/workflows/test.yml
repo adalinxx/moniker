@@ -164,7 +164,8 @@ jobs:
         with:
           name: lattice
           path: .deps/bin
-      - run: chmod +x .deps/bin/*
+      # The node links the Swift runtime in, but not these.
+      - run: chmod +x .deps/bin/* && sudo apt-get update && sudo apt-get install -y --no-install-recommends libsqlite3-0 libcurl4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
