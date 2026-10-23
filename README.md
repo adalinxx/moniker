@@ -111,7 +111,9 @@ LATTICE=<lattice-node>/.build/debug/lattice \
   the context and body, and the token rule. The Fanfare policy builds on it
   too.
 - `policy/`: the chain's policy. `chain/spec.json` names the built module;
-  `chain/moniker_policy.wasm` is that module.
+  `chain/moniker_policy.wasm` is that module. The policy is fixed at genesis.
+- `chain/genesis.mjs`: the transactions the genesis carries, one signed
+  claim of each name the project holds from the first block.
 - `sdk/`: [moniker-sdk](https://github.com/adalinxx/moniker-sdk), a submodule:
   the record code (`sdk/src/records/`), the library for other apps, and the
   Lattice SDK bundle.
@@ -131,8 +133,8 @@ LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
 ```
 
-To replay every policy test context through Lattice's own host, run the policy
-tests with `CONTEXT_DIR=<dir>`, then
+To replay every policy test context through Lattice's own host (WasmKit, the
+node's engine), run the policy and property tests with `CONTEXT_DIR=<dir>`, then
 `swift run --package-path policy/host-check host-check policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm <dir>`.
 
 `test/properties.test.mjs` judges random transactions with the built module
@@ -142,5 +144,23 @@ and corrupts encoded bodies at random. `FUZZ_RUNS` sets how many it tries
 
 CI (`.github/workflows/test.yml`) runs all of the above and the UI suite on
 every pull request, against the Lattice node, SDK and Selfhold commits pinned
-at the top of the workflow, and checks that `chain/moniker_policy.wasm` is
-what the policy source builds.
+at the top of the workflow, checks that `chain/moniker_policy.wasm` is what
+the policy source builds, and replays every context the policy tests judged
+through host-check.
+
+## Launch
+
+The project's names are claimed in the genesis itself, so nobody can take them
+first. From a `lattice key generate` key kept offline and a list of handles,
+one per line:
+
+```
+LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js \
+  node chain/genesis.mjs project-key.json names.txt > genesis.json
+lattice child create Nexus/moniker --spec chain/spec.json \
+  --policy-module chain/moniker_policy.wasm --premine-to <address> \
+  --genesis-transactions genesis.json
+```
+
+Every claim is checked against the policy before it is written, and again by
+the node before the chain is created.

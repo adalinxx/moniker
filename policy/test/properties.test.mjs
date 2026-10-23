@@ -7,8 +7,12 @@
 //   LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/properties.test.mjs
 //
 // FUZZ_RUNS sets how many transactions each test tries, FUZZ_SEED replays one
-// run; a failure prints both, with the transaction.
+// run; a failure prints both, with the transaction. With CONTEXT_DIR set,
+// every context is recorded with its verdict, named by its hash, for
+// host-check to replay through the node's own WasmKit.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { context, validate } from "./host.mjs";
 import { accepts, holding, isAddress } from "./model.mjs";
@@ -95,8 +99,17 @@ function encode(tx) {
 }
 
 /** The module's verdict; a trap fails the test, since the host would see one too. */
+const contextDirectory = process.env.CONTEXT_DIR;
+if (contextDirectory) mkdirSync(contextDirectory, { recursive: true });
+
 function verdict(bodyBytes) {
-  return validate(context(bodyBytes, { path: PATH }));
+  const bytes = context(bodyBytes, { path: PATH });
+  const accepted = validate(bytes);
+  if (contextDirectory) {
+    const name = createHash("sha256").update(bytes).digest("hex").slice(0, 32);
+    writeFileSync(`${contextDirectory}/${name}-${accepted ? "accept" : "reject"}.bin`, bytes);
+  }
+  return accepted;
 }
 
 const show = (value) => JSON.stringify(value, (_, v) => (typeof v === "bigint" ? `${v}n` : v), 2);

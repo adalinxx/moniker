@@ -55,6 +55,7 @@ jobs:
         working-directory: policy
         env:
           LATTICE_SDK_CORE: ${{ github.workspace }}/.deps/lattice-sdk/packages/core/dist/index.js
+          CONTEXT_DIR: ${{ github.workspace }}/contexts
         run: node --test test/policy.test.mjs
       - name: Policy property tests
         working-directory: policy
@@ -62,11 +63,41 @@ jobs:
           LATTICE_SDK_CORE: ${{ github.workspace }}/.deps/lattice-sdk/packages/core/dist/index.js
           FUZZ_RUNS: ${{ inputs.fuzz_runs || '20000' }}
           FUZZ_SEED: ${{ github.run_id }}
+          CONTEXT_DIR: ${{ github.workspace }}/contexts
         run: node --test test/properties.test.mjs
+      # Every context those tests judged, with its verdict, for the engine job.
+      - run: tar -czf contexts.tar.gz contexts chain/moniker_policy.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contexts
+          path: contexts.tar.gz
+          retention-days: 3
       - name: Record tests
         env:
           LATTICE_SDK: ${{ github.workspace }}/.deps/lattice-sdk/packages/sdk/dist/index.js
         run: node --test client/*.test.mjs
+
+  engine:
+    name: The node's engine agrees
+    needs: policy
+    runs-on: ubuntu-latest
+    container: swift:6.1-jammy
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: contexts
+      - name: Build host-check
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+          swift build -c release --package-path policy/host-check
+      # The policy is fixed at genesis, so the node's WasmKit must give every
+      # verdict the tests' engine gave.
+      - name: Replay every context through Lattice's own host
+        run: |
+          tar -xzf contexts.tar.gz
+          policy/host-check/.build/release/host-check chain/moniker_policy.wasm contexts
 
   node:
     name: Build the Lattice node
