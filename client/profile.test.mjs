@@ -43,6 +43,17 @@ function chain(balances) {
   return { state, submit, map, coins };
 }
 
+test("a card or field the policy would refuse as too long is refused before sending, with why", async () => {
+  const { state, submit } = chain({ [ALICE]: 100 });
+  const room = profile.MAX_VALUE_BYTES - JSON.stringify({ description: "" }).length;
+  assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { description: "d".repeat(room) })));
+  await assert.rejects(profile.editCard(state, ALICE, { description: "d".repeat(room + 1) }), /The card is too long/);
+  // Bytes, as the policy counts them.
+  await assert.rejects(profile.editCard(state, ALICE, { description: "é".repeat(room / 2 + 1) }), /too long/);
+  assert.ok(submit(ALICE, await profile.setField(state, ALICE, "com.github", "g".repeat(profile.MAX_VALUE_BYTES))));
+  await assert.rejects(profile.setField(state, ALICE, "com.github", "g".repeat(profile.MAX_VALUE_BYTES + 1)), /com.github is too long/);
+});
+
 test("a card is written, edited field by field, and read back", async () => {
   const { state, submit } = chain({ [ALICE]: 100 });
   assert.ok(submit(ALICE, await profile.editCard(state, ALICE, { name: "Alice", description: "Builds things", avatar: "bafyreiavatar" })));

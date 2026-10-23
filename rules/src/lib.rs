@@ -58,6 +58,11 @@ impl<'a> Body<'a> {
         })
     }
 
+    pub fn signer_count(&self) -> Option<u64> {
+        let (major, count, _) = head(self.bytes, self.signers)?;
+        (major == ARRAY).then_some(count)
+    }
+
     pub fn is_signer(&self, owner: &[u8]) -> Option<()> {
         let (major, count, mut at) = head(self.bytes, self.signers)?;
         if major != ARRAY {

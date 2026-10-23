@@ -82,9 +82,62 @@ test("keys outside the two shapes are rejected", () => {
   }
 });
 
-test("the policy puts no limit on key, value or handle size", () => {
-  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/${"i".repeat(5000)}`, newValue: "x".repeat(200000) }]));
-  assert.ok(signedBy([ALICE], [{ key: name("a".repeat(5000)), newValue: ALICE }]));
+test("a key is at most 512 bytes and a value written at most 16 KiB", () => {
+  const key = (bytes) => `user/${ALICE}/`.padEnd(bytes, "i");
+  assert.ok(signedBy([ALICE], [{ key: key(512), newValue: "x".repeat(16 * 1024) }]));
+  assert.ok(!signedBy([ALICE], [{ key: key(513), newValue: "x" }]));
+  assert.ok(!signedBy([ALICE], [{ key: key(100), newValue: "x".repeat(16 * 1024 + 1) }]));
+  // Bytes, not characters.
+  assert.ok(!signedBy([ALICE], [{ key: key(100), newValue: "é".repeat(8 * 1024 + 1) }]));
+  assert.ok(signedBy([ALICE], [{ key: name("a".repeat(512 - "name/".length)), newValue: ALICE }]));
+  assert.ok(!signedBy([ALICE], [{ key: name("a".repeat(513 - "name/".length)), newValue: ALICE }]));
+  // An old value is the chain's, so its size is not the writer's to answer for.
+  assert.ok(signedBy([ALICE], [{ key: key(100), oldValue: "x".repeat(20000) }]));
+});
+
+test("a transaction claims at most one free handle", () => {
+  assert.ok(!signedBy([ALICE], [{ key: name("a1"), newValue: ALICE }, { key: name("a2"), newValue: ALICE }]));
+  assert.ok(!signedBy([ALICE, BOB], [{ key: name("a1"), newValue: ALICE }, { key: name("b1"), newValue: BOB }]));
+  // One claim beside other handle actions is fine.
+  assert.ok(
+    signedBy([ALICE], [
+      { key: name("a1"), newValue: ALICE },
+      { key: name("a2"), oldValue: ALICE, newValue: `${ALICE}@5` },
+      { key: name("a3"), oldValue: ALICE },
+    ]),
+  );
+});
+
+test("a transaction has at most 256 actions, 16 of them on handles, and 8 signers", () => {
+  const records = (n) => Array.from({ length: n }, (_, i) => ({ key: `user/${ALICE}/${i}`, newValue: "x" }));
+  const gifts = (n) => Array.from({ length: n }, (_, i) => ({ key: name(`h${i}`), oldValue: ALICE, newValue: BOB }));
+  assert.ok(signedBy([ALICE], records(256)));
+  assert.ok(!signedBy([ALICE], records(257)));
+  assert.ok(signedBy([ALICE], gifts(16)));
+  assert.ok(!signedBy([ALICE], gifts(17)));
+  assert.ok(signedBy([ALICE], [...gifts(16), ...records(240)]));
+  assert.ok(!signedBy([ALICE], [...gifts(16), ...records(241)]));
+  const others = Array.from({ length: 8 }, (_, i) => address(10 + i));
+  assert.ok(signedBy([...others.slice(0, 7), ALICE], records(1)));
+  assert.ok(!signedBy([...others, ALICE], records(1)));
+});
+
+test("the costliest transaction the caps allow is quick to check", () => {
+  // Every handle action a purchase from a different holder, the rest of the
+  // actions records, and the buyer the last of the most signers: the most
+  // work for the payment check, which reads every action per purchase.
+  const buyer = BOB;
+  const signers = [...Array.from({ length: 7 }, (_, i) => address(10 + i)), buyer];
+  const actions = [
+    ...Array.from({ length: 16 }, (_, i) => ({ key: name(`h${i}`), oldValue: `${address(40 + i)}@0`, newValue: buyer })),
+    ...Array.from({ length: 240 }, (_, i) => ({ key: `user/${buyer}/${i}`, newValue: "x" })),
+  ];
+  const bytes = context(body(actions, signers));
+  const started = performance.now();
+  assert.ok(run(bytes));
+  const elapsed = performance.now() - started;
+  // Well under 1 ms here, and a few ms in the node's WasmKit interpreter.
+  assert.ok(elapsed < 100, `${elapsed.toFixed(1)} ms`);
 });
 
 test("coin actions pass untouched", () => {

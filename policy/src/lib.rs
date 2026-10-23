@@ -12,11 +12,29 @@
 //!   its holder is always a well-formed address.
 //!
 //! What the records mean is up to clients. Coin actions pass untouched.
+//!
+//! A transaction has at most `MAX_ACTIONS` actions, `MAX_HANDLE_ACTIONS` of
+//! them on handles, and `MAX_SIGNERS` signers. The node does not meter policy
+//! time, and checking payments takes time in handle actions times actions
+//! times signers, so without these one transaction could hold up every
+//! validator for minutes.
+//!
+//! A key is at most `MAX_KEY_BYTES` and a value written at most
+//! `MAX_VALUE_BYTES`, so writes, which may be free, cannot fill the state
+//! that every node keeps. A transaction claims at most one free handle, so a
+//! claim of many names takes as many transactions.
 #![cfg_attr(not(test), no_std)]
 
 use lattice_policy_rules::{holding, is_address, transaction_body, Action, Body};
 
 lattice_policy_rules::lattice_policy_abi!(crate::validate);
+
+pub const MAX_ACTIONS: usize = 256;
+pub const MAX_HANDLE_ACTIONS: usize = 16;
+pub const MAX_SIGNERS: u64 = 8;
+pub const MAX_KEY_BYTES: usize = 512;
+pub const MAX_VALUE_BYTES: usize = 16 * 1024;
+pub const MAX_CLAIMS: usize = 1;
 
 /// The verdict for one policy context. Anything malformed is a rejection.
 pub fn validate(context: &[u8]) -> bool {
@@ -25,9 +43,24 @@ pub fn validate(context: &[u8]) -> bool {
 
 fn check_body(bytes: &[u8]) -> Option<()> {
     let body = Body::parse(bytes)?;
-    for action in body.actions()? {
+    if body.signer_count()? > MAX_SIGNERS {
+        return None;
+    }
+    let (mut handle_actions, mut claims) = (0, 0);
+    for (index, action) in body.actions()?.enumerate() {
         let action = action?;
+        if index >= MAX_ACTIONS || action.key.len() > MAX_KEY_BYTES {
+            return None;
+        }
+        if action.new_value.is_some_and(|value| value.len() > MAX_VALUE_BYTES) {
+            return None;
+        }
         if is_handle_key(action.key) {
+            handle_actions += 1;
+            claims += (action.old_value.is_none() && action.new_value.is_some()) as usize;
+            if handle_actions > MAX_HANDLE_ACTIONS || claims > MAX_CLAIMS {
+                return None;
+            }
             check_handle(&body, &action)?;
         } else {
             check_owned(&body, &action)?;
