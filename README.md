@@ -124,7 +124,7 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 ```
 cd policy
 cargo build --release --target wasm32-unknown-unknown
-LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/policy.test.mjs
+LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/policy.test.mjs test/properties.test.mjs
 cd ..
 LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node --test client/*.test.mjs
 LATTICE=<lattice-node>/.build/debug/lattice \
@@ -134,3 +134,13 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 To replay every policy test context through Lattice's own host, run the policy
 tests with `CONTEXT_DIR=<dir>`, then
 `swift run --package-path policy/host-check host-check policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm <dir>`.
+
+`test/properties.test.mjs` judges random transactions with the built module
+and with `test/model.mjs`, the rules restated from the policy's documentation,
+and corrupts encoded bodies at random. `FUZZ_RUNS` sets how many it tries
+(5000 by default); a failure prints the `FUZZ_SEED` that replays it.
+
+CI (`.github/workflows/test.yml`) runs all of the above and the UI suite on
+every pull request, against the Lattice node, SDK and Selfhold commits pinned
+at the top of the workflow, and checks that `chain/moniker_policy.wasm` is
+what the policy source builds.

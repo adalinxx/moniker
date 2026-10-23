@@ -1,0 +1,168 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      fuzz_runs:
+        description: Random transactions per property test
+        default: "20000"
+
+# The other repositories these tests run against, pinned to commits the suites
+# pass on. Move a pin on purpose, in its own commit, after running the suites.
+env:
+  RUST_TOOLCHAIN: "1.96.0"
+  NODE_VERSION: "24"
+  LATTICE_NODE_REPO: adalinxx/lattice-node
+  LATTICE_NODE_REF: f40147b22ce0528920e998e077db46701d56fea2
+  LATTICE_SDK_REPO: adalinxx/lattice-sdk
+  LATTICE_SDK_REF: c50f38c73c7fa73f18b7e76e5cb98c4777bc0136
+  LATTICE_WALLET_REPO: adalinxx/lattice-wallet
+  LATTICE_WALLET_REF: 2dc42e6fca3a56e6b5631eb3093f5307ef902d1f # Selfhold 0.5.0
+
+jobs:
+  policy:
+    name: Policy and records
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LATTICE_SDK_REPO }}
+          ref: ${{ env.LATTICE_SDK_REF }}
+          path: .deps/lattice-sdk
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Build the Lattice SDK
+        working-directory: .deps/lattice-sdk
+        run: npm ci && npm run build
+      - name: Build the policy
+        working-directory: policy
+        run: cargo build --release --target wasm32-unknown-unknown
+      - name: The committed module is the one this source builds
+        run: cmp policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm chain/moniker_policy.wasm
+      - name: Policy tests
+        working-directory: policy
+        env:
+          LATTICE_SDK_CORE: ${{ github.workspace }}/.deps/lattice-sdk/packages/core/dist/index.js
+        run: node --test test/policy.test.mjs
+      - name: Policy property tests
+        working-directory: policy
+        env:
+          LATTICE_SDK_CORE: ${{ github.workspace }}/.deps/lattice-sdk/packages/core/dist/index.js
+          FUZZ_RUNS: ${{ inputs.fuzz_runs || '20000' }}
+          FUZZ_SEED: ${{ github.run_id }}
+        run: node --test test/properties.test.mjs
+      - name: Record tests
+        env:
+          LATTICE_SDK: ${{ github.workspace }}/.deps/lattice-sdk/packages/sdk/dist/index.js
+        run: node --test client/*.test.mjs
+
+  node:
+    name: Build the Lattice node
+    runs-on: ubuntu-latest
+    container: swift:6.1-jammy
+    timeout-minutes: 90
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: lattice-node-${{ env.LATTICE_NODE_REF }}-static
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LATTICE_NODE_REPO }}
+          ref: ${{ env.LATTICE_NODE_REF }}
+          path: lattice-node
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build
+        shell: bash
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
+          cd lattice-node
+          # Static Swift runtime, so the binaries run on a plain runner. The
+          # lattice command runs lattice-node and lattice-miner from beside it.
+          swift build --static-swift-stdlib
+          mkdir ../bin
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner} ../bin/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lattice
+          path: bin
+          retention-days: 3
+
+  e2e:
+    name: ${{ matrix.suite == 'ui' && 'UI acceptance' || 'End to end' }}
+    needs: node
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [protocol, ui]
+    env:
+      LATTICE: ${{ github.workspace }}/.deps/bin/lattice
+      LATTICE_SDK: ${{ github.workspace }}/.deps/lattice-sdk/packages/sdk/dist/index.js
+      LATTICE_WALLET: ${{ github.workspace }}/.deps/lattice-wallet/dist
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LATTICE_SDK_REPO }}
+          ref: ${{ env.LATTICE_SDK_REF }}
+          path: .deps/lattice-sdk
+      - uses: actions/download-artifact@v4
+        with:
+          name: lattice
+          path: .deps/bin
+      - run: chmod +x .deps/bin/*
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Build the Lattice SDK
+        working-directory: .deps/lattice-sdk
+        run: npm ci && npm run build
+      - name: Build the policy
+        working-directory: policy
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - if: matrix.suite == 'protocol'
+        name: Moniker against a real node
+        run: node e2e/moniker.mjs
+
+      - if: matrix.suite == 'ui'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LATTICE_WALLET_REPO }}
+          ref: ${{ env.LATTICE_WALLET_REF }}
+          path: .deps/lattice-wallet
+          submodules: true
+      - if: matrix.suite == 'ui'
+        name: Build Selfhold
+        working-directory: .deps/lattice-wallet
+        run: npm ci && npm run build
+      - if: matrix.suite == 'ui'
+        name: Install Playwright
+        working-directory: e2e/ui
+        run: npm ci && npx playwright install --with-deps chromium
+      - if: matrix.suite == 'ui'
+        name: The page in Chromium with Selfhold
+        working-directory: e2e/ui
+        run: npm test
