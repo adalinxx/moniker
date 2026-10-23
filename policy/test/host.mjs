@@ -37,9 +37,9 @@ export function context(bodyBytes, { path, version = 2, height = 100n }) {
   return Uint8Array.from(parts.flatMap((part) => [...part]));
 }
 
-/** Whether the module accepts a context. */
-export function validate(bytes) {
-  const { exports } = new WebAssembly.Instance(module);
+/** Whether `policy` (the built module unless named) accepts a context. */
+export function validate(bytes, policy = module) {
+  const { exports } = new WebAssembly.Instance(policy);
   const pointer = exports.lattice_alloc(bytes.length);
   new Uint8Array(exports.memory.buffer).set(bytes, pointer);
   return exports.lattice_validate_transaction(pointer, bytes.length) === 1;

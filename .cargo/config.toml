@@ -1,0 +1,3 @@
+[build]
+# Where the tests, CI and the README look for the built module.
+target-dir = "policy/target"

@@ -1,0 +1,13 @@
+# One workspace, so the policy's crates are built with paths relative to this
+# directory: a module built anywhere, by anyone, is the same bytes, and names
+# no machine it was built on.
+[workspace]
+members = ["policy", "rules"]
+resolver = "2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

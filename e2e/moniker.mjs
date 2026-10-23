@@ -230,8 +230,11 @@ try {
   assert.equal(await names.pointer(await state(), "alice_gift"), undefined);
   await admitted("Alice claims the released @alice_gift", alice, await names.claim(await state(), alice.address, "alice_gift"));
   await until("@alice_gift is Alice's again", async () => (await name("alice_gift"))?.owner === alice.address);
-  assert.equal((await name("alice_gift")).pointer, undefined);
-  console.log("a released name loses its pointer, and is claimed again pointing nowhere");
+  assert.equal((await name("alice_gift")).pointer, alice.address);
+  await refused("Bob claims a name without pointing it", bob, {
+    actions: [{ key: names.nameKey("bob_bare"), newValue: bob.address }, { key: names.namesKey(bob.address, "bob_bare"), newValue: "1" }],
+  });
+  console.log("a released name loses its pointer, and is claimed again pointing at its new owner, who must point it");
 
   // The library, as another app uses it: reads, and writes through a wallet.
   const moniker = createMoniker({ sdk, nodes: [node], chain: CHAIN, freshFor: 0, fee: 1n });
