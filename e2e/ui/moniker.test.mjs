@@ -304,7 +304,7 @@ test("a visitor searches: a name no one owns costs 0, and reading needs no walle
   await phone.close();
 }, { wallet: false });
 
-const short = (who) => `…${who.address.slice(-6)}`;
+const short = (who) => `${who.address.slice(7, 11)}…${who.address.slice(-6)}`;
 
 test("Alice claims @alice from a search, pointed at her, in one approval, then shows it", async ({ page }) => {
   await fund(alice.address);

@@ -5,7 +5,7 @@
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import * as names from "../sdk/src/records/names.mjs";
 import { writeRequest } from "../sdk/src/records/wallet.mjs";
-import { createMoniker, isAddress, isHandle } from "../sdk/src/index.mjs";
+import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
 
 // ---------------------------------------------------------------- settings
 
@@ -144,7 +144,9 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const esc = (text) =>
   String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // An account ID by its end: every address begins alike (`bafyrei…`).
-const shortID = (address) => `…${address.slice(-6)}`;
+const shortID = shortAccount;
+/** An account in a line of text: its pattern and its short ID, so it reads as an account. */
+const accountRef = (address) => `<span class="acct">${accountIcon(address, 16)}<span class="mono">${esc(shortID(address))}</span></span>`;
 const coins = (amount) => `${amount.toLocaleString("en-US")}`;
 const priceProblem = (v) => (/^(0|[1-9][0-9]*)$/.test(v) && BigInt(v) < 2n ** 63n ? "" : "A whole number of coins, below 9,223,372,036,854,775,808.");
 function toast(message, { bad = false } = {}) {
@@ -248,28 +250,28 @@ const viewMessage = (title, body, link = `<a class="pill big" href="#/" style="m
     ${link}
   </main>`;
 
-const accountLink = (address) => `<a class="mono" href="#/account/${esc(address)}">${esc(shortID(address))}</a>`;
+const accountLink = (address) => `<a class="acct-link" href="#/account/${esc(address)}">${accountRef(address)}</a>`;
 const ownedBy = (owner) => (owner === connected ? `Owned by <a href="#/account/${esc(owner)}">you</a>` : `Owned by ${accountLink(owner)}`);
 
-/** A name's terms in a few words: for sale, offered, or neither. */
-function termsOf(n) {
+/** A name's terms in a few words: for sale, offered, or neither. As HTML with `html`, accounts shown as accounts. */
+function termsOf(n, html = false) {
   if (n.price !== undefined) return `for sale · ${coins(n.price)}`;
-  if (n.offer) return n.offer === connected ? "offered to you" : `offered to ${shortID(n.offer)}`;
+  if (n.offer) return n.offer === connected ? "offered to you" : `offered to ${html ? accountRef(n.offer) : shortID(n.offer)}`;
   return "";
 }
 
-/** Where a name points, in a few words. */
-function pointsLabel(n) {
+/** Where a name points, in a few words. As HTML with `html`, the account shown as an account. */
+function pointsLabel(n, html = false) {
   if (!n.pointer) return "points nowhere";
-  return n.pointer === connected ? "points at you" : `points at ${shortID(n.pointer)}`;
+  return n.pointer === connected ? "points at you" : `points at ${html ? accountRef(n.pointer) : shortID(n.pointer)}`;
 }
 
-/** One name in a list: the handle, linked to its page, and `label` (by default where it points, and its terms). */
-function handleRow(n, end = "", label = [pointsLabel(n), termsOf(n)].filter(Boolean).join(" · ")) {
+/** One name in a list: the handle, linked to its page, and `label` as HTML (by default where it points, and its terms). */
+function handleRow(n, end = "", label = [pointsLabel(n, true), termsOf(n, true)].filter(Boolean).join(" · ")) {
   return `
     <div class="row">
       <a class="mono" href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>
-      <span class="label">${esc(label)}</span>
+      <span class="label">${label}</span>
       ${end ? `<div class="end">${end}</div>` : ""}
     </div>`;
 }
@@ -290,7 +292,7 @@ async function viewAccount(address, state) {
   const [owned, shows] = await Promise.all([names.namesOf(state, address), names.handleOf(state, address)]);
   return `
     <main class="col card account-page">
-      <h1 class="account"><span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
+      <h1 class="account">${accountIcon(address, 48)}<span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
       <p class="shows">${shows ? `Shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>` : "Shows no handle"}</p>
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
       <p class="bio">${mine ? "An account is a private key. It owns these names, and is never shown on them." : "This key owns these names."}</p>
@@ -403,7 +405,7 @@ async function viewSearch(q, state, { near = true } = {}) {
         <span class="badge">${headline[0]}</span>
         <h1 id="exact" class="mono">@${esc(q)}</h1>
         <p class="lede">${headline[1]}</p>
-        ${entry ? `<p class="owned">${ownedBy(entry.owner)}${termsOf(entry) ? ` · ${esc(termsOf(entry))}` : ""}</p>` : ""}
+        ${entry ? `<p class="owned">${ownedBy(entry.owner)}${termsOf(entry) ? ` · ${termsOf(entry, true)}` : ""}</p>` : ""}
         ${end ? `<div class="result-end">${end}</div>` : ""}
       </section>
       ${entry ? `
@@ -470,7 +472,7 @@ async function viewTake(handle, state) {
   const entry = await held(state, handle);
   if (entry && entry.owner === connected) return viewMessage(`@${handle} is yours`, "", `<a class="pill big" href="#/names" style="margin-top: 20px">Go to My names</a>`);
   if (!entry || entry.offer !== connected) {
-    return viewMessage(`@${handle} isn't offered to you`, `Selfhold connects account <span class="mono">${esc(shortID(connected))}</span> here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`);
+    return viewMessage(`@${handle} isn't offered to you`, `Selfhold connects account ${accountRef(connected)} here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`);
   }
   return `
     <main class="col card" style="margin-top: 48px">
@@ -514,7 +516,7 @@ async function viewNames(state) {
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0">My names</h1>
       <section class="panel stack section" aria-labelledby="account-title">
-        <h2 id="account-title" style="margin: 0">Your account <a class="mono" href="#/account/${esc(connected)}">${esc(shortID(connected))}</a></h2>
+        <h2 id="account-title" style="margin: 0">Your account ${accountLink(connected)}</h2>
         <p id="shows" style="margin: 0">${said}</p>
         ${named ? `<button class="pill" type="button" data-stop-showing style="align-self: flex-start">Stop showing</button>` : ""}
       </section>
@@ -528,7 +530,7 @@ async function viewNames(state) {
       ${lent.length ? `
       <section class="section stack" aria-labelledby="lent-title">
         <h2 id="lent-title">Others' names pointing at you</h2>
-        ${lent.map((n) => handleRow(n, n.handle === shows ? `<span class="label">shown</span>` : showButton(n.handle), `owned by ${shortID(n.owner)}`)).join("")}
+        ${lent.map((n) => handleRow(n, n.handle === shows ? `<span class="label">shown</span>` : showButton(n.handle), `owned by ${accountRef(n.owner)}`)).join("")}
       </section>` : ""}
       <form id="claim-new" class="panel stack section" aria-labelledby="claim-title">
         <h2 id="claim-title" style="margin: 0">Claim a name</h2>
