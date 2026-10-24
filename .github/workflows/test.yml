@@ -19,7 +19,7 @@ env:
   LATTICE_NODE_REF: ad6b8350c7fd722de457d7c2bb4712b0610197ac # genesis transactions (#69)
   LATTICE_SDK_REPO: adalinxx/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
-  LATTICE_WALLET_REPO: adalinxx/lattice-wallet
+  LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
   LATTICE_WALLET_REF: f69f6aba38b2e0838622bfe72ddff0315bab0bb9 # page writes may ask no fee (lattice-wallet#23)
 
 jobs:
