@@ -114,7 +114,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: lattice-node-${{ env.LATTICE_NODE_REF }}-static
+          key: lattice-node-${{ env.LATTICE_NODE_REF }}-static-2
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
@@ -128,10 +128,11 @@ jobs:
           apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
           cd lattice-node
           # Static Swift runtime, so the binaries run on a plain runner. The
-          # lattice command runs lattice-node and lattice-miner from beside it.
+          # lattice command runs the node, the miner and its coordinator from
+          # beside it.
           swift build --static-swift-stdlib
           mkdir ../bin
-          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner} ../bin/
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner,lattice-mining-coordinator} ../bin/
       - uses: actions/upload-artifact@v4
         with:
           name: lattice
