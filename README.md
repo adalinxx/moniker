@@ -103,7 +103,7 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   name with a menu: Show this handle, Point at me, Point at an account…,
   Stop pointing, Sell, Give to an account, Stop selling or Take back the
   offer, and Release (confirmed in the page); others' names pointing at you,
-  each with Show this handle; and Claim a new name. A gift is an offer: the
+  each with Show this handle; and Claim a name. A gift is an offer: the
   giver gets a link to send, and the receiver takes it from there.
 - **For sale**: names their owners are selling.
 - **Accounts** (`#/account/<address>`): the handle an account shows, and
@@ -135,8 +135,11 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
 - `sdk/`: [moniker-sdk](https://github.com/adalinxx/moniker-sdk), a
   submodule: the record code (`sdk/src/records/`), the library for apps, and
   the Lattice SDK bundle.
-- `e2e/moniker.mjs`: names against a real node, moniker-sdk included.
+- `e2e/moniker.mjs`: names against a real node, launched as the launch is,
+  with names claimed in the genesis; moniker-sdk included.
 - `e2e/ui/`: the page in headless Chromium with the real Selfhold wallet.
+- `index.html`, `CNAME`: the app on GitHub Pages at
+  [app.moniker.bio](https://app.moniker.bio/), `app/` served from the root.
 
 ## Build and test
 
