@@ -112,7 +112,9 @@ There is no log in: the page asks the wallet only where a key is needed,
 and only from a click, as Selfhold requires. Without a wallet it shows how to
 add Selfhold where a key is needed; back on the tab after adding it, the
 page reloads at the same place, and on a phone it offers the link to finish
-on a computer. Writes are free (Moniker's hosts admit 0-fee transactions).
+on a computer. Each write proposes the fee the first node that answers
+relays for (its `minRelayFee`, relay policy, not consensus; 0 on the
+default hosts today), and the wallet shows it for approval.
 It reads every record by CID from the nodes in Settings (by default
 `lattice-testnet-apps-iad` and `-ams`, chain `Nexus/moniker`); settings
 saved for a trial chain follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
