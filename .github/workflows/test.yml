@@ -202,3 +202,10 @@ jobs:
         name: The page in Chromium with Selfhold
         working-directory: e2e/ui
         run: npm test
+
+      - if: failure()
+        name: The node's logs
+        run: |
+          for f in $(find "${RUNNER_TEMP:-/tmp}" /tmp -path '*moniker-*' -name '*.log' 2>/dev/null | sort -u); do
+            echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"
+          done
