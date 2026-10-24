@@ -2,10 +2,10 @@
   "maxNumberOfTransactionsPerBlock": 1000,
   "maxStateGrowth": 1000000,
   "maxBlockSize": 1000000,
-  "premine": 21000,
+  "premine": 1262304,
   "targetBlockTime": 10000,
   "initialReward": 1000,
-  "halvingInterval": 210000,
+  "halvingInterval": 12623040,
   "halfLife": 100,
   "wasmPolicies": [
     {
