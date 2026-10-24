@@ -693,20 +693,20 @@ test("Settings: a node that is down is skipped, and with none reachable the page
   await page.goto(stack.app + "#/settings");
   await page.getByRole("button", { name: "Defaults" }).click();
   await expect(page.locator("#s-nodes")).toHaveValue("https://lattice-testnet-apps-iad.fly.dev\nhttps://lattice-testnet-apps-ams.fly.dev");
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/moniker");
 }, { wallet: false, expectedErrors: /ERR_CONNECTION_REFUSED/ });
 
-test("Settings saved for a trial chain since moved follow the move, and keep their nodes", async ({ page }) => {
-  await openApp(page, null, "#/settings", { nodes: [stack.node], chain: "Nexus/testnet/moniker-273339", follows: "Nexus/testnet/follows-f53551", ownNode: "http://127.0.0.1:1" });
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
+test("Settings saved for a trial chain follow the move to Moniker, and keep their nodes", async ({ page }) => {
+  await openApp(page, null, "#/settings", { nodes: [stack.node], chain: "Nexus/testnet/moniker-307b2c", follows: "Nexus/testnet/follows-f53551", ownNode: "http://127.0.0.1:1" });
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/moniker");
   await expect(page.locator("#s-nodes")).toHaveValue(stack.node);
-  // A chain of one's own choosing is kept.
-  await page.locator("#s-chain").fill(stack.chain);
+  // A chain of one's own choosing, not the default, is kept.
+  await page.locator("#s-chain").fill("Nexus/other-names");
   await page.getByRole("button", { name: "Save" }).click();
   await page.reload();
   await page.goto(stack.app + "#/settings");
-  await expect(page.locator("#s-chain")).toHaveValue(stack.chain);
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: stack.chain });
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names" });
 }, { wallet: false });
 
 test("back from adding Selfhold: the page reloads at the same name, then offers Claim once Selfhold arrives", async ({ page }) => {
