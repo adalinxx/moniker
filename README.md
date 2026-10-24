@@ -62,7 +62,7 @@ another. The SDK writes this order; anyone writing transactions by hand
 follows it.
 
 The policy module is
-`bafyreihnnbeuihjlw23xswfhduf23xbltsmn37oymwshmenmzsabgv4fzu`
+`bafyreicybs2dkpihbguywhftikjqbeh566p3zk5visa7bh2wxttdjinfp4`
 (`chain/spec.json`; `chain/moniker_policy.wasm` is that module).
 
 ## Use Moniker in your app

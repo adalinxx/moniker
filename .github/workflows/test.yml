@@ -16,7 +16,7 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
   NODE_VERSION: "24"
   LATTICE_NODE_REPO: adalinxx/lattice-node
-  LATTICE_NODE_REF: d8f410919258b2898a7b43a0b77ec1a8ee42c5da
+  LATTICE_NODE_REF: ad6b8350c7fd722de457d7c2bb4712b0610197ac # genesis transactions (#69)
   LATTICE_SDK_REPO: adalinxx/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/lattice-wallet
@@ -103,6 +103,17 @@ jobs:
         run: |
           tar -xzf contexts.tar.gz
           policy/host-check/.build/release/host-check chain/moniker_policy.wasm contexts
+      # The chain is created from these, and people check the module by them.
+      - name: The specs and the README name the module the node computes
+        shell: bash
+        run: |
+          mkdir -p none
+          cid=$(policy/host-check/.build/release/host-check chain/moniker_policy.wasm none | sed -n 's/^module \([^ ]*\) .*/\1/p')
+          test -n "$cid"
+          for spec in chain/spec.json e2e/ui/spec.json; do
+            grep -q "\"moduleCID\": \"$cid\"" "$spec" || { echo "$spec does not name $cid"; exit 1; }
+          done
+          grep -q "\`$cid\`" README.md || { echo "README.md does not name $cid"; exit 1; }
 
   node:
     name: Build the Lattice node

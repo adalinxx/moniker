@@ -2,9 +2,13 @@
 // `lattice_alloc`, write the canonical context, call the entrypoint.
 import { readFileSync } from "node:fs";
 
-export const module = new WebAssembly.Module(
-  readFileSync(new URL("../target/wasm32-unknown-unknown/release/moniker_policy.wasm", import.meta.url)),
-);
+// The built module, read when a call first needs it, so a caller that names
+// its own (chain/genesis.mjs, the committed one) runs without a build.
+let built;
+const builtModule = () =>
+  (built ??= new WebAssembly.Module(
+    readFileSync(new URL("../target/wasm32-unknown-unknown/release/moniker_policy.wasm", import.meta.url)),
+  ));
 
 function u32(value) {
   const bytes = new Uint8Array(4);
@@ -38,7 +42,7 @@ export function context(bodyBytes, { path, version = 2, height = 100n }) {
 }
 
 /** Whether `policy` (the built module unless named) accepts a context. */
-export function validate(bytes, policy = module) {
+export function validate(bytes, policy = builtModule()) {
   const { exports } = new WebAssembly.Instance(policy);
   const pointer = exports.lattice_alloc(bytes.length);
   new Uint8Array(exports.memory.buffer).set(bytes, pointer);
