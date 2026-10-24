@@ -10,6 +10,8 @@
 // key.json is a `lattice key generate` file; names.txt has one handle per
 // line, `#` starting a comment; the chain path defaults to Nexus/moniker. The
 // output is what `lattice child create --genesis-transactions` takes.
+// LATTICE_SDK (the SDK bundle, which carries core) serves in place of
+// LATTICE_SDK_CORE.
 import { readFileSync } from "node:fs";
 import { context, validate } from "../policy/test/host.mjs";
 
@@ -18,7 +20,7 @@ if (!keyFile || !namesFile) {
   console.error("usage: node chain/genesis.mjs <key.json> <names.txt> [chain path]");
   process.exit(2);
 }
-const core = await import(process.env.LATTICE_SDK_CORE);
+const core = await import(process.env.LATTICE_SDK_CORE ?? process.env.LATTICE_SDK);
 const policy = new WebAssembly.Module(readFileSync(new URL("./moniker_policy.wasm", import.meta.url)));
 const chainPath = chain.split("/");
 

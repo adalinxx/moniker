@@ -1,6 +1,7 @@
 // Moniker, the names chain, against a real node: a private host mines Nexus
 // and a Moniker chain launched from chain/spec.json with the built policy,
-// whose genesis pays the premine to Alice. Alice claims @alice pointed at
+// whose genesis pays the premine to Alice and carries the project's names,
+// claimed by chain/genesis.mjs with a `lattice key generate` key. Alice claims @alice pointed at
 // herself and shows it. A name points at any account, which shows it only
 // once it names it too. Every way of taking a name, or writing its pointer,
 // index keys or another account's records, without the right is refused. A
@@ -108,7 +109,17 @@ try {
     topology.peers = [];
     topology.mine = { worker: "cpu", workers: 1, batchSize: 100000 };
   });
-  lattice("child", "create", CHAIN.join("/"), "--spec", SPEC, "--policy-module", MODULE, "--premine-to", alice.address);
+  // The launch: the project's names, claimed in the genesis itself.
+  const projectKey = `${root}/project-key.json`;
+  execFileSync(process.env.LATTICE, ["key", "generate", "--out", projectKey]);
+  const project = JSON.parse(readFileSync(projectKey, "utf8"));
+  writeFileSync(`${root}/names.txt`, "# the project's names\nmoniker\nsupport\n");
+  writeFileSync(
+    `${root}/genesis.json`,
+    execFileSync(process.execPath, [here("../chain/genesis.mjs"), projectKey, `${root}/names.txt`, CHAIN.join("/")], { encoding: "utf8" }),
+  );
+  lattice("child", "create", CHAIN.join("/"), "--spec", SPEC, "--policy-module", MODULE, "--premine-to", alice.address,
+    "--genesis-transactions", `${root}/genesis.json`);
   configure((topology) => {
     topology.mine.recipients = { Nexus: miner.address, [CHAIN.join("/")]: miner.address };
   });
@@ -123,6 +134,16 @@ try {
     assert.deepEqual(spec.wasmPolicies.map((p) => p.moduleCID), [want]);
     assert.ok(names.runsMoniker(spec), "the SDK finds the Moniker policy in the spec");
     console.log(`Moniker launched under policy ${want}; Alice holds ${await balance(alice)}`);
+  }
+  {
+    const s = await state();
+    for (const handle of ["moniker", "support"]) {
+      const held = await names.resolve(s, handle);
+      assert.deepEqual([held?.owner, held?.pointer], [project.address, project.address], `@${handle} from the genesis`);
+    }
+    assert.deepEqual((await names.namesOf(s, project.address)).map((n) => n.handle).sort(), ["moniker", "support"]);
+    assert.equal(await nonce(project), 2n, "the genesis claims used the project's nonces 0 and 1");
+    console.log("the genesis holds @moniker and @support for the project, pointed at it");
   }
   await admitted("Alice funds Bob", alice, { actions: [], payments: [{ to: bob.address, amount: 2000n }] });
   await until("Bob is funded", async () => (await balance(bob)) === 2000n);
@@ -173,6 +194,7 @@ try {
       actions: [{ key: names.nameKey("alice"), oldValue: held.value, newValue: bob.address }, { key: names.namesKey(alice.address, "alice"), oldValue: "1" }, { key: names.namesKey(bob.address, "alice"), newValue: "1" }],
       payments: [{ to: alice.address, amount: 1000n }],
     });
+    await refused("Bob claims @moniker, held from the genesis", bob, { actions: [{ key: names.nameKey("moniker"), newValue: bob.address }, { key: names.namesKey(bob.address, "moniker"), newValue: "1" }] });
     await refused("Bob claims a name without its index key", bob, { actions: [{ key: names.nameKey("bob"), newValue: bob.address }] });
     await refused("Bob claims a name onto Alice's account", bob, { actions: [{ key: names.nameKey("bob"), newValue: alice.address }, { key: names.namesKey(alice.address, "bob"), newValue: "1" }] });
     await refused("Bob lists @alice among his names", bob, { actions: [{ key: names.namesKey(bob.address, "alice"), newValue: "1" }] });
