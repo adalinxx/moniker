@@ -507,21 +507,16 @@ test("Claim and show: a new account claims @una and shows it, in one approval", 
   expect(await names.handleOf(await state(), una.address)).toBe("una");
 });
 
-test("A write proposes the fee the node relays for: a claim on a node asking 3 costs 3", async ({ page }) => {
+test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
   const fia = newAccount();
   await fund(fia.address, 100n);
   await until("Fia is funded", async () => (await balance(fia.address)) === 100n);
-  // The stack's node relays any fee; the page is told this one asks 3.
-  await page.route(/\/api\/chain\/info\?/, async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "3" } });
-  });
   await openApp(page, fia, "#/search/fia");
   await expect(page.locator(".result .badge")).toHaveText("Available");
   await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Claim @fia" }).click();
   await until("@fia is Fia's", async () => (await names.resolve(await state(), "fia"))?.owner === fia.address);
-  expect(await balance(fia.address)).toBe(97n);
+  expect(await balance(fia.address)).toBe(99n);
 });
 
 test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {

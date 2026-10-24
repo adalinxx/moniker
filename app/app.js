@@ -35,21 +35,8 @@ function saveSettings(next) {
   moniker = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
-// The fee a write proposes: the least the first node that answers relays for
-// the chain (`minRelayFee`), which is relay policy, not consensus. Moniker's
-// default hosts relay 0-fee writes today. The wallet shows the fee with the
-// write, and the person approves both.
-async function relayFee() {
-  for (const node of settings.nodes) {
-    try {
-      const url = new URL("/api/chain/info", node);
-      url.searchParams.set("chainPath", settings.chain);
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) return BigInt((await response.json()).minRelayFee ?? "0");
-    } catch {}
-  }
-  return 0n;
-}
+// A write asks for no fee: the person's wallet pays the fee they set there
+// for the chain, and shows it for approval with the write.
 // Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
@@ -112,7 +99,7 @@ function send(write, me) {
       render();
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return wallet().writeRecords(writeRequest(chainPath(), write, await relayFee()));
+    return wallet().writeRecords(writeRequest(chainPath(), write));
   });
   walletTurn = turn.catch(() => {});
   return turn;
