@@ -11,13 +11,13 @@ import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from ".
 
 const DEFAULTS = {
   nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/moniker-307b2c",
+  chain: "Nexus/moniker",
 };
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
-    // Settings saved before the trials moved name old ones; follow the move.
-    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339", "Nexus/testnet/moniker-01c01f"].includes(saved.chain)) delete saved.chain;
+    // Settings saved on a trial chain name it; follow the move to Moniker.
+    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339", "Nexus/testnet/moniker-01c01f", "Nexus/testnet/moniker-307b2c"].includes(saved.chain)) delete saved.chain;
     return {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
@@ -35,8 +35,21 @@ function saveSettings(next) {
   moniker = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
-// Writes are free on the trial chain: its hosts admit 0-fee transactions.
-const FEE = 0n;
+// The fee a write proposes: the least the first node that answers relays for
+// the chain (`minRelayFee`), which is relay policy, not consensus. Moniker's
+// default hosts relay 0-fee writes today. The wallet shows the fee with the
+// write, and the person approves both.
+async function relayFee() {
+  for (const node of settings.nodes) {
+    try {
+      const url = new URL("/api/chain/info", node);
+      url.searchParams.set("chainPath", settings.chain);
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) return BigInt((await response.json()).minRelayFee ?? "0");
+    } catch {}
+  }
+  return 0n;
+}
 // Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
@@ -46,7 +59,7 @@ const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/
 // ---------------------------------------------------------------- reading
 
 let moniker = null;
-const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), fee: FEE, freshFor: 0 }));
+const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), freshFor: 0 }));
 
 /** The names chain's state at the tip of the first node that answers. */
 const readState = () => client().state({ fresh: true });
@@ -99,7 +112,7 @@ function send(write, me) {
       render();
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return wallet().writeRecords(writeRequest(chainPath(), write, FEE));
+    return wallet().writeRecords(writeRequest(chainPath(), write, await relayFee()));
   });
   walletTurn = turn.catch(() => {});
   return turn;
