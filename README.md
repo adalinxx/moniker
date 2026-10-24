@@ -115,9 +115,11 @@ page reloads at the same place, and on a phone it offers the link to finish
 on a computer. A write asks for no fee: Selfhold pays the fee the person
 sets there for the chain (1 unit until they change it), so an account needs
 coins to write unless its fee is 0.
-It reads every record by CID from the nodes in Settings (by default
-`lattice-testnet-apps-iad` and `-ams`, chain `Nexus/moniker`); settings
-saved for a trial chain follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
+It reads every record by CID from the hosts Nexus lists for `Nexus/moniker`,
+found through Nexus's seeds (`seed1` to `seed4.lattice.build`), or from the
+nodes named in Settings. A listed host is not verified: its Volumes are
+checked by CID, but its tip is taken as it reports it. Settings saved for a
+trial chain, or with the hosts once named by default, follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
 
 ```sh
 python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/
