@@ -20,7 +20,7 @@ env:
   LATTICE_SDK_REPO: adalinxx/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
-  LATTICE_WALLET_REF: f69f6aba38b2e0838622bfe72ddff0315bab0bb9 # page writes may ask no fee (lattice-wallet#23)
+  LATTICE_WALLET_REF: 114f949ab60b10f28540fb4235a1eb1cc9188697 # page writes may ask no fee (selfhold-wallet#23)
 
 jobs:
   policy:
