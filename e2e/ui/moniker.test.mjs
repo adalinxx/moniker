@@ -460,9 +460,9 @@ test("Alice offers @alice_back to Carol, then takes the offer back", async ({ pa
   await openApp(page, alice, "#/names");
   await menu(page, "alice_back", "Give to an account");
   await answerSheet(page, carol.address, "Offer it");
-  await expect(row(page, "alice_back").locator(".label")).toHaveText(`points nowhere · offered to ${short(carol)}`);
+  await expect(row(page, "alice_back").locator(".label")).toHaveText(`points at you · offered to ${short(carol)}`);
   await menu(page, "alice_back", "Take back the offer");
-  await expect(row(page, "alice_back").locator(".label")).toHaveText("points nowhere");
+  await expect(row(page, "alice_back").locator(".label")).toHaveText("points at you");
   await expect(page.getByRole("button", { name: "Copy link to take @alice_back" })).toHaveCount(0);
   expect((await held("alice_back")).offer).toBeUndefined();
 });
@@ -533,12 +533,12 @@ test("Enter in a sheet confirms it: a price typed and Enter lists the name", asy
   await menu(page, "ivy_enter", "Sell");
   await page.locator("#sheet-input").fill("25");
   await page.locator("#sheet-input").press("Enter");
-  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points nowhere · for sale · 25");
+  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points at you · for sale · 25");
   expect((await held("ivy_enter")).price).toBe(25n);
   // Escape still cancels, sending nothing.
   const asked = page.context().approvals;
   await menu(page, "ivy_enter", "Stop selling");
-  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points nowhere");
+  await expect(row(page, "ivy_enter").locator(".label")).toHaveText("points at you");
   await menu(page, "ivy_enter", "Sell");
   await page.locator("#sheet-input").fill("7");
   await page.locator("#sheet-input").press("Escape");

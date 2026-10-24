@@ -29,10 +29,12 @@ An account `a` shows `@h` in every app only while `points/h` is `a` **and**
 name that doesn't point at them, and no name shows on an account that
 doesn't choose it. One read of Moniker decides.
 
-Selling or giving a name moves the name and clears its pointer (the buyer
-may set it, to itself, in the same transaction), so a seller stops showing
-a name it sold. Releasing a name deletes its pointer; anyone may claim it
-next.
+A name that comes to a new owner, claimed, bought or taken as offered, is
+pointed by that owner in the same transaction: at itself (the SDK's
+default), at any account, or cleared if a pointer is there. Consensus checks
+the pointer's old value, so none a seller or an earlier owner left survives,
+and a seller stops showing a name it sold. Releasing a name may delete its
+pointer; whoever claims it next points it again.
 
 ## Records
 
@@ -40,12 +42,14 @@ next.
 | --- | --- | --- |
 | `name/<h>` | `<owner>`, `<owner>@<price>` (for sale to anyone) or `<owner>><account>` (offered to one account) | its owner, who may also release it; anyone buys at the price; the account it is offered to takes it |
 | `names/<a>/<h>` | `1` while account `<a>` owns `@h`: an account's names in one read | only together with the name it indexes |
-| `points/<h>` | The account `@h` points at | the name's owner, right after the name; deleted when it is released |
+| `points/<h>` | The account `@h` points at | the name's owner, right after the name; written whenever the name comes to a new owner; deleted when it is released |
 | `user/<a>/name` | The handle account `<a>` shows, while it points at `<a>` | `<a>` |
 | `user/<a>/...` | An account's other values, such as `key.x25519` or `app.<name>.<field>` | `<a>` |
 
 A handle is lowercase letters, digits and `_`. The first to claim a free
-name owns it. A buyer names the value they read, so if the price changed,
+name owns it, one claim per transaction. Every node keeps what is written
+for good and writes may be free, so a key is at most 512 bytes (a handle at
+most 446 characters, for its `names/<a>/<h>` key) and a value at most 16 KiB. A buyer names the value they read, so if the price changed,
 the purchase is refused.
 
 The policy sees only a transaction, so a write acting for a name rewrites
@@ -123,8 +127,11 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
 
 - `rules/`: `lattice-policy-rules`, the parts Lattice policies share:
   reading the context and body, and the token rule.
-- `policy/`: the Moniker policy.
-- `chain/`: the chain spec and the built policy module it names.
+- `policy/`: the Moniker policy, fixed at genesis. It and `rules/` are one
+  Cargo workspace, so the module is built with paths relative to the
+  repository: the same bytes wherever it is built, naming no machine.
+- `chain/`: the chain spec, the built policy module it names, and
+  `genesis.mjs`, the transactions the genesis carries.
 - `sdk/`: [moniker-sdk](https://github.com/adalinxx/moniker-sdk), a
   submodule: the record code (`sdk/src/records/`), the library for apps, and
   the Lattice SDK bundle.
@@ -136,7 +143,7 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
 ```
 cd policy
 cargo build --release --target wasm32-unknown-unknown
-LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/policy.test.mjs
+LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/policy.test.mjs test/properties.test.mjs
 cd ..
 LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
@@ -152,3 +159,36 @@ prints it) in `chain/spec.json` and `e2e/ui/spec.json`. To replay every
 policy test context through Lattice's own host, run the policy tests with
 `CONTEXT_DIR=<dir>`, then
 `swift run --package-path policy/host-check host-check policy/target/wasm32-unknown-unknown/release/moniker_policy.wasm <dir>`.
+
+`test/properties.test.mjs` judges random transactions, built from the
+operations the app makes and then damaged at random, with the built module
+and with `test/model.mjs`, the rules restated from the policy's
+documentation; checks the safety properties directly on every transaction
+the module accepts; and corrupts encoded bodies. `FUZZ_RUNS` sets how many
+it tries (5000 by default); a failure prints the `FUZZ_SEED` that replays it.
+With `CONTEXT_DIR` it records every context too, for host-check.
+
+CI (`.github/workflows/test.yml`) runs all of the above and moniker-sdk's
+tests on every pull request, against the Lattice node, SDK and Selfhold
+commits pinned at the top of the workflow. It checks that
+`chain/moniker_policy.wasm` is what the source builds and names no build
+path, and replays every context the policy tests judged through host-check.
+
+## Launch
+
+The project's names are claimed in the genesis itself, so nobody can take
+them first. From a `lattice key generate` key kept offline and a list of
+handles, one per line:
+
+```
+LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js \
+  node chain/genesis.mjs project-key.json names.txt Nexus/moniker > genesis.json
+lattice child create Nexus/moniker --spec chain/spec.json \
+  --policy-module chain/moniker_policy.wasm --premine-to <address> \
+  --genesis-transactions genesis.json
+```
+
+Each name is claimed with its `names/` key and pointed at the project's
+account, one claim per transaction. Every claim is checked against the policy
+before it is written, and again by the node before the chain is created.
+`--genesis-transactions` needs a node with adalinxx/lattice-node#69.
