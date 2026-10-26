@@ -10,8 +10,7 @@ belongs to you, not to an app: no company can take it back, rename it or
 hand it to someone else, and only your key can change where it points. Any
 app can know you by it.
 
-Moniker (`Nexus/moniker` in tests, `Nexus/testnet/moniker-307b2c` on the
-testnet trial) is the names chain: it holds names, where each one points,
+Moniker (`Nexus/moniker`, launched 2026-10-24) is the names chain: it holds names, where each one points,
 and the handle each account shows. There are no profiles and no admins:
 an account is the identity, and apps keep their own records (cards
 included) on their own chains, keyed by account.
@@ -113,11 +112,14 @@ There is no log in: the page asks the wallet only where a key is needed,
 and only from a click, as Selfhold requires. Without a wallet it shows how to
 add Selfhold where a key is needed; back on the tab after adding it, the
 page reloads at the same place, and on a phone it offers the link to finish
-on a computer. Writes are free on the trial chain (its hosts admit 0-fee
-transactions). It reads every record by CID from the nodes in Settings (by
-default the shared testnet hosts `lattice-testnet-apps-iad` and `-ams`,
-chain `Nexus/testnet/moniker-307b2c`); settings saved for an older trial
-chain follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
+on a computer. A write asks for no fee: Selfhold pays the fee the person
+sets there for the chain (1 unit until they change it), so an account needs
+coins to write unless its fee is 0.
+It reads every record by CID from the hosts Nexus lists for `Nexus/moniker`,
+found through Nexus's seeds (`seed1` to `seed4.lattice.build`), or from the
+nodes named in Settings. A listed host is not verified: its Volumes are
+checked by CID, but its tip is taken as it reports it. Settings saved for a
+trial chain, or with the hosts once named by default, follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
 
 ```sh
 python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/

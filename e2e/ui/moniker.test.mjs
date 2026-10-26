@@ -494,6 +494,7 @@ test("Alice releases @alice after confirming in the page: it is free, pointing n
 
 test("Claim and show: a new account claims @una and shows it, in one approval", async ({ page }) => {
   const una = newAccount();
+  await fund(una.address, 100n); // the wallet's fee, 1 by default
   await openApp(page, una, "#/search/una");
   const asked = page.context().approvals;
   // The page draws again once Selfhold has answered; check the box on the page as last drawn.
@@ -505,6 +506,18 @@ test("Claim and show: a new account claims @una and shows it, in one approval", 
   await expect(page.locator("#points")).toHaveText("Points at you · shown as @una");
   expect(page.context().approvals).toBe(asked + 1);
   expect(await names.handleOf(await state(), una.address)).toBe("una");
+});
+
+test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
+  const fia = newAccount();
+  await fund(fia.address, 100n);
+  await until("Fia is funded", async () => (await balance(fia.address)) === 100n);
+  await openApp(page, fia, "#/search/fia");
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "Claim @fia" }).click();
+  await until("@fia is Fia's", async () => (await names.resolve(await state(), "fia"))?.owner === fia.address);
+  expect(await balance(fia.address)).toBe(99n);
 });
 
 test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {
@@ -686,27 +699,34 @@ test("Settings: a node that is down is skipped, and with none reachable the page
   await page.locator("#s-nodes").fill(down);
   await page.getByRole("button", { name: "Save" }).click();
   await page.goto(stack.app + "#/search/nodefall");
-  await expect(page.locator("#app")).toContainText(`No node is serving ${stack.chain}`);
+  await expect(page.locator("#app")).toContainText(`No host is serving ${stack.chain}`);
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
 
-  // Defaults puts back the hosted nodes and chain.
+  // Defaults names no nodes, so reads go to the hosts Nexus lists, and puts back the chain.
   await page.goto(stack.app + "#/settings");
   await page.getByRole("button", { name: "Defaults" }).click();
-  await expect(page.locator("#s-nodes")).toHaveValue("https://lattice-testnet-apps-iad.fly.dev\nhttps://lattice-testnet-apps-ams.fly.dev");
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
+  await expect(page.locator("#s-nodes")).toHaveValue("");
+  await expect(page.locator("#s-nodes")).toHaveAttribute("placeholder", "The hosts Nexus lists for the chain");
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/moniker");
 }, { wallet: false, expectedErrors: /ERR_CONNECTION_REFUSED/ });
 
-test("Settings saved for a trial chain since moved follow the move, and keep their nodes", async ({ page }) => {
-  await openApp(page, null, "#/settings", { nodes: [stack.node], chain: "Nexus/testnet/moniker-273339", follows: "Nexus/testnet/follows-f53551", ownNode: "http://127.0.0.1:1" });
-  await expect(page.locator("#s-chain")).toHaveValue("Nexus/testnet/moniker-307b2c");
+test("Settings saved for a trial chain follow the move to Moniker, and keep their nodes", async ({ page }) => {
+  await openApp(page, null, "#/settings", { nodes: [stack.node], chain: "Nexus/testnet/moniker-307b2c", follows: "Nexus/testnet/follows-f53551", ownNode: "http://127.0.0.1:1" });
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/moniker");
   await expect(page.locator("#s-nodes")).toHaveValue(stack.node);
-  // A chain of one's own choosing is kept.
-  await page.locator("#s-chain").fill(stack.chain);
+  // A chain of one's own choosing, not the default, is kept.
+  await page.locator("#s-chain").fill("Nexus/other-names");
   await page.getByRole("button", { name: "Save" }).click();
   await page.reload();
   await page.goto(stack.app + "#/settings");
-  await expect(page.locator("#s-chain")).toHaveValue(stack.chain);
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: stack.chain });
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names" });
+}, { wallet: false, expectedErrors: /status of 404/ }); // the stack's node serves no Nexus/other-names
+
+test("Settings saved with the hosts once named by default find them through Nexus instead", async ({ page }) => {
+  await openApp(page, null, "#/settings", { nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"], chain: "Nexus/moniker" });
+  await expect(page.locator("#s-nodes")).toHaveValue("");
+  await expect(page.locator("#s-chain")).toHaveValue("Nexus/moniker");
 }, { wallet: false });
 
 test("back from adding Selfhold: the page reloads at the same name, then offers Claim once Selfhold arrives", async ({ page }) => {
@@ -751,6 +771,7 @@ async function openPicker(page, who) {
 
 test("the handle picker in another app: a new account claims a free name and shows it, in one approval", async ({ page }) => {
   const pia = newAccount();
+  await fund(pia.address, 100n); // the wallet's fee, 1 by default
   await openPicker(page, pia);
   await page.getByRole("button", { name: "Use a handle" }).click();
   const dialog = page.getByRole("dialog", { name: "Use a handle" });

@@ -10,14 +10,17 @@ import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from ".
 // ---------------------------------------------------------------- settings
 
 const DEFAULTS = {
-  nodes: ["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"],
-  chain: "Nexus/testnet/moniker-307b2c",
+  // None named: reads go to the hosts Nexus lists for the chain.
+  nodes: [],
+  chain: "Nexus/moniker",
 };
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
-    // Settings saved before the trials moved name old ones; follow the move.
-    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339", "Nexus/testnet/moniker-01c01f"].includes(saved.chain)) delete saved.chain;
+    // Settings saved on a trial chain name it; follow the move to Moniker.
+    // Settings saved with the hosts once named by default find them through Nexus now.
+    if (JSON.stringify(saved.nodes) === JSON.stringify(["https://lattice-testnet-apps-iad.fly.dev", "https://lattice-testnet-apps-ams.fly.dev"])) delete saved.nodes;
+    if (["Nexus/testnet/moniker-da6f57", "Nexus/testnet/moniker-8eb926", "Nexus/testnet/moniker-273339", "Nexus/testnet/moniker-01c01f", "Nexus/testnet/moniker-307b2c"].includes(saved.chain)) delete saved.chain;
     return {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
@@ -35,8 +38,8 @@ function saveSettings(next) {
   moniker = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
-// Writes are free on the trial chain: its hosts admit 0-fee transactions.
-const FEE = 0n;
+// A write asks for no fee: the person's wallet pays the fee they set there
+// for the chain, and shows it for approval with the write.
 // Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
@@ -46,9 +49,9 @@ const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/
 // ---------------------------------------------------------------- reading
 
 let moniker = null;
-const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), fee: FEE, freshFor: 0 }));
+const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), freshFor: 0 }));
 
-/** The names chain's state at the tip of the first node that answers. */
+/** The names chain's state at the tip of the first host that answers. */
 const readState = () => client().state({ fresh: true });
 
 /** The name as the chain holds it, or undefined when free. */
@@ -99,7 +102,7 @@ function send(write, me) {
       render();
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return wallet().writeRecords(writeRequest(chainPath(), write, FEE));
+    return wallet().writeRecords(writeRequest(chainPath(), write));
   });
   walletTurn = turn.catch(() => {});
   return turn;
@@ -567,7 +570,7 @@ function viewSettings() {
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0 0 20px">Settings</h1>
       <form id="settings" class="panel stack">
-        <div class="field"><label for="s-nodes">Nodes to read from, one per line</label><textarea id="s-nodes" rows="3">${esc(settings.nodes.join("\n"))}</textarea></div>
+        <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
         <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
           <button class="pill" type="button" data-reset>Defaults</button>
@@ -674,7 +677,7 @@ document.addEventListener("click", async (event) => {
     saveSettings({});
     render();
   } else if (d.nameMenu) {
-    // A menu reads the chain first: if no node answers, say so.
+    // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.buy) {
     if (!(await connectFirst())) return;

@@ -266,7 +266,8 @@ try {
     connect: async () => who.address,
     async writeRecords(request) {
       const payments = (request.payments ?? []).map(({ to, amount }) => ({ to, amount: BigInt(amount) }));
-      const body = wallet.transaction({ owner: who.address, actions: request.actions, payments, fee: BigInt(request.fee), nonce: await nonce(who), chainPath: request.chainPath });
+      // As Selfhold: a request without a fee pays the person's default, 1.
+      const body = wallet.transaction({ owner: who.address, actions: request.actions, payments, fee: BigInt(request.fee ?? 1n), nonce: await nonce(who), chainPath: request.chainPath });
       const result = await submit(who, body);
       if (!result.ok) throw new Error(`refused: ${result.text}`);
       return JSON.parse(result.text);
