@@ -121,7 +121,8 @@ phones included:
   which passkey and the address it makes, never the key, which it holds in
   memory and asks of the passkey again after a reload, at the first write.
   Where the browser or provider can't derive a key, the page keeps one in
-  the browser instead and says so; Settings copies it. Passkeys work only
+  the browser instead and says so before the write goes on, offering the
+  key to copy; Settings copies it too. Passkeys work only
   on the page's own domain or `localhost`, not an IP address.
 - **It signs as Selfhold would** and sends to the chain's hosts, paying
   their relay floor (`minRelayFee`, 1 on Moniker's hosts) from the account.

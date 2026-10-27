@@ -119,7 +119,37 @@ async function startAccount() {
 async function createAccount() {
   const made = await inPage.create();
   connected = made.address;
-  if (made.kind === "browser") toast("Your key is kept in this browser only: this browser's passkeys can't keep it. Copy it from Settings and keep it safe.");
+  if (made.kind === "browser") await keptHere();
+  return true;
+}
+
+/**
+ * Says, where it can't be missed, that the account's key is kept in this
+ * browser only, offering it to copy: a toast would give way to the write's own.
+ */
+async function keptHere() {
+  const choice = await sheet({
+    title: "Your key is kept in this browser only",
+    body: "This browser's passkeys can't keep a key, so your account's key is kept here. Clear this browser's data and the account and its names are gone. Copy the key and keep it somewhere safe; Settings has it too.",
+    choices: [
+      { value: "copy", label: "Copy the key" },
+      { value: "go", label: "Continue" },
+    ],
+  });
+  if (choice === "copy" && !(await copyKey())) {
+    await sheet({ title: "Couldn't copy the key", body: "Copy it from Settings before you rely on this account.", confirm: "OK" });
+  }
+}
+
+/** Copies the page's browser-kept key, saying so; whether it was copied. */
+async function copyKey() {
+  const key = inPage.exportKey();
+  try {
+    await navigator.clipboard.writeText(key);
+  } catch {
+    return false;
+  }
+  toast("Key copied. Keep it somewhere safe, and never share it.");
   return true;
 }
 
@@ -747,8 +777,7 @@ document.addEventListener("click", async (event) => {
       toast(walletMessage(error), { bad: true });
     }
   } else if ("copyKey" in d) {
-    const key = inPage.exportKey();
-    if (key) navigator.clipboard?.writeText(key).then(() => toast("Key copied. Keep it somewhere safe, and never share it."), () => toast("Couldn't copy the key.", { bad: true }));
+    if (!(await copyKey())) toast("Couldn't copy the key.", { bad: true });
   } else if ("forgetAccount" in d) {
     const browserKey = inPage.kind() === "browser";
     const ok = await sheet({

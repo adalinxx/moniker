@@ -765,14 +765,14 @@ test("back from adding Selfhold: the page reloads at the same place, then offers
 // ---------------------------------------------------------------- the page's wallet, with a passkey
 
 /**
- * `page` with no Selfhold and a platform passkey provider that derives keys
- * (PRF), opened at `hash` on localhost: passkeys refuse an IP address.
+ * `page` with a platform passkey provider, one that derives keys (PRF) unless
+ * `prf` is false, opened at `hash` on localhost: passkeys refuse an IP address.
  */
-async function withPasskeys(page, hash, settings = {}) {
+async function withPasskeys(page, hash, { settings = {}, prf = true } = {}) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true },
+    options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: prf, automaticPresenceSimulation: true },
   });
   await page.addInitScript((settings) => {
     if (!localStorage.getItem("moniker.settings")) localStorage.setItem("moniker.settings", JSON.stringify(settings));
@@ -823,6 +823,74 @@ test("I have a passkey: an account forgotten here comes back from its passkey, w
   expect((await pageAccount(page)).address).toBe(made.address);
 }, { wallet: false });
 
+test("where passkeys can't make a key, the key is kept in this browser: it claims, outlasts a reload, and Copy the key gives it", async ({ page }) => {
+  const app = await withPasskeys(page, "#/@bea_key", { prf: false });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(app).origin });
+  await page.getByRole("button", { name: "Claim @bea_key" }).click();
+  await sheetButton(page, "Create a passkey").click();
+  // Said before the write goes on, and the key offered to copy.
+  await expect(page.locator("#sheet-title")).toHaveText("Your key is kept in this browser only");
+  await sheetButton(page, "Copy the key").click();
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  const kept = await pageAccount(page);
+  const keyOf = async () => sdk.accountFromPrivateKey(Uint8Array.from(Buffer.from(await page.evaluate(() => navigator.clipboard.readText()), "hex"))).address;
+  expect(await keyOf()).toBe(kept.address);
+  expect(kept.kind).toBe("browser");
+  expect((await held("bea_key")).owner).toBe(kept.address);
+
+  // After a reload the key is still here: a write asks nothing.
+  await page.reload();
+  await page.goto(app + "#/settings");
+  await expect(page.getByText("its key kept in this browser only")).toBeVisible();
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await page.getByRole("button", { name: "Copy the key" }).click();
+  await expect(page.locator("#toasts")).toContainText("Key copied");
+  expect(await keyOf()).toBe(kept.address);
+  await page.goto(app + "#/names");
+  await page.getByRole("button", { name: "Show this handle @bea_key" }).click();
+  await expect(page.locator("#shows")).toHaveText("Your account is shown as @bea_key.");
+}, { wallet: false });
+
+test("with Selfhold too, Settings switch to the page's wallet and back: each writes as its own account, and only Selfhold asks Selfhold", async ({ page }) => {
+  const kit = newAccount();
+  await fund(kit.address, 100n); // Selfhold's fee
+  await walletHolds(page.context(), kit);
+  const app = await withPasskeys(page, "#/names");
+  await page.getByRole("button", { name: "Connect Selfhold" }).click();
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+
+  await page.goto(app + "#/settings");
+  await page.getByLabel("Use this page's passkey wallet, not Selfhold").check();
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.goto(app + "#/names");
+  const asked = page.context().approvals;
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  const made = await pageAccount(page);
+  expect(made.address).not.toBe(kit.address);
+  await page.getByLabel("Name", { exact: true }).fill("kit_page");
+  await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  expect((await held("kit_page")).owner).toBe(made.address);
+  await page.goto(app + "#/names");
+  await expect(row(page, "kit_page")).toBeVisible();
+  expect(page.context().approvals).toBe(asked);
+
+  await page.goto(app + "#/settings");
+  await page.getByLabel("Use this page's passkey wallet, not Selfhold").uncheck();
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.goto(app + "#/names");
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  await expect(row(page, "kit_page")).toHaveCount(0);
+  await page.getByLabel("Name", { exact: true }).fill("kit_self");
+  await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  expect((await held("kit_self")).owner).toBe(kit.address);
+  expect(page.context().approvals).toBe(asked + 1);
+  // The page's account is still here, for when it's switched back.
+  expect((await pageAccount(page)).address).toBe(made.address);
+});
+
 test("the page's wallet pays the hosts' relay fee: without the coins it asks for them and sends nothing; funded, it pays", async ({ page }) => {
   // The hosts here take any fee; as Moniker's hosts, they ask 1.
   await page.route("**/api/chain/info?*", async (route) => {
@@ -851,7 +919,7 @@ test("with a fee sponsor, an account with no coins pays the relay fee in work: t
     await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
   });
   const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  await withPasskeys(page, "#/@sia_pass", { sponsor: sponsor.url });
+  await withPasskeys(page, "#/@sia_pass", { settings: { sponsor: sponsor.url } });
   const before = await balance(sponsor.address);
   await page.getByRole("button", { name: "Claim @sia_pass" }).click();
   await sheetButton(page, "Create a passkey").click();
