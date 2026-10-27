@@ -1,11 +1,13 @@
 // Moniker: @names, read from the names chain by CID and written through the
-// Selfhold wallet, which asks the owner to approve every change. An account
+// Selfhold wallet, which asks the owner to approve every change, or, without
+// Selfhold, through the wallet in the page, whose key a passkey keeps. An account
 // (a key) owns names, and points each at an account, any account. An account
 // shows `@h` only while it names h and h points at it. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import * as names from "../sdk/src/records/names.mjs";
 import { writeRequest } from "../sdk/src/records/wallet.mjs";
 import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
+import { embeddedWallet } from "./wallet.mjs";
 
 // ---------------------------------------------------------------- settings
 
@@ -13,6 +15,10 @@ const DEFAULTS = {
   // None named: reads go to the hosts Nexus lists for the chain.
   nodes: [],
   chain: "Nexus/moniker",
+  // A fee sponsor paid in work, for accounts in the page's wallet with too few coins for the fee; "" for none.
+  sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
+  // "selfhold" uses Selfhold where it is installed; "page" uses the page's own wallet even so.
+  wallet: "selfhold",
 };
 function loadSettings() {
   try {
@@ -24,6 +30,8 @@ function loadSettings() {
     return {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
+      sponsor: typeof saved.sponsor === "string" ? saved.sponsor : DEFAULTS.sponsor,
+      wallet: saved.wallet === "page" ? "page" : DEFAULTS.wallet,
     };
   } catch {
     return { ...DEFAULTS };
@@ -38,9 +46,10 @@ function saveSettings(next) {
   moniker = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
-// A write asks for no fee: the person's wallet pays the fee they set there
-// for the chain, and shows it for approval with the write.
-// Where a newcomer gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
+// A write asks for no fee: Selfhold pays the fee the person sets there for
+// the chain, and shows it for approval with the write; the page's wallet
+// pays the hosts' relay floor, or a sponsor in work.
+// Where someone gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
 // Selfhold is a desktop Chromium extension: phones and other browsers can't add it.
 const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
@@ -60,19 +69,31 @@ const held = (state, handle) => names.resolve(state, handle);
 // ---------------------------------------------------------------- wallet
 
 let connected = null;
-const wallet = () => window.lattice ?? null;
+const inPage = embeddedWallet({ hosts: () => client().hosts(), sponsor: () => settings.sponsor });
+/** Selfhold where it is installed (unless Settings choose the page's wallet), else the page's own. */
+const wallet = () => (settings.wallet !== "page" && window.lattice) || inPage;
+const selfhold = () => wallet() !== inPage;
 
-/** Asks Selfhold for this site's address. It answers only within a click or key press, so call it before any other wait. */
+/**
+ * Asks the wallet for this site's account: Selfhold's address, or the page's
+ * account unlocked by its passkey. Both answer only within a click or key
+ * press, so call it before any other wait.
+ */
 async function connect() {
-  if (!wallet()) throw new Error("This needs the Selfhold wallet.");
   connected = await wallet().connect();
   return connected;
 }
 
-/** Connects first if this site isn't connected; false (and says why) if that fails. */
-async function connectFirst() {
-  if (connected) return true;
+/**
+ * Connects first if this site isn't connected, or the page's wallet is
+ * locked; with no account in the page's wallet, offers to make one or sign
+ * in, `purpose` ("claim @river") saying what for. False (and says why) if
+ * that fails.
+ */
+async function connectFirst(purpose) {
+  if (connected && (selfhold() || !inPage.locked())) return true;
   try {
+    if (!selfhold() && !(await inPage.address())) return await startAccount(purpose);
     await connect();
     return true;
   } catch (error) {
@@ -81,18 +102,79 @@ async function connectFirst() {
   }
 }
 
+/** With no account in the page's wallet: makes one with a passkey, or signs in with one made before. */
+async function startAccount(purpose) {
+  const choice = await sheet({
+    title: purpose ? `Make an account to ${purpose}` : "Make an account",
+    body: PASSKEY_KEEPS,
+    choices: [
+      { value: "create", label: "Create a passkey", primary: true },
+      { value: "signin", label: "I have a passkey" },
+    ],
+  });
+  if (choice === null) return false;
+  return choice === "create" ? createAccount() : signIn();
+}
+
+const PASSKEY_KEEPS = "Your names belong to your account. A passkey keeps its key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.";
+
+/** A new account, kept by a new passkey (or by this browser, where passkeys can't keep one). */
+async function createAccount() {
+  const made = await inPage.create();
+  connected = made.address;
+  if (made.kind === "browser") await keptHere();
+  return true;
+}
+
+/**
+ * Says, where it can't be missed, that the account's key is kept in this
+ * browser only, offering it to copy: a toast would give way to the write's own.
+ */
+async function keptHere() {
+  const choice = await sheet({
+    title: "Your key is kept in this browser only",
+    body: "This browser's passkeys can't keep a key, so your account's key is kept here. Clear this browser's data and the account and its names are gone. Copy the key and keep it somewhere safe; Settings has it too.",
+    choices: [
+      { value: "copy", label: "Copy the key", primary: true },
+      { value: "go", label: "Continue without a copy" },
+    ],
+    cancel: false,
+  });
+  if (choice === "copy" && !(await copyKey())) {
+    await sheet({ title: "Couldn't copy the key", body: "Copy it from Settings before you rely on this account.", confirm: "OK" });
+  }
+}
+
+/** Copies the page's browser-kept key, saying so; whether it was copied. */
+async function copyKey() {
+  const key = inPage.exportKey();
+  try {
+    await navigator.clipboard.writeText(key);
+  } catch {
+    return false;
+  }
+  toast("Key copied. Keep it somewhere safe, and never share it.");
+  return true;
+}
+
+/** The account a passkey made here before. */
+async function signIn() {
+  connected = await inPage.signIn();
+  return true;
+}
+
 function walletMessage(error) {
   const text = String(error?.message ?? error);
   if (/just declined|ask again in a moment/i.test(text)) return "The wallet waits a few seconds after a decline. Try again in a moment.";
   if (/declined|rejected|denied/i.test(text)) return "You declined it in the wallet. Nothing was sent.";
-  if (/locked/i.test(text)) return "Unlock Selfhold, then try again.";
+  if (/locked/i.test(text)) return selfhold() ? "Unlock Selfhold, then try again." : "Use your passkey, then try again.";
   return text;
 }
 
 // The wallet takes one request from a page at a time.
 let walletTurn = Promise.resolve();
-/** Sends `write`, built for account `me`, through the wallet. */
-function send(write, me) {
+/** Sends `write`, built for account `me`, through the wallet; the page's wallet tells `progress` what it is doing. */
+function send(write, me, progress = () => {}) {
   const turn = walletTurn.then(async () => {
     // A write is built for one account. If Selfhold was since disconnected
     // from this site, or connected to another account, say so and send nothing.
@@ -100,9 +182,10 @@ function send(write, me) {
     if (now !== me) {
       connected = now;
       render();
+      if (!selfhold()) throw new Error("This page's account changed. Look again, then try again.");
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return wallet().writeRecords(writeRequest(chainPath(), write));
+    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress });
   });
   walletTurn = turn.catch(() => {});
   return turn;
@@ -113,32 +196,66 @@ function send(write, me) {
  * until the chain shows it (`landed(state, me)`), so the page redraws from
  * what the chain holds, not from what was asked.
  */
+const acting = new Set(); // the labels of writes under way, each sent once however often it's pressed
+
 async function act(label, build, landed, done = render) {
-  const me = connected;
-  const progress = toast(`${label}: approve it in your wallet.`);
+  if (acting.has(label)) return;
+  acting.add(label);
   try {
+    await acted(label, build, landed, done);
+  } finally {
+    acting.delete(label);
+  }
+}
+
+async function acted(label, build, landed, done) {
+  const me = connected;
+  const progress = toast(selfhold() ? `${label}: approve it in your wallet.` : `${label}…`);
+  try {
+    // The page's key, locked since the page loaded: its passkey unlocks it, now, while the click still counts.
+    if (!selfhold() && inPage.locked()) {
+      progress.update(`${label}: confirm with your passkey.`);
+      await connect();
+    }
     const write = await build(await readState(), me);
     if (write.actions.length === 0) {
       progress.update(`${label}: it is so already.`);
       setTimeout(progress.close, 2500);
       return;
     }
-    await send(write, me);
-    progress.update(`${label}: waiting for the block…`);
+    await send(write, me, (text) => progress.update(`${label}: ${text}`));
+    progress.update(`${label}: confirming…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       try {
         if (await landed(await readState(), me)) break;
       } catch {}
-      if (Date.now() > deadline) throw new Error("Sent, but no block has shown it yet. It may still land.");
+      if (Date.now() > deadline) throw new Error("Sent, but not confirmed yet. It may still go through: look again in a minute.");
     }
     progress.update(`${label}: done.`);
     setTimeout(progress.close, 2500);
     done();
   } catch (error) {
-    progress.update(walletMessage(error), { bad: true });
+    if (error.name !== "NeedsCoins") return progress.update(walletMessage(error), { bad: true });
+    progress.close();
+    fundSheet(error);
   }
+}
+
+/** The page's account can't pay for a write: what it needs, and where to send coins. */
+async function fundSheet({ address, needed, balance, sponsorTooDear }) {
+  const sponsorNote = sponsorTooDear
+    ? " The fee sponsor asks more work for it than this device can do in reasonable time."
+    : settings.sponsor ? "" : " Or name a fee sponsor in Settings: it pays fees for a little of this device's work.";
+  const on = settings.chain === DEFAULTS.chain ? "" : ` on ${settings.chain}`;
+  const copy = await sheet({
+    title: "Add coins to your account",
+    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins${on} to your account ID, then try again.${sponsorNote}`,
+    detail: address,
+    confirm: "Copy account ID",
+  });
+  if (copy) navigator.clipboard?.writeText(address).then(() => toast("Account ID copied."), () => toast(address));
 }
 
 // ---------------------------------------------------------------- helpers
@@ -181,20 +298,21 @@ function toast(message, { bad = false } = {}) {
  * true. Resolves to null when cancelled. `danger` marks a confirm that can't
  * be undone.
  */
-function sheet({ title, body = "", confirm, input, choices, danger = false }) {
+function sheet({ title, body = "", detail, confirm, input, choices, danger = false, cancel = true }) {
   const dialog = $("#sheet");
   dialog.setAttribute("aria-describedby", "sheet-body");
   dialog.innerHTML = `
     <form method="dialog">
       <h2 id="sheet-title">${esc(title)}</h2>
       <p id="sheet-body">${esc(body)}</p>
+      ${detail ? `<p class="sheet-detail mono">${esc(detail)}</p>` : ""}
       ${input ? `<div class="field"><label for="sheet-input">${esc(input.label)}</label><input id="sheet-input" ${input.attrs ?? ""} value="${esc(input.value ?? "")}" required></div>` : ""}
-      ${choices ? `<div class="choices">${choices.map((c) => `<button class="pill${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
+      ${choices ? `<div class="choices${choices.some((c) => c.primary) ? " decide" : ""}">${choices.map((c) => `<button class="pill${c.primary ? " accent" : ""}${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
       <p id="sheet-error" role="alert" style="color: var(--bad); margin: 0 0 12px"></p>
-      <div class="actions">
-        <button class="pill" type="button" data-sheet-cancel>Cancel</button>
+      ${!cancel && choices ? "" : `<div class="actions">
+        ${cancel ? `<button class="pill" type="button" data-sheet-cancel>Cancel</button>` : ""}
         ${choices ? "" : `<button class="pill ${danger ? "danger" : "dark"}" value="ok" type="submit">${esc(confirm)}</button>`}
-      </div>
+      </div>`}
     </form>`;
   return new Promise((resolve) => {
     const form = $("form", dialog);
@@ -212,7 +330,10 @@ function sheet({ title, body = "", confirm, input, choices, danger = false }) {
       }
     };
     // Cancel is no submit button, so Enter in the input submits the confirm.
-    $("[data-sheet-cancel]", dialog).onclick = () => dialog.close("cancel");
+    const cancelButton = $("[data-sheet-cancel]", dialog);
+    if (cancelButton) cancelButton.onclick = () => dialog.close("cancel");
+    // Without Cancel, Escape picks nothing either: the sheet waits for a choice.
+    dialog.oncancel = cancel ? null : (event) => event.preventDefault();
     dialog.onclose = () => {
       const answer = dialog.returnValue;
       if (answer.startsWith("choice:")) return resolve(answer.slice("choice:".length));
@@ -361,7 +482,6 @@ function resultRow(r) {
 
 /** Claiming a free name: an optional price to list it at once, and Claim. */
 function claimForm(handle) {
-  if (!wallet()) return walletPanel(`To claim @${handle}, add Selfhold`);
   return `
     <form id="claim" class="stack" data-handle="${esc(handle)}" style="width: 100%">
       <div class="field">
@@ -396,9 +516,7 @@ async function viewSearch(q, state, { near = true } = {}) {
   let end = "";
   if (exact.kind === "available") end = claimForm(q);
   else if (exact.kind === "sale") {
-    end = wallet()
-      ? `<span class="price big">${coins(exact.price)}</span><button class="pill accent" type="button" data-buy="${esc(q)}" data-price="${exact.price}">Buy @${esc(q)} for ${coins(exact.price)}</button>`
-      : walletPanel(`To buy @${q}, add Selfhold`);
+    end = `<span class="price big">${coins(exact.price)}</span><button class="pill accent" type="button" data-buy="${esc(q)}" data-price="${exact.price}">Buy @${esc(q)} for ${coins(exact.price)}</button>`;
   } else if (exact.kind === "offered") end = `<button class="pill accent" type="button" data-take="${esc(q)}">Take @${esc(q)}</button>`;
   else if (exact.kind === "yours") end = `<a class="pill" href="#/names">Go to My names</a>`;
   return `
@@ -438,25 +556,18 @@ const awaiting = (on) => {
   return false;
 };
 
-/** Where a key is needed and there is no wallet: what it is, and how to get one. */
-function walletPanel(why, alone = false) {
-  const steps = phone ? "" : `
-    <ol class="steps">
-      <li>Add Selfhold to your browser. It's free.</li>
-      <li>Create your key in it: about a minute.</li>
-      <li>Come back to this tab. Moniker picks up right here.</li>
-    </ol>
-    <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? " to your browser" : " for Chrome"}</a>
-    ${chromium ? "" : `<p class="note" style="margin: 0">Selfhold runs in Chrome, Brave, Edge and Arc.</p>`}
+/** Where a key is needed and there is no account yet: a passkey makes one, or brings back one made before; or Selfhold. */
+function accountPanel(why, alone = false) {
+  const selfholdLink = phone ? "" : `
+    <p class="note" style="margin: 0">Rather keep your key in a browser extension? <a href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? "" : " for Chrome"}</a>, then come back to this tab.</p>
     <p class="note" id="wallet-wait" aria-live="polite" style="margin: 0"${awaiting() ? "" : " hidden"}>Waiting for Selfhold… When it's set up, come back to this tab.</p>`;
-  const elsewhere = phone ? `
-    <p style="margin: 0">Selfhold runs in a computer's browser, so finish this on a computer: open this page there.</p>
-    <button class="pill accent big" type="button" data-share="${esc(location.href)}">Copy this page's link</button>` : "";
   return `
     <section class="panel stack" aria-labelledby="get-wallet" style="width: 100%">
       <h${alone ? 1 : 2} id="get-wallet">${esc(why)}</h${alone ? 1 : 2}>
-      <p class="lede" style="margin: 0">Selfhold is a wallet in your browser. It keeps the key that proves a name is yours, on your device, and asks you before anything is sent. Moniker never sees it.</p>
-      ${steps}${elsewhere}
+      <p class="lede" style="margin: 0">A passkey keeps your account's key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.</p>
+      <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
+      <button class="pill big" type="button" data-sign-in>I have a passkey</button>
+      ${selfholdLink}
     </section>`;
 }
 
@@ -475,7 +586,9 @@ async function viewTake(handle, state) {
   const entry = await held(state, handle);
   if (entry && entry.owner === connected) return viewMessage(`@${handle} is yours`, "", `<a class="pill big" href="#/names" style="margin-top: 20px">Go to My names</a>`);
   if (!entry || entry.offer !== connected) {
-    return viewMessage(`@${handle} isn't offered to you`, `Selfhold connects account ${accountRef(connected)} here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`);
+    return viewMessage(`@${handle} isn't offered to you`, selfhold()
+      ? `Selfhold connects account ${accountRef(connected)} here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`
+      : `Your account here is ${accountRef(connected)}. If the gift is for another of your accounts, open the link where that one is.`);
   }
   return `
     <main class="col card" style="margin-top: 48px">
@@ -569,15 +682,36 @@ function viewSettings() {
     <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/" aria-label="Back">‹</a></div>
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0 0 20px">Settings</h1>
+      ${accountSettings()}
       <form id="settings" class="panel stack">
         <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
+        <div class="field"><label for="s-sponsor">Fee sponsor, paid in this device's work when your account has too few coins for a fee; leave it empty for none</label><input id="s-sponsor" class="mono" value="${esc(settings.sponsor)}" placeholder="No sponsor" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
+        ${window.lattice ? `<label class="check"><input type="checkbox" id="s-page-wallet"${settings.wallet === "page" ? " checked" : ""}> Use this page's passkey wallet, not Selfhold</label>` : ""}
         <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
           <button class="pill" type="button" data-reset>Defaults</button>
           <button class="pill dark" type="submit">Save</button>
         </div>
       </form>
     </main>`;
+}
+
+/** The page's wallet, in Settings: its account, how its key is kept, and forgetting it here. */
+function accountSettings() {
+  const address = selfhold() ? null : connected;
+  if (!address) return "";
+  const browserKey = inPage.kind() === "browser";
+  return `
+      <section class="panel stack" aria-labelledby="account-settings" style="margin-bottom: 20px">
+        <h2 id="account-settings" style="margin: 0">This page's wallet</h2>
+        <p style="margin: 0">Account ${accountLink(address)}, ${browserKey ? "its key kept in this browser only" : "its key kept by your passkey"}.</p>
+        ${browserKey ? `<p class="note" style="margin: 0">Lose this browser's data and you lose the account, unless you keep a copy of its key.</p>` : ""}
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button class="pill" type="button" data-copy="${esc(address)}">Copy account ID</button>
+          ${browserKey && !inPage.locked() ? `<button class="pill" type="button" data-copy-key>Copy the key</button>` : ""}
+          <button class="pill${browserKey ? " bad" : ""}" type="button" data-forget-account>Forget this account here</button>
+        </div>
+      </section>`;
 }
 
 // ---------------------------------------------------------------- routing
@@ -608,13 +742,14 @@ async function render() {
     else {
       // Selfhold connects only within a click, so ask now, before the read, if this render came from one.
       const needs = page === "names" || page === "take";
-      if (needs && !connected && wallet() && navigator.userActivation?.isActive) await connect();
+      if (needs && !connected && selfhold() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
-      const why = page === "take" ? (isHandle(arg) ? `To take @${arg}, connect Selfhold` : "To take a name, connect Selfhold") : "Your names belong to your wallet's key";
-      if (needs && !wallet()) {
-        html = `<main class="col stack" style="margin-top: 24px">${walletPanel(why, true)}</main>`;
+      const take = isHandle(arg) ? `To take @${arg}` : "To take a name";
+      if (needs && !connected && !selfhold()) {
+        html = `<main class="col stack" style="margin-top: 24px">${accountPanel(page === "take" ? `${take}, make your account` : "Your names belong to your account's key", true)}</main>`;
       } else if (needs && !connected) {
+        const why = page === "take" ? `${take}, connect Selfhold` : "Your names belong to your wallet's key";
         html = `<main class="col stack" style="margin-top: 24px">${connectPanel(why, true)}</main>`;
       } else if (r === "names") html = await viewNames(state);
       else if (page === "take" && isHandle(arg)) html = await viewTake(arg, state);
@@ -658,19 +793,34 @@ document.addEventListener("click", async (event) => {
   }
   if ("retry" in d) {
     render();
-  } else if ("connect" in d) {
+  } else if ("connect" in d || "createAccount" in d || "signIn" in d) {
     try {
-      await connect();
+      if ("createAccount" in d) await createAccount();
+      else if ("signIn" in d) await signIn();
+      else await connect();
       render();
     } catch (error) {
       toast(walletMessage(error), { bad: true });
     }
+  } else if ("copyKey" in d) {
+    if (!(await copyKey())) toast("Couldn't copy the key.", { bad: true });
+  } else if ("forgetAccount" in d) {
+    const browserKey = inPage.kind() === "browser";
+    const ok = await sheet({
+      title: "Forget this account here?",
+      body: browserKey
+        ? "Its key is kept only in this browser: unless you copied it, the account and its names are gone for good."
+        : "Your passkey keeps the account: use I have a passkey to bring it back.",
+      confirm: "Forget it",
+      danger: browserKey,
+    });
+    if (!ok) return;
+    inPage.forget();
+    connected = null;
+    render();
   } else if ("getWallet" in d) {
     awaiting(true);
     $("#wallet-wait")?.removeAttribute("hidden");
-  } else if (d.share) {
-    if (navigator.share) navigator.share({ title: "Moniker", url: d.share }).catch(() => {});
-    else navigator.clipboard?.writeText(d.share).then(() => toast("Link copied. Open it on a computer."), () => toast(d.share));
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("reset" in d) {
@@ -680,7 +830,7 @@ document.addEventListener("click", async (event) => {
     // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.buy) {
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
     const shown = BigInt(d.price);
     act(
@@ -695,7 +845,7 @@ document.addEventListener("click", async (event) => {
       async (s, me) => (await held(s, handle))?.owner === me,
     );
   } else if (d.take) {
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`take @${d.take}`))) return;
     const handle = d.take;
     act(`Taking @${handle}`, async (state, me) => {
       const entry = await held(state, handle);
@@ -837,14 +987,20 @@ document.addEventListener("submit", async (event) => {
     const show = (typed ? $("#new-show") : $("#claim-show")).checked;
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
     if (price && priceProblem(price)) return toast(`The price: ${priceProblem(price)}`, { bad: true });
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`claim @${handle}`))) return;
     claim(handle, price, show);
   } else if (form.id === "settings") {
     event.preventDefault();
+    const pageWallet = $("#s-page-wallet") ? $("#s-page-wallet").checked : settings.wallet === "page";
+    const switched = pageWallet !== (settings.wallet === "page");
     saveSettings({
       nodes: $("#s-nodes").value.split(/\s+/).filter(Boolean).map((n) => n.replace(/\/$/, "")),
       chain: $("#s-chain").value.trim() || DEFAULTS.chain,
+      sponsor: $("#s-sponsor").value.trim().replace(/\/$/, ""),
+      wallet: pageWallet ? "page" : "selfhold",
     });
+    // Another wallet, another account: the one it remembers, if any, without asking.
+    if (switched) connected = (await wallet().address?.().catch(() => null)) ?? null;
     toast("Settings saved.");
     location.hash = "#/";
   }
@@ -857,18 +1013,25 @@ window.addEventListener("hashchange", () => {
 });
 // Back from adding Selfhold: reload, on the same address, so it reaches the page.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && awaiting() && !wallet()) location.reload();
+  if (document.visibilityState === "visible" && awaiting() && !window.lattice) location.reload();
 });
-// Selfhold announces itself when it reaches a page.
-window.addEventListener("lattice#initialized", () => {
+// Selfhold announces itself when it reaches a page: it is the wallet now, unless Settings choose the page's.
+window.addEventListener("lattice#initialized", async () => {
   awaiting(false);
+  if (selfhold()) {
+    try {
+      connected = (await window.lattice.address?.()) ?? null;
+    } catch {
+      connected = null;
+    }
+  }
   render();
 });
-// A wallet already connected to this site answers without asking.
+// A wallet already connected to this site, or the page's account, answers without asking.
 (async () => {
   try {
-    connected = (await wallet()?.address?.()) ?? null;
+    connected = (await wallet().address?.()) ?? null;
   } catch {}
-  if (wallet()) awaiting(false);
+  if (window.lattice) awaiting(false);
   render();
 })();

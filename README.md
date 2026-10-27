@@ -109,10 +109,39 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   the names it owns.
 
 There is no log in: the page asks the wallet only where a key is needed,
-and only from a click, as Selfhold requires. Without a wallet it shows how to
-add Selfhold where a key is needed; back on the tab after adding it, the
-page reloads at the same place, and on a phone it offers the link to finish
-on a computer. A write asks for no fee: Selfhold pays the fee the person
+and only from a click, as Selfhold and passkeys require. It uses Selfhold
+where it is installed (Settings can choose the page's wallet instead), and
+otherwise its own wallet, `app/wallet.mjs`, so nothing needs installing,
+phones included:
+
+- **The key is a passkey's.** Create a passkey derives the account's
+  Ed25519 key from a new passkey through WebAuthn's PRF extension; the
+  passkey's provider keeps it and syncs it to the person's other devices,
+  where I have a passkey brings the same account back. The page stores
+  which passkey and the address it makes, never the key, which it holds in
+  memory and asks of the passkey again after a reload, at the first write.
+  Where the browser or provider can't derive a key, the page keeps one in
+  the browser instead and says so before the write goes on, offering the
+  key to copy; Settings copies it too. Passkeys work only
+  on the page's own domain or `localhost`, not an IP address.
+- **It signs as Selfhold would** and sends to the chain's hosts, paying
+  their relay floor (`minRelayFee`, 1 on Moniker's hosts) from the account.
+  An account with too few coins pays a **fee sponsor** instead: by default
+  Moniker's, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
+  (lattice-node's `lattice-sponsor`), changed or turned off in Settings. The
+  page grinds the sponsor's shares on the device's graphics chip through
+  WebGPU (`app/share-gpu.mjs`), or where it has none, in Web Workers on its
+  processor (`app/share-worker.mjs`); both hash as `app/sha256.mjs` lays out.
+  The sponsor then adds the fee and co-signs. The page signs only if the
+  sponsor added that one fee debit and itself as second signer. A sponsor
+  busy or sold out for the block is asked again for up to a minute. Where
+  the fee would take this device more than two minutes at the pace it
+  shows, or with no sponsor, the page asks for coins and shows the account
+  ID to send them to.
+- Anyone who prefers an extension can still add Selfhold from the account
+  panel; back on the tab after adding it, the page reloads at the same place.
+
+With Selfhold, a write asks for no fee: Selfhold pays the fee the person
 sets there for the chain (1 unit until they change it), so an account needs
 coins to write unless its fee is 0.
 It reads every record by CID from the hosts Nexus lists for `Nexus/moniker`,
@@ -122,7 +151,7 @@ checked by CID, but its tip is taken as it reports it. Settings saved for a
 trial chain, or with the hosts once named by default, follow the move. Fonts ship in `app/fonts/` (SIL Open Font License).
 
 ```sh
-python3 -m http.server 8765   # from the repository root, then open http://127.0.0.1:8765/app/
+python3 -m http.server 8765   # from the repository root, then open http://localhost:8765/app/
 ```
 
 ## Layout
@@ -139,7 +168,8 @@ python3 -m http.server 8765   # from the repository root, then open http://127.0
   the Lattice SDK bundle.
 - `e2e/moniker.mjs`: names against a real node, launched as the launch is,
   with names claimed in the genesis; moniker-sdk included.
-- `e2e/ui/`: the page in headless Chromium with the real Selfhold wallet.
+- `e2e/ui/`: the page in headless Chromium with the real Selfhold wallet,
+  or with none and a virtual passkey authenticator.
 - `index.html`, `CNAME`: the app on GitHub Pages at
   [app.moniker.bio](https://app.moniker.bio/), `app/` served from the root.
 
@@ -157,6 +187,10 @@ LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
   LATTICE_WALLET=<selfhold>/dist npm test
 ```
+
+The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
+builds both). They grind its shares on the machine's graphics chip; on Linux
+they give Chromium SwiftShader's, in software, for a machine with none.
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`
 and put its CID (`policy/host-check/.build/debug/host-check <wasm> <dir>`

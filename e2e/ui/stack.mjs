@@ -2,21 +2,21 @@
 // a Moniker chain from a fast test spec, with public reads and submits, and a
 // static server for the repository so the real app/ page runs against it.
 //
-//   LATTICE=<lattice-node>/.build/debug/lattice
+//   LATTICE=<lattice-node>/.build/debug/lattice   (lattice-sponsor beside it)
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js
-import { execFileSync } from "node:child_process";
-import { createReadStream, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { createReadStream, existsSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHAIN = ["Nexus", "moniker"];
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const repo = here("../../");
-const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190 };
+const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190, sponsor: 27191 };
 
-const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 
 /** Serves the repository root, as a static host does. */
 function serve(port) {
@@ -80,13 +80,39 @@ export async function start() {
     return r.ok && BigInt((await r.json()).balance ?? 0) > 5000n;
   });
   const web = await serve(ports.web);
+
+  // A fee sponsor (lattice-sponsor), started on first use: it pays a fee of 1
+  // for small shares of work, though these hosts would take 0. Its account
+  // holds nothing until `fund` pays it.
+  let sponsor;
+  async function startSponsor(fund) {
+    if (sponsor) return sponsor.info;
+    const key = `${root}/sponsor-key.json`;
+    execFileSync(process.env.LATTICE, ["key", "generate", "--out", key]);
+    const { address } = JSON.parse(readFileSync(key, "utf8"));
+    await fund(address);
+    const log = openSync(`${root}/sponsor.log`, "a");
+    const child = spawn(join(dirname(process.env.LATTICE), "lattice-sponsor"), [
+      "--node", `http://127.0.0.1:${ports.rpc}`, "--cookie-file", `${root}/chains/Nexus/.cookie`, "--key", key,
+      "--share-work", "2^12", "--fee", "1", "--port", String(ports.sponsor),
+    ], { stdio: ["ignore", log, log] });
+    sponsor = { child, info: { url: `http://127.0.0.1:${ports.sponsor}`, address } };
+    await until("the sponsor prices Moniker", async () => {
+      const r = await fetch(`${sponsor.info.url}/work`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chain: CHAIN.join("/") }) });
+      return r.ok;
+    }, 120);
+    return sponsor.info;
+  }
+
   const info = {
     root, node, app: `http://127.0.0.1:${ports.web}/app/`,
     chain: CHAIN.join("/"), minerKey: Buffer.from(minerKey).toString("hex"), miner: miner.address,
   };
   return {
     info,
+    sponsor: startSponsor,
     stop: async () => {
+      sponsor?.child.kill();
       web.close();
       try { lattice("mine", "stop"); } catch {}
       try { lattice("down"); } catch {}
