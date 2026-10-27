@@ -251,6 +251,9 @@ const fromWire = (body) => ({
   nonce: BigInt(body.nonce),
 });
 const toWire = (body) => sdk.transactionPayload({}, body).transaction.body;
+/** JSON with every object's keys sorted: the sponsor's encoder orders them as it likes. */
+const canonical = (value) =>
+  JSON.stringify(value, (_, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v));
 
 /**
  * The sponsored transaction for `draft` (fee 0, one signer): the sponsor's
@@ -300,7 +303,7 @@ async function sponsorFee(url, draft, progress) {
 function check(draft, sponsored, fee) {
   const sponsor = sponsored.signers[1];
   const debit = sponsored.accountActions.at(-1);
-  const same = JSON.stringify(toWire({ ...sponsored, accountActions: sponsored.accountActions.slice(0, -1), signers: sponsored.signers.slice(0, 1) })) === JSON.stringify(toWire(draft));
+  const same = canonical(toWire({ ...sponsored, accountActions: sponsored.accountActions.slice(0, -1), signers: sponsored.signers.slice(0, 1) })) === canonical(toWire(draft));
   if (!same || sponsored.signers.length !== 2 || sponsor === draft.signers[0] || debit?.owner !== sponsor || debit.delta >= 0n || -debit.delta > fee) {
     throw new Error("The fee sponsor changed the transaction. Nothing was sent.");
   }

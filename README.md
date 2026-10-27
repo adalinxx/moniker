@@ -130,7 +130,8 @@ phones included:
   (`app/share-worker.js`), and the sponsor adds the fee and co-signs. The
   page signs only if the sponsor added that one fee debit and itself as
   second signer. With no sponsor, the page asks for coins and shows the
-  account ID to send them to. (`lattice-sponsor` is lattice-node#20.)
+  account ID to send them to. (The sponsor is lattice-node's `lattice-sponsor`;
+  none runs for Moniker yet, so Settings name none by default.)
 - Anyone who prefers an extension can still add Selfhold from the account
   panel; back on the tab after adding it, the page reloads at the same place.
 
@@ -180,6 +181,9 @@ LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
   LATTICE_WALLET=<selfhold>/dist npm test
 ```
+
+The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
+builds both).
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`
 and put its CID (`policy/host-check/.build/debug/host-check <wasm> <dir>`

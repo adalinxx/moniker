@@ -768,7 +768,7 @@ test("back from adding Selfhold: the page reloads at the same place, then offers
  * `page` with no Selfhold and a platform passkey provider that derives keys
  * (PRF), opened at `hash` on localhost: passkeys refuse an IP address.
  */
-async function withPasskeys(page, hash) {
+async function withPasskeys(page, hash, settings = {}) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -776,7 +776,7 @@ async function withPasskeys(page, hash) {
   });
   await page.addInitScript((settings) => {
     if (!localStorage.getItem("moniker.settings")) localStorage.setItem("moniker.settings", JSON.stringify(settings));
-  }, { nodes: [stack.node], chain: stack.chain });
+  }, { nodes: [stack.node], chain: stack.chain, ...settings });
   const app = stack.app.replace("127.0.0.1", "localhost");
   await page.goto(app + hash);
   return app;
@@ -843,6 +843,23 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
   await page.getByRole("button", { name: "Claim @ola_pass" }).click();
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect(await balance(address)).toBe(9n);
+}, { wallet: false });
+
+test("with a fee sponsor, an account with no coins pays the relay fee in work: the sponsor's account pays it", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const sponsor = await running.sponsor((address) => fund(address, 1000n));
+  await withPasskeys(page, "#/@sia_pass", { sponsor: sponsor.url });
+  const before = await balance(sponsor.address);
+  await page.getByRole("button", { name: "Claim @sia_pass" }).click();
+  await sheetButton(page, "Create a passkey").click();
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  const { address } = await pageAccount(page);
+  expect((await held("sia_pass")).owner).toBe(address);
+  expect(await balance(address)).toBe(0n);
+  expect(await balance(sponsor.address)).toBe(before - 1n);
 }, { wallet: false });
 
 // ---------------------------------------------------------------- the handle picker, in another app's page

@@ -16,7 +16,7 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
   NODE_VERSION: "24"
   LATTICE_NODE_REPO: adalinxx/lattice-node
-  LATTICE_NODE_REF: ad6b8350c7fd722de457d7c2bb4712b0610197ac # genesis transactions (#69)
+  LATTICE_NODE_REF: 131bcbbbcb8b194bea3533cf35bccdff6b185b6c # lattice-sponsor (#20)
   LATTICE_SDK_REPO: adalinxx/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
@@ -140,10 +140,10 @@ jobs:
           cd lattice-node
           # Static Swift runtime, so the binaries run on a plain runner. The
           # lattice command runs the node, the miner and its coordinator from
-          # beside it.
+          # beside it; the UI tests run lattice-sponsor from there too.
           swift build --static-swift-stdlib
           mkdir ../bin
-          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner,lattice-mining-coordinator} ../bin/
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner,lattice-mining-coordinator,lattice-sponsor} ../bin/
       - uses: actions/upload-artifact@v4
         with:
           name: lattice
