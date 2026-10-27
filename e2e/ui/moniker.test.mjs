@@ -422,8 +422,16 @@ test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and it p
     await bobPage.getByRole("link", { name: "See @alice_art for 40" }).click();
     await expect(bobPage.locator(".result .badge")).toHaveText("For sale");
     await expect(bobPage.locator(".result")).toContainText("It comes pointing at your account.");
-    await bobPage.getByRole("button", { name: "Buy @alice_art for 40" }).click();
+    // Buy shows what it would do, asking Selfhold nothing; Pay asks it once.
+    const asked = bobPage.context().approvals;
+    await bobPage.getByRole("link", { name: "Buy @alice_art for 40" }).click();
+    await expect(bobPage.getByRole("heading", { name: "Buy @alice_art" })).toBeVisible();
+    await expect(bobPage.locator(".summary")).toContainText("Price40, paid to its owner");
+    await expect(bobPage.getByText("Selfhold asks you to approve it next.")).toBeVisible();
+    expect(bobPage.context().approvals).toBe(asked);
+    await bobPage.getByRole("button", { name: "Pay 40 and buy @alice_art" }).click();
     await expect(bobPage.locator(".result .badge")).toHaveText("Yours");
+    expect(bobPage.context().approvals).toBe(asked + 1);
     await expect(bobPage.locator("#points")).toHaveText("Points at you · not shown there");
   });
   const entry = await held("alice_art");
@@ -602,12 +610,13 @@ test("buying refuses a price that changed, or a name just taken, and asks the wa
   await claimAs(gwen, "gwensale", { price: 100n });
   const context = page.context();
   await openApp(page, hal, "#/@gwensale");
-  await expect(page.getByRole("button", { name: "Buy @gwensale for 100" })).toBeVisible();
-  // Gwen asks more before Hal presses Buy.
+  await page.getByRole("link", { name: "Buy @gwensale for 100" }).click();
+  await expect(page.getByRole("button", { name: "Pay 100 and buy @gwensale" })).toBeVisible();
+  // Gwen asks more before Hal presses Pay.
   await writeAs(gwen, await names.list(await state(), gwen.address, "gwensale", 200n));
   await until("@gwensale at 200", async () => (await held("gwensale"))?.price === 200n);
   const asked = context.approvals;
-  await page.getByRole("button", { name: "Buy @gwensale for 100" }).click();
+  await page.getByRole("button", { name: "Pay 100 and buy @gwensale" }).click();
   await expect(toast(page, "The price of @gwensale just changed. Look again.")).toBeVisible();
 
   // A name no one owned, taken while Hal looks at it.
@@ -850,6 +859,52 @@ test("pressed twice, Claim sends once", async ({ page }) => {
   await expect(page.locator("#alerts")).toBeEmpty();
   await page.goto(app + "#/names");
   await expect(row(page, "tia_twice")).toBeVisible();
+}, { wallet: false });
+
+test("the page's wallet buys from a page that shows the price, whom it pays, the fee and the balance; short of coins, it offers to add them", async ({ page }) => {
+  const seller = newAccount();
+  await claimAs(seller, "uma_sale", { price: 30n });
+  await claimAs(seller, "uma_dear", { price: 5000n });
+  // A visitor's review starts with the account, since buying takes coins.
+  const app = await withPasskeys(page, "#/buy/uma_sale");
+  await expect(page.getByRole("heading", { name: "Buy @uma_sale" })).toBeVisible();
+  await expect(page.getByText("Buying takes coins, so make your account first")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Pay/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await expect(page.locator(".summary")).toContainText("Your account holds0");
+  await expect(page.getByRole("button", { name: "Add coins" })).toBeVisible();
+  const { address } = await pageAccount(page);
+  await fund(address, 100n);
+
+  const sent = [];
+  page.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
+  await page.goto(app + "#/@uma_sale");
+  await page.getByRole("link", { name: "Buy @uma_sale for 30" }).click();
+  await expect(page.getByRole("heading", { name: "Buy @uma_sale" })).toBeVisible();
+  const summary = page.locator(".summary");
+  await expect(summary).toContainText("Price30, paid to its owner");
+  await expect(summary).toContainText("FeeNone"); // these hosts ask no fee
+  await expect(summary).toContainText("Your account holds100");
+  // Nothing goes out until Pay; Not now goes back.
+  await page.getByRole("link", { name: "Not now" }).click();
+  await expect(page.locator("#exact")).toHaveText("@uma_sale");
+  expect(sent).toHaveLength(0);
+  await page.getByRole("link", { name: "Buy @uma_sale for 30" }).click();
+  await page.getByRole("button", { name: "Pay 30 and buy @uma_sale" }).click();
+  await expect(page.locator(".result .badge")).toHaveText("Yours");
+  expect(sent).toHaveLength(1);
+  expect((await held("uma_sale")).owner).toBe(address);
+  expect(await balance(address)).toBe(70n);
+
+  // More than the account holds: no Pay, and Add coins shows where to send them.
+  await page.goto(app + "#/buy/uma_dear");
+  await expect(page.locator("main").getByRole("status")).toHaveText("This needs 4,930 more coins than your account holds.");
+  await expect(page.getByRole("button", { name: /^Pay/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Add coins" }).click();
+  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
+  await expect(page.locator("#sheet .sheet-detail")).toHaveText(address);
+  await sheetButton(page, "Cancel").click();
+  expect(sent).toHaveLength(1);
 }, { wallet: false });
 
 test("where passkeys can't make a key, the key is kept in this browser: it claims, outlasts a reload, and Copy the key gives it", async ({ page }) => {

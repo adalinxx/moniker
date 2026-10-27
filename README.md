@@ -93,7 +93,9 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
 - **Search**: a name's page says whether it is free (Claim it, pointed at
   you, optionally listed at a price at once, optionally shown as your
-  handle in the same approval), for sale (Buy: it comes pointing at you),
+  handle in the same approval), for sale (Buy opens a review, `#/buy/<h>`:
+  the price and whom it pays, the fee and how it's paid, what the account
+  holds; only its Pay asks a wallet anything, and it comes pointing at you),
   offered to you (Take), yours or taken; who owns it ("Owned by …" and the
   account's last 6 characters, linking to its page); where it points
   ("Points at …", linking to that account) and whether that account shows

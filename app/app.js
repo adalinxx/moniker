@@ -516,7 +516,7 @@ async function viewSearch(q, state, { near = true } = {}) {
   let end = "";
   if (exact.kind === "available") end = claimForm(q);
   else if (exact.kind === "sale") {
-    end = `<span class="price big">${coins(exact.price)}</span><button class="pill accent" type="button" data-buy="${esc(q)}" data-price="${exact.price}">Buy @${esc(q)} for ${coins(exact.price)}</button>`;
+    end = `<span class="price big">${coins(exact.price)}</span><a class="pill accent" href="#/buy/${esc(q)}">Buy @${esc(q)} for ${coins(exact.price)}</a>`;
   } else if (exact.kind === "offered") end = `<button class="pill accent" type="button" data-take="${esc(q)}">Take @${esc(q)}</button>`;
   else if (exact.kind === "yours") end = `<a class="pill" href="#/names">Go to My names</a>`;
   return `
@@ -579,6 +579,72 @@ function connectPanel(why, alone = false) {
       <p class="lede" style="margin: 0">Selfhold asks you first. Moniker sees only your address, never your key.</p>
       <button class="pill accent big" type="button" data-connect>Connect Selfhold</button>
     </section>`;
+}
+
+/**
+ * Before a purchase, a page of its own: what it costs, whom it pays, the fee
+ * and how it's paid, what the account holds, and what follows. Pay is the
+ * last step, and the only one that asks a wallet anything.
+ */
+async function viewBuy(handle, state) {
+  const entry = await held(state, handle);
+  const see = `<a class="pill big" href="#/@${esc(handle)}" style="margin-top: 20px">See @${esc(handle)}</a>`;
+  if (connected && entry?.owner === connected) return viewMessage(`@${handle} is yours`, "Your account owns it already.", see);
+  if (entry?.price === undefined) return viewMessage(`@${handle} isn't for sale`, "Its owner isn't selling it now, or someone just bought it.", see);
+  const price = entry.price;
+  const funds = connected ? await inPage.funds(chainPath(), connected).catch(() => null) : null;
+
+  // The fee, and whether the account has what it takes.
+  let fee;
+  let total = price;
+  let short = false;
+  if (selfhold()) fee = "Selfhold's, as you set it there";
+  else if (!funds) fee = "A small one, from your account or paid with this device's work";
+  else if (funds.fee === 0n) fee = "None";
+  else if (funds.balance >= price + funds.fee) {
+    fee = `${coins(funds.fee)} from your account`;
+    total = price + funds.fee;
+  } else if (funds.balance >= price && settings.sponsor) fee = "Paid with this device's work, in a few seconds";
+  else {
+    fee = `${coins(funds.fee)} from your account`;
+    total = price + funds.fee;
+    short = true;
+  }
+  if (funds && funds.balance < price) short = true;
+
+  const rows = [
+    ["Price", `${coins(price)}, paid to its owner, ${accountLink(entry.owner)}`],
+    ["Fee", esc(fee)],
+    ...(total > price ? [["Total", coins(total)]] : []),
+    ...(funds ? [["Your account holds", coins(funds.balance)]] : []),
+  ];
+  // With no account yet, buying starts with one, and the coins it takes.
+  const newcomer = !selfhold() && !connected;
+  const next = selfhold() ? "Selfhold asks you to approve it next." : "";
+  let pay;
+  if (newcomer) {
+    pay = `<p class="note" style="margin: 0">Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.</p>
+       <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
+       <button class="pill big" type="button" data-sign-in>I have a passkey</button>`;
+  } else if (short) {
+    const more = total - funds.balance;
+    pay = `<p class="note" role="status" style="margin: 0">This needs ${coins(more)} more ${more === 1n ? "coin" : "coins"} than your account holds.</p>
+       <button class="pill accent big" type="button" data-fund="${esc(String(total))}">Add coins</button>`;
+  } else pay = `<button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
+  return `
+    <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/@${esc(handle)}" aria-label="Back to @${esc(handle)}">‹</a></div>
+    <main class="col" style="margin-top: 12px">
+      <section class="panel stack" aria-labelledby="buy-title">
+        <h1 id="buy-title" style="margin: 0">Buy <span class="mono">@${esc(handle)}</span></h1>
+        <dl class="summary">
+          ${rows.map(([term, value]) => `<div><dt>${term}</dt><dd>${value}</dd></div>`).join("")}
+        </dl>
+        <p style="margin: 0">It becomes yours and points at your account; you can point it elsewhere any time.</p>
+        ${next ? `<p class="note" style="margin: 0">${esc(next)}</p>` : ""}
+        ${pay}
+        <a class="pill big" href="#/@${esc(handle)}">Not now</a>
+      </section>
+    </main>`;
 }
 
 /** A name offered to your account: take it, for nothing. */
@@ -734,9 +800,9 @@ async function render() {
   try {
     let html;
     const [page, arg = ""] = r.split(/\/(.*)/s);
-    // Old links: profiles are each app's now, and buying is on the name's page.
+    // Old links: profiles are each app's now.
     if (["me", "profiles", "edit"].includes(page)) return void location.replace("#/names");
-    if (["buy", "bought"].includes(page) && isHandle(arg)) return void location.replace(`#/@${arg}`);
+    if (page === "bought" && isHandle(arg)) return void location.replace(`#/@${arg}`);
     if (isAddress(r)) return void location.replace(`#/account/${r}`);
     if (r === "settings") html = viewSettings();
     else {
@@ -753,6 +819,7 @@ async function render() {
         html = `<main class="col stack" style="margin-top: 24px">${connectPanel(why, true)}</main>`;
       } else if (r === "names") html = await viewNames(state);
       else if (page === "take" && isHandle(arg)) html = await viewTake(arg, state);
+      else if (page === "buy" && isHandle(arg)) html = await viewBuy(arg, state);
       else if (r === "market") html = await viewMarket(state);
       else if (page === "search") {
         const q = asHandle(arg);
@@ -821,6 +888,9 @@ document.addEventListener("click", async (event) => {
   } else if ("getWallet" in d) {
     awaiting(true);
     $("#wallet-wait")?.removeAttribute("hidden");
+  } else if (d.fund) {
+    const { balance } = await inPage.funds(chainPath(), connected);
+    fundSheet({ address: connected, needed: BigInt(d.fund), balance });
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("reset" in d) {
@@ -843,6 +913,7 @@ document.addEventListener("click", async (event) => {
         return names.buy(state, me, handle, { point: true });
       },
       async (s, me) => (await held(s, handle))?.owner === me,
+      () => (location.hash = `#/@${handle}`),
     );
   } else if (d.take) {
     if (!(await connectFirst(`take @${d.take}`))) return;

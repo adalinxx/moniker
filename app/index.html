@@ -113,6 +113,10 @@ h1[tabindex="-1"]:focus { outline: none; }
 .choices .pill { justify-content: flex-start; }
 /* A choice to make, not a menu: big buttons, the one to pick first filled. */
 .choices.decide .pill { justify-content: center; min-height: 52px; }
+.summary { margin: 0; display: grid; gap: 10px; }
+.summary div { display: grid; grid-template-columns: minmax(96px, 30%) 1fr; gap: 12px; align-items: baseline; }
+.summary dt { color: var(--soft); font-size: 14px; }
+.summary dd { margin: 0; overflow-wrap: anywhere; }
 .sheet-detail { font-size: 13px; overflow-wrap: anywhere; background: var(--bg); border-radius: 12px; padding: 10px 12px; color: var(--ink); user-select: all; }
 .pill.bad { color: var(--bad); }
 .pill.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }

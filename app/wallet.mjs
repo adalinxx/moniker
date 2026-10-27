@@ -116,7 +116,8 @@ export function embeddedWallet({ hosts, sponsor }) {
     for (const host of await hosts()) {
       try {
         const get = async (path) => {
-          const response = await fetch(`${host}${path}${path.includes("?") ? "&" : "?"}chainPath=${encodeURIComponent(chain)}`);
+          // Fresh, never the browser's copy: the hosts let reads be cached for seconds, and a balance or nonce that old signs wrong.
+          const response = await fetch(`${host}${path}${path.includes("?") ? "&" : "?"}chainPath=${encodeURIComponent(chain)}`, { cache: "no-store" });
           if (response.status === 404) return {};
           if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
           return response.json();
@@ -151,6 +152,11 @@ export function embeddedWallet({ hosts, sponsor }) {
   }
 
   return {
+    /** What `address` holds on `chainPath`, and the hosts' relay fee there: `{ balance, fee }`, read, never asked. */
+    async funds(chainPath, address) {
+      const { balance, fee } = await reach(chainPath, address);
+      return { balance, fee };
+    },
     /** The account, without asking for anything: the one this browser remembers, or null. */
     address: async () => saved()?.address ?? null,
     /** How the key is kept: "passkey", "browser", or null with no account. */
