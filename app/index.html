@@ -111,6 +111,9 @@ h1[tabindex="-1"]:focus { outline: none; }
 .toast span { overflow-wrap: anywhere; }
 .choices { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
 .choices .pill { justify-content: flex-start; }
+/* A choice to make, not a menu: big buttons, the one to pick first filled. */
+.choices.decide .pill { justify-content: center; min-height: 52px; }
+.sheet-detail { font-size: 13px; overflow-wrap: anywhere; background: var(--bg); border-radius: 12px; padding: 10px 12px; color: var(--ink); user-select: all; }
 .pill.bad { color: var(--bad); }
 .pill.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }
 .owned { margin: 0; color: var(--soft); }

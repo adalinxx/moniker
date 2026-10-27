@@ -87,12 +87,13 @@ async function connect() {
 /**
  * Connects first if this site isn't connected, or the page's wallet is
  * locked; with no account in the page's wallet, offers to make one or sign
- * in. False (and says why) if that fails.
+ * in, `purpose` ("claim @river") saying what for. False (and says why) if
+ * that fails.
  */
-async function connectFirst() {
+async function connectFirst(purpose) {
   if (connected && (selfhold() || !inPage.locked())) return true;
   try {
-    if (!selfhold() && !(await inPage.address())) return await startAccount();
+    if (!selfhold() && !(await inPage.address())) return await startAccount(purpose);
     await connect();
     return true;
   } catch (error) {
@@ -102,18 +103,20 @@ async function connectFirst() {
 }
 
 /** With no account in the page's wallet: makes one with a passkey, or signs in with one made before. */
-async function startAccount() {
+async function startAccount(purpose) {
   const choice = await sheet({
-    title: "Your account",
-    body: "Your names belong to a key. A passkey keeps it for you, on this device and the others it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.",
+    title: purpose ? `Make an account to ${purpose}` : "Make an account",
+    body: PASSKEY_KEEPS,
     choices: [
-      { value: "create", label: "Create a passkey" },
+      { value: "create", label: "Create a passkey", primary: true },
       { value: "signin", label: "I have a passkey" },
     ],
   });
   if (choice === null) return false;
   return choice === "create" ? createAccount() : signIn();
 }
+
+const PASSKEY_KEEPS = "Your names belong to your account. A passkey keeps its key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.";
 
 /** A new account, kept by a new passkey (or by this browser, where passkeys can't keep one). */
 async function createAccount() {
@@ -132,9 +135,10 @@ async function keptHere() {
     title: "Your key is kept in this browser only",
     body: "This browser's passkeys can't keep a key, so your account's key is kept here. Clear this browser's data and the account and its names are gone. Copy the key and keep it somewhere safe; Settings has it too.",
     choices: [
-      { value: "copy", label: "Copy the key" },
-      { value: "go", label: "Continue" },
+      { value: "copy", label: "Copy the key", primary: true },
+      { value: "go", label: "Continue without a copy" },
     ],
+    cancel: false,
   });
   if (choice === "copy" && !(await copyKey())) {
     await sheet({ title: "Couldn't copy the key", body: "Copy it from Settings before you rely on this account.", confirm: "OK" });
@@ -192,13 +196,25 @@ function send(write, me, progress = () => {}) {
  * until the chain shows it (`landed(state, me)`), so the page redraws from
  * what the chain holds, not from what was asked.
  */
+const acting = new Set(); // the labels of writes under way, each sent once however often it's pressed
+
 async function act(label, build, landed, done = render) {
+  if (acting.has(label)) return;
+  acting.add(label);
+  try {
+    await acted(label, build, landed, done);
+  } finally {
+    acting.delete(label);
+  }
+}
+
+async function acted(label, build, landed, done) {
   const me = connected;
   const progress = toast(selfhold() ? `${label}: approve it in your wallet.` : `${label}…`);
   try {
     // The page's key, locked since the page loaded: its passkey unlocks it, now, while the click still counts.
     if (!selfhold() && inPage.locked()) {
-      progress.update(`${label}: use your passkey.`);
+      progress.update(`${label}: confirm with your passkey.`);
       await connect();
     }
     const write = await build(await readState(), me);
@@ -208,14 +224,14 @@ async function act(label, build, landed, done = render) {
       return;
     }
     await send(write, me, (text) => progress.update(`${label}: ${text}`));
-    progress.update(`${label}: waiting for the block…`);
+    progress.update(`${label}: confirming…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 2500));
       try {
         if (await landed(await readState(), me)) break;
       } catch {}
-      if (Date.now() > deadline) throw new Error("Sent, but no block has shown it yet. It may still land.");
+      if (Date.now() > deadline) throw new Error("Sent, but not confirmed yet. It may still go through: look again in a minute.");
     }
     progress.update(`${label}: done.`);
     setTimeout(progress.close, 2500);
@@ -232,9 +248,11 @@ async function fundSheet({ address, needed, balance, sponsorTooDear }) {
   const sponsorNote = sponsorTooDear
     ? " The fee sponsor asks more work for it than this device can do in reasonable time."
     : settings.sponsor ? "" : " Or name a fee sponsor in Settings: it pays fees for a little of this device's work.";
+  const on = settings.chain === DEFAULTS.chain ? "" : ` on ${settings.chain}`;
   const copy = await sheet({
     title: "Add coins to your account",
-    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins on ${settings.chain} to your account ID, ${address}, then try again.${sponsorNote}`,
+    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins${on} to your account ID, then try again.${sponsorNote}`,
+    detail: address,
     confirm: "Copy account ID",
   });
   if (copy) navigator.clipboard?.writeText(address).then(() => toast("Account ID copied."), () => toast(address));
@@ -280,20 +298,21 @@ function toast(message, { bad = false } = {}) {
  * true. Resolves to null when cancelled. `danger` marks a confirm that can't
  * be undone.
  */
-function sheet({ title, body = "", confirm, input, choices, danger = false }) {
+function sheet({ title, body = "", detail, confirm, input, choices, danger = false, cancel = true }) {
   const dialog = $("#sheet");
   dialog.setAttribute("aria-describedby", "sheet-body");
   dialog.innerHTML = `
     <form method="dialog">
       <h2 id="sheet-title">${esc(title)}</h2>
       <p id="sheet-body">${esc(body)}</p>
+      ${detail ? `<p class="sheet-detail mono">${esc(detail)}</p>` : ""}
       ${input ? `<div class="field"><label for="sheet-input">${esc(input.label)}</label><input id="sheet-input" ${input.attrs ?? ""} value="${esc(input.value ?? "")}" required></div>` : ""}
-      ${choices ? `<div class="choices">${choices.map((c) => `<button class="pill${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
+      ${choices ? `<div class="choices${choices.some((c) => c.primary) ? " decide" : ""}">${choices.map((c) => `<button class="pill${c.primary ? " accent" : ""}${c.bad ? " bad" : ""}" value="choice:${esc(c.value)}" type="submit" formnovalidate>${esc(c.label)}</button>`).join("")}</div>` : ""}
       <p id="sheet-error" role="alert" style="color: var(--bad); margin: 0 0 12px"></p>
-      <div class="actions">
-        <button class="pill" type="button" data-sheet-cancel>Cancel</button>
+      ${!cancel && choices ? "" : `<div class="actions">
+        ${cancel ? `<button class="pill" type="button" data-sheet-cancel>Cancel</button>` : ""}
         ${choices ? "" : `<button class="pill ${danger ? "danger" : "dark"}" value="ok" type="submit">${esc(confirm)}</button>`}
-      </div>
+      </div>`}
     </form>`;
   return new Promise((resolve) => {
     const form = $("form", dialog);
@@ -311,7 +330,10 @@ function sheet({ title, body = "", confirm, input, choices, danger = false }) {
       }
     };
     // Cancel is no submit button, so Enter in the input submits the confirm.
-    $("[data-sheet-cancel]", dialog).onclick = () => dialog.close("cancel");
+    const cancelButton = $("[data-sheet-cancel]", dialog);
+    if (cancelButton) cancelButton.onclick = () => dialog.close("cancel");
+    // Without Cancel, Escape picks nothing either: the sheet waits for a choice.
+    dialog.oncancel = cancel ? null : (event) => event.preventDefault();
     dialog.onclose = () => {
       const answer = dialog.returnValue;
       if (answer.startsWith("choice:")) return resolve(answer.slice("choice:".length));
@@ -542,7 +564,7 @@ function accountPanel(why, alone = false) {
   return `
     <section class="panel stack" aria-labelledby="get-wallet" style="width: 100%">
       <h${alone ? 1 : 2} id="get-wallet">${esc(why)}</h${alone ? 1 : 2}>
-      <p class="lede" style="margin: 0">Your names belong to a key. A passkey keeps it for you, on this device and the others it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.</p>
+      <p class="lede" style="margin: 0">A passkey keeps your account's key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.</p>
       <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
       <button class="pill big" type="button" data-sign-in>I have a passkey</button>
       ${selfholdLink}
@@ -660,6 +682,7 @@ function viewSettings() {
     <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/" aria-label="Back">‹</a></div>
     <main class="col" style="margin-top: 12px">
       <h1 style="margin: 0 0 20px">Settings</h1>
+      ${accountSettings()}
       <form id="settings" class="panel stack">
         <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
@@ -670,7 +693,6 @@ function viewSettings() {
           <button class="pill dark" type="submit">Save</button>
         </div>
       </form>
-      ${accountSettings()}
     </main>`;
 }
 
@@ -680,11 +702,12 @@ function accountSettings() {
   if (!address) return "";
   const browserKey = inPage.kind() === "browser";
   return `
-      <section class="panel stack section" aria-labelledby="account-settings">
+      <section class="panel stack" aria-labelledby="account-settings" style="margin-bottom: 20px">
         <h2 id="account-settings" style="margin: 0">This page's wallet</h2>
         <p style="margin: 0">Account ${accountLink(address)}, ${browserKey ? "its key kept in this browser only" : "its key kept by your passkey"}.</p>
         ${browserKey ? `<p class="note" style="margin: 0">Lose this browser's data and you lose the account, unless you keep a copy of its key.</p>` : ""}
         <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button class="pill" type="button" data-copy="${esc(address)}">Copy account ID</button>
           ${browserKey && !inPage.locked() ? `<button class="pill" type="button" data-copy-key>Copy the key</button>` : ""}
           <button class="pill${browserKey ? " bad" : ""}" type="button" data-forget-account>Forget this account here</button>
         </div>
@@ -807,7 +830,7 @@ document.addEventListener("click", async (event) => {
     // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.buy) {
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
     const shown = BigInt(d.price);
     act(
@@ -822,7 +845,7 @@ document.addEventListener("click", async (event) => {
       async (s, me) => (await held(s, handle))?.owner === me,
     );
   } else if (d.take) {
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`take @${d.take}`))) return;
     const handle = d.take;
     act(`Taking @${handle}`, async (state, me) => {
       const entry = await held(state, handle);
@@ -964,7 +987,7 @@ document.addEventListener("submit", async (event) => {
     const show = (typed ? $("#new-show") : $("#claim-show")).checked;
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
     if (price && priceProblem(price)) return toast(`The price: ${priceProblem(price)}`, { bad: true });
-    if (!(await connectFirst())) return;
+    if (!(await connectFirst(`claim @${handle}`))) return;
     claim(handle, price, show);
   } else if (form.id === "settings") {
     event.preventDefault();

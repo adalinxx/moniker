@@ -226,7 +226,6 @@ export function embeddedWallet({ hosts, sponsor }) {
       const nonce = at.nonce > sent ? at.nonce : sent;
       const fee = request.fee === undefined ? at.fee : BigInt(request.fee) > at.fee ? BigInt(request.fee) : at.fee;
       const build = (fee) => transaction({ owner, actions: request.actions, payments, fee, nonce, chainPath: request.chainPath });
-      progress("Signing…");
       if (at.balance >= paying + fee) return submit(at.host, build(fee));
       const url = sponsor();
       if (fee === 0n || at.balance < paying || !url) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
@@ -299,7 +298,7 @@ async function sponsorFee(url, draft, progress) {
     } catch (error) {
       // Busy, or this block's fees all sold: a block or two from now, it has work again.
       if (error.status === 503 && Date.now() < patience) {
-        progress("The fee sponsor is busy: trying again in a moment…");
+        progress("the fee sponsor is busy, trying again in a moment…");
         await new Promise((resolve) => setTimeout(resolve, 3000));
         continue;
       }
@@ -338,7 +337,7 @@ async function grind(url, work, effort, progress) {
   // A share is worth 2^256 / (target + 1) hashes, expected.
   const needed = Number(BigInt(work.sharesForFee) * (2n ** 256n / (BigInt(`0x${work.shareTarget}`) + 1n)));
   if (pace && needed / pace > LONGEST) throw new TooMuchWork();
-  if (!effort.began) progress("Paying the fee with this device's work…");
+  if (!effort.began) progress("paying the fee with this device's work…");
 
   let settle;
   const outcome = new Promise((resolve, reject) => (settle = { resolve, reject }));
@@ -373,7 +372,7 @@ async function grind(url, work, effort, progress) {
     pace = effort.hashes / spent;
     const expected = needed / pace;
     if (expected > LONGEST) return finish(false, new TooMuchWork());
-    progress(`Paying the fee with this device's work: about ${seconds(expected)}, ${seconds(spent)} so far…`);
+    progress(`paying the fee with this device's work, about ${seconds(Math.max(1000, expected - spent))} more…`);
   };
 
   const timer = setTimeout(() => finish(false), Number(work.expiresInMilliseconds));

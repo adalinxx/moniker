@@ -793,6 +793,7 @@ const pageAccount = (page) => page.evaluate(() => JSON.parse(localStorage.getIte
 test("without Selfhold, a passkey makes the account: a visitor claims @pia_pass, and after a reload Show asks the passkey again", async ({ page }) => {
   const app = await withPasskeys(page, "#/@pia_pass");
   await page.getByRole("button", { name: "Claim @pia_pass" }).click();
+  await expect(page.locator("#sheet-title")).toHaveText("Make an account to claim @pia_pass");
   await sheetButton(page, "Create a passkey").click();
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   // The passkey keeps the key: the page stores which passkey, and the address, never the key.
@@ -830,6 +831,27 @@ test("I have a passkey: an account forgotten here comes back from its passkey, w
   expect((await pageAccount(page)).address).toBe(made.address);
 }, { wallet: false });
 
+test("pressed twice, Claim sends once", async ({ page }) => {
+  const app = await withPasskeys(page, "#/names");
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  const { address } = await pageAccount(page);
+  const sent = [];
+  page.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
+  await page.getByLabel("Name", { exact: true }).fill("tia_twice");
+  const claimButton = page.getByRole("button", { name: "Claim", exact: true });
+  await claimButton.click();
+  await claimButton.click();
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  expect((await held("tia_twice")).owner).toBe(address);
+  // A second write would have gone out by now, behind the first.
+  await page.waitForTimeout(3000);
+  expect(sent).toHaveLength(1);
+  await expect(page.locator("#alerts")).toBeEmpty();
+  await page.goto(app + "#/names");
+  await expect(row(page, "tia_twice")).toBeVisible();
+}, { wallet: false });
+
 test("where passkeys can't make a key, the key is kept in this browser: it claims, outlasts a reload, and Copy the key gives it", async ({ page }) => {
   const app = await withPasskeys(page, "#/@bea_key", { prf: false });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(app).origin });
@@ -837,6 +859,10 @@ test("where passkeys can't make a key, the key is kept in this browser: it claim
   await sheetButton(page, "Create a passkey").click();
   // Said before the write goes on, and the key offered to copy.
   await expect(page.locator("#sheet-title")).toHaveText("Your key is kept in this browser only");
+  // A choice to make, not one to put off: no Cancel, and Escape doesn't close it.
+  await expect(sheetButton(page, "Cancel")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#sheet")).toBeVisible();
   await sheetButton(page, "Copy the key").click();
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   const kept = await pageAccount(page);
@@ -910,7 +936,7 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   const { address } = await pageAccount(page);
   await expect(page.locator("#sheet-body")).toContainText(`needs 1 coin, and your account holds 0`);
-  await expect(page.locator("#sheet-body")).toContainText(address);
+  await expect(page.locator("#sheet .sheet-detail")).toHaveText(address);
   await sheetButton(page, "Cancel").click();
   expect(await held("ola_pass")).toBeUndefined();
 

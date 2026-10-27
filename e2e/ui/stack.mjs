@@ -16,7 +16,7 @@ const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const repo = here("../../");
 const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190, sponsor: 27191 };
 
-const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 
 /** Serves the repository root, as a static host does. */
 function serve(port) {
