@@ -230,4 +230,4 @@ lattice child create Nexus/moniker --spec chain/spec.json \
 Each name is claimed with its `names/` key and pointed at the project's
 account, one claim per transaction. Every claim is checked against the policy
 before it is written, and again by the node before the chain is created.
-`--genesis-transactions` needs a node with adalinxx/lattice-node#69.
+`--genesis-transactions` needs a node with 0xLattice/lattice-node#69.
