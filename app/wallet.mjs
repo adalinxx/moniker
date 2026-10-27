@@ -13,21 +13,27 @@
 // refused with a `NeedsCoins` error naming what is needed.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import { transaction } from "../sdk/src/records/wallet.mjs";
+import { gpuGrinder } from "./share-gpu.mjs";
 
 const STORE = "moniker.wallet"; // { kind: "passkey", credential, address } | { kind: "browser", key, address }
 const SPONSOR_CLIENT = "moniker.sponsorClient";
 // What the passkey derives the key from: the same passkey and salt, the same key, on every device.
 const SALT = new TextEncoder().encode("Moniker account key, v1");
-// The most work (expected hashes) the page does for one fee: a few minutes of a laptop's cores.
-const MOST_WORK = 2n ** 31n;
+// The longest this device works for one fee, expected at its pace: past it, the page asks for coins instead.
+const LONGEST = 2 * 60_000;
+let pace = null; // hashes per millisecond this device last managed
 
 /** A write the account can't pay for: it needs `needed` coins and holds `balance`. */
 export class NeedsCoins extends Error {
-  constructor({ address, needed, balance }) {
+  /** `sponsorTooDear`: a sponsor was asked, and wants more work than this page will do. */
+  constructor({ address, needed, balance, sponsorTooDear = false }) {
     super(`Your account needs ${needed} ${needed === 1n ? "coin" : "coins"} for this and holds ${balance}.`);
-    Object.assign(this, { name: "NeedsCoins", address, needed, balance });
+    Object.assign(this, { name: "NeedsCoins", address, needed, balance, sponsorTooDear });
   }
 }
+
+/** The sponsor's price in work is past what this page will do. */
+class TooMuchWork extends Error {}
 
 const saved = () => {
   try {
@@ -224,7 +230,13 @@ export function embeddedWallet({ hosts, sponsor }) {
       if (at.balance >= paying + fee) return submit(at.host, build(fee));
       const url = sponsor();
       if (fee === 0n || at.balance < paying || !url) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
-      const sponsored = await sponsorFee(url, build(0n), progress);
+      let sponsored;
+      try {
+        sponsored = await sponsorFee(url, build(0n), progress);
+      } catch (error) {
+        if (error instanceof TooMuchWork) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsorTooDear: true });
+        throw error;
+      }
       return submit(at.host, sponsored.body, sponsored.signatures);
     },
   };
@@ -278,11 +290,19 @@ async function sponsorFee(url, draft, progress) {
       if (error.status !== 402) throw error;
     }
   }
+  const effort = { began: null, hashes: 0 };
+  const patience = Date.now() + 60_000;
   for (;;) {
     let work;
     try {
       work = await ask(url, "work", { ...(client && { client }), chain });
     } catch (error) {
+      // Busy, or this block's fees all sold: a block or two from now, it has work again.
+      if (error.status === 503 && Date.now() < patience) {
+        progress("The fee sponsor is busy: trying again in a moment…");
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        continue;
+      }
       // A token from before the sponsor restarted: start over with a new one.
       if (!client || error.status !== 400 || !/client token/.test(error.message)) throw error;
       client = null;
@@ -292,10 +312,7 @@ async function sponsorFee(url, draft, progress) {
     try {
       localStorage.setItem(SPONSOR_CLIENT, client);
     } catch {}
-    // A share is worth 2^256 / (target + 1) hashes, expected.
-    const perShare = 2n ** 256n / (BigInt(`0x${work.shareTarget}`) + 1n);
-    if (BigInt(work.sharesForFee) * perShare > MOST_WORK) throw new Error("The fee sponsor asks for more work than this page will do. Try again later, or add coins to your account.");
-    if (await grind(url, work, progress)) return sponsored();
+    if (await grind(url, work, effort, progress)) return sponsored();
   }
 }
 
@@ -311,51 +328,116 @@ function check(draft, sponsored, fee) {
 }
 
 /**
- * Grinds `work`'s nonces in this browser's workers, sending each share,
- * until the credit covers the fee (true) or the work expires (false).
+ * Grinds `work`'s nonces on this device, sending each share, until the credit
+ * covers the fee (true) or the work runs out or expires (false). `effort`
+ * carries the time and hashes spent on this fee across works. Throws
+ * TooMuchWork once this device's pace shows the fee would take too long.
  */
-function grind(url, work, progress) {
+async function grind(url, work, effort, progress) {
   const fee = BigInt(work.fee);
-  const wanted = BigInt(work.sharesForFee);
+  // A share is worth 2^256 / (target + 1) hashes, expected.
+  const needed = Number(BigInt(work.sharesForFee) * (2n ** 256n / (BigInt(`0x${work.shareTarget}`) + 1n)));
+  if (pace && needed / pace > LONGEST) throw new TooMuchWork();
+  if (!effort.began) progress("Paying the fee with this device's work…");
+
+  let settle;
+  const outcome = new Promise((resolve, reject) => (settle = { resolve, reject }));
+  let over = false;
+  const finish = (value, error) => {
+    if (over) return;
+    over = true;
+    error ? settle.reject(error) : settle.resolve(value);
+  };
+  // One share at a time, so the credit heard last is the newest.
+  let sending = Promise.resolve();
+  const found = (nonce) => {
+    sending = sending.then(async () => {
+      if (over) return;
+      try {
+        const { credit } = await ask(url, "shares", { assignment: work.assignment, nonce: String(nonce) });
+        if (BigInt(credit) >= fee) finish(true);
+      } catch (error) {
+        // A doubled share earns nothing; expired work, or a full block, calls for new work.
+        if (/duplicateShare|missesShareTarget/.test(error.message)) return;
+        if (error.status === 400 || error.status === 503) finish(false);
+        else finish(false, error);
+      }
+    });
+  };
+  const hashed = (count) => {
+    // Paced from the first batch done, past the start-up.
+    if (!effort.began) return (effort.began = performance.now());
+    effort.hashes += count;
+    const spent = performance.now() - effort.began;
+    if (spent < 2000) return;
+    pace = effort.hashes / spent;
+    const expected = needed / pace;
+    if (expected > LONGEST) return finish(false, new TooMuchWork());
+    progress(`Paying the fee with this device's work: about ${seconds(expected)}, ${seconds(spent)} so far…`);
+  };
+
+  const timer = setTimeout(() => finish(false), Number(work.expiresInMilliseconds));
+  const hashing = await hasher(work, found, hashed);
+  hashing.done.then(
+    () => sending.then(() => finish(false)),
+    (error) => finish(false, new Error(`The work stopped: ${error.message}`)),
+  );
+  try {
+    return await outcome;
+  } finally {
+    clearTimeout(timer);
+    hashing.stop();
+  }
+}
+
+const seconds = (ms) => (ms < 90_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : `${Math.round(ms / 60_000)} min`);
+
+/**
+ * Hashes `work`'s nonces on this device's graphics chip where the page can
+ * use one, else on its processor's cores: `found(nonce)` for each share,
+ * `hashed(count)` as it goes. `done` settles when the range is through.
+ */
+async function hasher(work, found, hashed) {
+  const gpu = await gpuGrinder();
+  if (gpu) {
+    const job = gpu.job(work.prefixHex, work.shareTarget);
+    let stopped = false;
+    const done = (async () => {
+      let next = BigInt(work.startNonce);
+      const end = next + BigInt(work.count);
+      let batch = 1 << 20;
+      try {
+        while (!stopped && next < end) {
+          const size = end - next < BigInt(batch) ? Number(end - next) : batch;
+          const began = performance.now();
+          const shares = await job.run(next, size);
+          if (stopped) return;
+          next += BigInt(size);
+          hashed(size);
+          shares.forEach(found);
+          // Batches of a tenth of a second or so: few round trips, and the chip still draws the page.
+          if (performance.now() - began < 100 && batch < 1 << 26) batch *= 2;
+        }
+      } finally {
+        job.close();
+      }
+    })();
+    return { done, stop: () => (stopped = true) };
+  }
+
   const count = Math.max(1, Math.min(8, (navigator.hardwareConcurrency ?? 2) - 1));
   const span = BigInt(work.count) / BigInt(count);
   const workers = [];
-  let shares = 0n;
-  progress(`Paying the fee with this device's work: 0 of about ${wanted} steps…`);
-  return new Promise((resolve, reject) => {
-    let sending = Promise.resolve();
-    let over = false;
-    const finish = (outcome, error) => {
-      if (over) return;
-      over = true;
-      clearTimeout(timer);
-      for (const worker of workers) worker.terminate();
-      error ? reject(error) : resolve(outcome);
+  const done = Promise.all(Array.from({ length: count }, (_, i) => new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./share-worker.mjs", import.meta.url), { type: "module" });
+    worker.onmessage = ({ data }) => {
+      if (data.share) found(BigInt(data.share));
+      if (data.hashes) hashed(data.hashes);
+      if (data.done) resolve();
     };
-    const timer = setTimeout(() => finish(false), Number(work.expiresInMilliseconds));
-    for (let i = 0n; i < BigInt(count); i++) {
-      const worker = new Worker(new URL("./share-worker.js", import.meta.url));
-      worker.onmessage = ({ data }) => {
-        if (!data.share) return;
-        // One share at a time, so the credit heard last is the newest.
-        sending = sending.then(async () => {
-          if (over) return;
-          try {
-            const { credit } = await ask(url, "shares", { assignment: work.assignment, nonce: data.share });
-            shares += 1n;
-            progress(`Paying the fee with this device's work: ${shares} of about ${wanted} steps…`);
-            if (BigInt(credit) >= fee) finish(true);
-          } catch (error) {
-            // A doubled share earns nothing; expired work, or a full block, calls for new work.
-            if (/duplicateShare|missesShareTarget/.test(error.message)) return;
-            if (error.status === 400 || error.status === 503) finish(false);
-            else finish(false, error);
-          }
-        });
-      };
-      worker.onerror = (event) => finish(false, new Error(`The work stopped: ${event.message}`));
-      worker.postMessage({ prefixHex: work.prefixHex, targetHex: work.shareTarget, start: String(BigInt(work.startNonce) + i * span), count: String(span) });
-      workers.push(worker);
-    }
-  });
+    worker.onerror = (event) => reject(new Error(event.message));
+    worker.postMessage({ prefixHex: work.prefixHex, targetHex: work.shareTarget, start: String(BigInt(work.startNonce) + BigInt(i) * span), count: String(span) });
+    workers.push(worker);
+  })));
+  return { done, stop: () => workers.forEach((worker) => worker.terminate()) };
 }

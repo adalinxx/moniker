@@ -126,13 +126,18 @@ phones included:
   on the page's own domain or `localhost`, not an IP address.
 - **It signs as Selfhold would** and sends to the chain's hosts, paying
   their relay floor (`minRelayFee`, 1 on Moniker's hosts) from the account.
-  An account with too few coins pays a **fee sponsor** instead, if Settings
-  name one: the page grinds the sponsor's shares in Web Workers
-  (`app/share-worker.js`), and the sponsor adds the fee and co-signs. The
-  page signs only if the sponsor added that one fee debit and itself as
-  second signer. With no sponsor, the page asks for coins and shows the
-  account ID to send them to. (The sponsor is lattice-node's `lattice-sponsor`;
-  none runs for Moniker yet, so Settings name none by default.)
+  An account with too few coins pays a **fee sponsor** instead: by default
+  Moniker's, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
+  (lattice-node's `lattice-sponsor`), changed or turned off in Settings. The
+  page grinds the sponsor's shares on the device's graphics chip through
+  WebGPU (`app/share-gpu.mjs`), or where it has none, in Web Workers on its
+  processor (`app/share-worker.mjs`); both hash as `app/sha256.mjs` lays out.
+  The sponsor then adds the fee and co-signs. The page signs only if the
+  sponsor added that one fee debit and itself as second signer. A sponsor
+  busy or sold out for the block is asked again for up to a minute. Where
+  the fee would take this device more than two minutes at the pace it
+  shows, or with no sponsor, the page asks for coins and shows the account
+  ID to send them to.
 - Anyone who prefers an extension can still add Selfhold from the account
   panel; back on the tab after adding it, the page reloads at the same place.
 
@@ -184,7 +189,8 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 ```
 
 The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
-builds both).
+builds both). They grind its shares on the machine's graphics chip; on Linux
+they give Chromium SwiftShader's, in software, for a machine with none.
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`
 and put its CID (`policy/host-check/.build/debug/host-check <wasm> <dir>`

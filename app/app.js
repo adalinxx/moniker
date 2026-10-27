@@ -16,7 +16,7 @@ const DEFAULTS = {
   nodes: [],
   chain: "Nexus/moniker",
   // A fee sponsor paid in work, for accounts in the page's wallet with too few coins for the fee; "" for none.
-  sponsor: "",
+  sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
   // "selfhold" uses Selfhold where it is installed; "page" uses the page's own wallet even so.
   wallet: "selfhold",
 };
@@ -228,10 +228,13 @@ async function act(label, build, landed, done = render) {
 }
 
 /** The page's account can't pay for a write: what it needs, and where to send coins. */
-async function fundSheet({ address, needed, balance }) {
+async function fundSheet({ address, needed, balance, sponsorTooDear }) {
+  const sponsorNote = sponsorTooDear
+    ? " The fee sponsor asks more work for it than this device can do in reasonable time."
+    : settings.sponsor ? "" : " Or name a fee sponsor in Settings: it pays fees for a little of this device's work.";
   const copy = await sheet({
     title: "Add coins to your account",
-    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins on ${settings.chain} to your account ID, ${address}, then try again.${settings.sponsor ? "" : " Or name a fee sponsor in Settings: it pays fees for a little of this device's work."}`,
+    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins on ${settings.chain} to your account ID, ${address}, then try again.${sponsorNote}`,
     confirm: "Copy account ID",
   });
   if (copy) navigator.clipboard?.writeText(address).then(() => toast("Account ID copied."), () => toast(address));

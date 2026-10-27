@@ -1,12 +1,10 @@
-// Grinds shares for a fee sponsor, off the page's thread: a share is a nonce
-// whose SHA-256 over the template's prefix and the nonce (8 bytes, big-endian)
-// is, as a big-endian number, at or under the share target. The prefix is
-// hashed once into a midstate; each nonce hashes only the last block or two.
-//
-//   postMessage({ prefixHex, targetHex, start, count })   // start, count: decimal strings
-//   ← { share: "<nonce>" } for each share, { hashes } now and then, { done: true } at the end
+// SHA-256 as the fee sponsor's shares need it: a share is a nonce whose
+// SHA-256 over the work's prefix and the nonce (8 bytes, big-endian) is, as a
+// big-endian number, at or under the share target. The prefix is hashed once
+// into a midstate; each nonce hashes only the last block or two, which
+// `prepare` lays out with the nonce's 8 bytes left 0 at `tail`.
 
-const K = Uint32Array.from([
+export const K = Uint32Array.from([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
   0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
   0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -19,7 +17,7 @@ const K = Uint32Array.from([
 const w = new Uint32Array(64);
 
 /** One SHA-256 compression of the 64 bytes of `view` at `at` into `state`. */
-function compress(state, view, at) {
+export function compress(state, view, at) {
   for (let i = 0; i < 16; i++) w[i] = view.getUint32(at + i * 4);
   for (let i = 16; i < 64; i++) {
     const a = w[i - 15], b = w[i - 2];
@@ -40,7 +38,12 @@ function compress(state, view, at) {
 
 const bytes = (hex) => Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
 
-onmessage = ({ data: { prefixHex, targetHex, start, count } }) => {
+/**
+ * The work's hashing laid out: `midstate` (8 words) after the prefix's whole
+ * blocks; `last`, the 1 or 2 blocks (`blocks`) after them, padded, with the
+ * nonce's bytes at `tail`; and `target`, the share target as 8 words.
+ */
+export function prepare(prefixHex, targetHex) {
   const prefix = bytes(prefixHex);
   const target = new Uint32Array(8);
   const targetView = new DataView(bytes(targetHex.padStart(64, "0")).buffer);
@@ -61,32 +64,5 @@ onmessage = ({ data: { prefixHex, targetHex, start, count } }) => {
   const bits = (prefix.length + 8) * 8;
   lastView.setUint32(last.length - 8, Math.floor(bits / 2 ** 32));
   lastView.setUint32(last.length - 4, bits >>> 0);
-
-  const state = new Uint32Array(8);
-  // The nonce as two 32-bit halves: BigInt arithmetic per hash would cost more than the hash.
-  const first = BigInt(start);
-  let hi = Number(first >> 32n);
-  let lo = Number(first & 0xffffffffn);
-  let hashes = 0;
-  for (let left = Number(count); left > 0; left--) {
-    lastView.setUint32(tail, hi);
-    lastView.setUint32(tail + 4, lo);
-    state.set(midstate);
-    for (let b = 0; b < blocks; b++) compress(state, lastView, b * 64);
-    // At or under the target, compared as big-endian numbers.
-    for (let i = 0; i < 8; i++) {
-      if (state[i] === target[i] && i < 7) continue;
-      if (state[i] <= target[i]) postMessage({ share: String((BigInt(hi) << 32n) | BigInt(lo)) });
-      break;
-    }
-    if (++lo === 2 ** 32) {
-      lo = 0;
-      hi = (hi + 1) >>> 0;
-    }
-    if (++hashes === 1 << 18) {
-      postMessage({ hashes });
-      hashes = 0;
-    }
-  }
-  postMessage({ hashes, done: true });
-};
+  return { midstate, last, tail, blocks, target };
+}

@@ -6,6 +6,7 @@
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
 //   LATTICE_WALLET=<lattice-wallet>/dist npm test
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -34,8 +35,14 @@ const running = await start();
 const stack = running.info;
 writeFileSync(new URL("./.stack.json", import.meta.url), JSON.stringify(stack));
 
+// The page's wallet grinds a fee sponsor's shares on the graphics chip. A
+// machine without one (CI's) gets Chromium's own, SwiftShader, in software.
+const gpuArgs = process.platform === "linux"
+  ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-webgpu-adapter=swiftshader", "--use-angle=swiftshader"]
+  : [];
+
 let browser;
-before(async () => (browser = await chromium.launch()));
+before(async () => (browser = await chromium.launch({ args: gpuArgs })));
 after(async () => {
   await browser?.close();
   await running.stop();
@@ -188,7 +195,7 @@ async function walletForgetsSite(context) {
 }
 
 /** Opens the app pointed at the stack, as `who` (connected through the wallet) or as a visitor. */
-async function openApp(page, who, hash = "#/", seed = { nodes: [stack.node], chain: stack.chain }) {
+async function openApp(page, who, hash = "#/", seed = { nodes: [stack.node], chain: stack.chain, sponsor: "" }) {
   await page.addInitScript((settings) => {
     if (sessionStorage.getItem("moniker-test-seeded")) return;
     sessionStorage.setItem("moniker-test-seeded", "1");
@@ -721,7 +728,7 @@ test("Settings saved for a trial chain follow the move to Moniker, and keep thei
   await page.reload();
   await page.goto(stack.app + "#/settings");
   await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "", wallet: "selfhold" });
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor", wallet: "selfhold" });
 }, { wallet: false, expectedErrors: /status of 404/ }); // the stack's node serves no Nexus/other-names
 
 test("Settings saved with the hosts once named by default find them through Nexus instead", async ({ page }) => {
@@ -776,7 +783,7 @@ async function withPasskeys(page, hash, { settings = {}, prf = true } = {}) {
   });
   await page.addInitScript((settings) => {
     if (!localStorage.getItem("moniker.settings")) localStorage.setItem("moniker.settings", JSON.stringify(settings));
-  }, { nodes: [stack.node], chain: stack.chain, ...settings });
+  }, { nodes: [stack.node], chain: stack.chain, sponsor: "", ...settings });
   const app = stack.app.replace("127.0.0.1", "localhost");
   await page.goto(app + hash);
   return app;
@@ -913,22 +920,109 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
   expect(await balance(address)).toBe(9n);
 }, { wallet: false });
 
-test("with a fee sponsor, an account with no coins pays the relay fee in work: the sponsor's account pays it", async ({ page }) => {
+test("the graphics chip and the processor find the same shares as SHA-256 does, wherever the nonce falls", async ({ page }) => {
+  await page.goto(stack.app);
+  const target = `003fffff${"f".repeat(56)}`; // a share in 1024
+  const start = 2n ** 32n - 5000n; // the nonce's low half carries into its high half
+  const count = 1 << 14;
+  const runs = await page.evaluate(async ({ app, target, start, count }) => {
+    const { gpuGrinder } = await import(new URL("share-gpu.mjs", app).href);
+    const gpu = await gpuGrinder();
+    if (!gpu) return null;
+    const runs = [];
+    // Every offset of the nonce in its block, in one last block and two.
+    for (let length = 0; length <= 130; length++) {
+      const prefixHex = Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => b.toString(16).padStart(2, "0")).join("");
+      const job = gpu.job(prefixHex, target);
+      const onGpu = (await job.run(BigInt(start), count)).map(String);
+      job.close();
+      const onCpu = await new Promise((resolve, reject) => {
+        const worker = new Worker(new URL("share-worker.mjs", app), { type: "module" });
+        const found = [];
+        worker.onerror = (event) => reject(new Error(event.message));
+        worker.onmessage = ({ data }) => {
+          if (data.share) found.push(data.share);
+          if (data.done) {
+            worker.terminate();
+            resolve(found);
+          }
+        };
+        worker.postMessage({ prefixHex, targetHex: target, start, count: String(count) });
+      });
+      runs.push({ prefixHex, onGpu: onGpu.sort(), onCpu: onCpu.sort() });
+    }
+    return runs;
+  }, { app: stack.app, target, start: String(start), count });
+  expect(runs, "no WebGPU adapter: on Linux, Chromium needs SwiftShader's flags (gpuArgs)").not.toBeNull();
+  for (const { prefixHex, onGpu, onCpu } of runs) {
+    const want = [];
+    for (let i = 0n; i < BigInt(count); i++) {
+      const nonce = Buffer.alloc(8);
+      nonce.writeBigUInt64BE(start + i);
+      const hash = createHash("sha256").update(Buffer.from(prefixHex, "hex")).update(nonce).digest("hex");
+      if (BigInt(`0x${hash}`) <= BigInt(`0x${target}`)) want.push(String(start + i));
+    }
+    expect({ length: prefixHex.length / 2, onGpu, onCpu }).toEqual({ length: prefixHex.length / 2, onGpu: want.sort(), onCpu: want });
+  }
+}, { wallet: false });
+
+test("a fee sponsor that asks more work than the page will do: it asks for coins instead, and grinds nothing", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
     const response = await route.fetch();
     await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
   });
-  const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  await withPasskeys(page, "#/@sia_pass", { settings: { sponsor: sponsor.url } });
-  const before = await balance(sponsor.address);
-  await page.getByRole("button", { name: "Claim @sia_pass" }).click();
+  // One share of 2^60 hashes for the fee: years, on any device.
+  const sponsor = "http://localhost:27199/sponsor";
+  const asked = [];
+  await page.route(`${sponsor}/*`, (route) => {
+    asked.push(new URL(route.request().url()).pathname);
+    if (!route.request().url().endsWith("/work")) return route.fulfill({ status: 402, json: { error: { message: "insufficientCredit" } } });
+    return route.fulfill({ json: { client: "c", assignment: "a", prefixHex: "00", shareTarget: `${"0".repeat(15)}${"f".repeat(49)}`, startNonce: "0", count: "4294967296", fee: "1", sharesForFee: "1", expiresInMilliseconds: "30000" } });
+  });
+  await withPasskeys(page, "#/@dee_pass", { settings: { sponsor } });
+  await page.getByRole("button", { name: "Claim @dee_pass" }).click();
   await sheetButton(page, "Create a passkey").click();
-  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-  const { address } = await pageAccount(page);
-  expect((await held("sia_pass")).owner).toBe(address);
-  expect(await balance(address)).toBe(0n);
-  expect(await balance(sponsor.address)).toBe(before - 1n);
+  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
+  await expect(page.locator("#sheet-body")).toContainText("The fee sponsor asks more work for it than this device can do");
+  expect(asked).toEqual(["/sponsor/work"]);
+  await sheetButton(page, "Cancel").click();
+  expect(await held("dee_pass")).toBeUndefined();
 }, { wallet: false });
+
+for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu", gpu: true }, { on: "the processor, with no graphics chip", handle: "sia_cpu", gpu: false }]) {
+  test(`with a fee sponsor, an account with no coins pays the relay fee in work, on ${on}: the sponsor's account pays it`, async ({ page }) => {
+    await page.route("**/api/chain/info?*", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+    });
+    // Counts the workers the page starts, and with `gpu` false, hides WebGPU.
+    await page.addInitScript((gpu) => {
+      if (!gpu) Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+      const Base = Worker;
+      window.workersStarted = 0;
+      window.Worker = class extends Base {
+        constructor(...args) {
+          super(...args);
+          window.workersStarted += 1;
+        }
+      };
+    }, gpu);
+    const sponsor = await running.sponsor((address) => fund(address, 1000n));
+    await withPasskeys(page, `#/@${handle}`, { settings: { sponsor: sponsor.url } });
+    const before = await balance(sponsor.address);
+    await page.getByRole("button", { name: `Claim @${handle}` }).click();
+    await sheetButton(page, "Create a passkey").click();
+    await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+    const { address } = await pageAccount(page);
+    expect((await held(handle)).owner).toBe(address);
+    expect(await balance(address)).toBe(0n);
+    expect(await balance(sponsor.address)).toBe(before - 1n);
+    const workers = await page.evaluate(() => window.workersStarted);
+    if (gpu) expect(workers).toBe(0);
+    else expect(workers).toBeGreaterThan(0);
+    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next.
+  }, { wallet: false, expectedErrors: /status of 503/ });
+}
 
 // ---------------------------------------------------------------- the handle picker, in another app's page
 
