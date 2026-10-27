@@ -5,7 +5,7 @@ let package = Package(
     name: "host-check",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/adalinxx/Lattice.git", exact: "50.0.1"),
+        .package(url: "https://github.com/0xLattice/Lattice.git", exact: "50.0.1"),
     ],
     targets: [
         .executableTarget(
