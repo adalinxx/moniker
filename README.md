@@ -128,10 +128,10 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   the names it owns.
 
 There is no log in: the page asks the wallet only where a key is needed,
-and only from a click, as Selfhold and passkeys require. It uses Selfhold
-where it is installed (Settings can choose the page's wallet instead), and
-otherwise its own wallet, `app/wallet.mjs`, so nothing needs installing,
-phones included:
+and only from a click, as Selfhold and passkeys require. It uses its own
+wallet, `app/wallet.mjs`, so nothing needs installing, phones included.
+Selfhold is an option: Settings can choose it, a checkout can pay with it,
+and whoever connected it here while it was the default keeps it:
 
 - **The key is a passkey's.** Create a passkey derives the account's
   Ed25519 key from a new passkey through WebAuthn's PRF extension; the

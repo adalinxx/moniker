@@ -18,8 +18,8 @@ const DEFAULTS = {
   chain: "Nexus/moniker",
   // A fee sponsor: the page's wallet pays it fees in this device's GPU work, before coins; "" for none.
   sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
-  // "selfhold" uses Selfhold where it is installed; "page" uses the page's own wallet even so.
-  wallet: "selfhold",
+  // "page" uses the page's own passkey wallet; "selfhold", Selfhold where it is installed.
+  wallet: "page",
 };
 function loadSettings() {
   try {
@@ -32,7 +32,9 @@ function loadSettings() {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
       sponsor: typeof saved.sponsor === "string" ? saved.sponsor : DEFAULTS.sponsor,
-      wallet: saved.wallet === "page" ? "page" : DEFAULTS.wallet,
+      // Selfhold only as chosen in Settings; once the default, an older "selfhold" chose nothing.
+      wallet: saved.walletChosen && saved.wallet === "selfhold" ? "selfhold" : DEFAULTS.wallet,
+      walletChosen: Boolean(saved.walletChosen),
     };
   } catch {
     return { ...DEFAULTS };
@@ -71,9 +73,27 @@ const held = (state, handle) => names.resolve(state, handle);
 
 let connected = null;
 const inPage = embeddedWallet({ hosts: () => client().hosts(), sponsor: () => settings.sponsor });
-/** Selfhold where it is installed (unless Settings choose the page's wallet), else the page's own. */
-const wallet = () => (settings.wallet !== "page" && window.lattice) || inPage;
+/** The page's own passkey wallet, or Selfhold where Settings choose it and it is installed. */
+const wallet = () => (settings.wallet === "selfhold" && window.lattice) || inPage;
 const selfhold = () => wallet() !== inPage;
+
+/**
+ * Selfhold, for whoever connected it to this site while it was the default
+ * and hasn't chosen a wallet since: their names are its account's. Decided
+ * once.
+ */
+async function adoptSelfhold() {
+  if (settings.walletChosen || !window.lattice) return;
+  const address = await window.lattice.address?.().catch(() => null);
+  if (address) saveSettings({ ...settings, wallet: "selfhold", walletChosen: true });
+}
+
+/** From here on, the page's own wallet: the checkout's passkey account was picked to pay. */
+async function usePageWallet() {
+  if (!selfhold()) return;
+  saveSettings({ ...settings, wallet: "page", walletChosen: true });
+  connected = (await inPage.address()) ?? null;
+}
 
 /**
  * Asks the wallet for this site's account: Selfhold's address, or the page's
@@ -587,11 +607,10 @@ const checkout = { handle: null, method: null };
 
 /** The ways to pay here, the first the one to offer first. */
 function payMethods() {
-  const methods = [selfhold() ? "selfhold" : "account"];
+  // The passkey account, its fee paid with this device's GPU, always; Selfhold first where it is the wallet.
+  if (selfhold()) return ["selfhold", "account", "request"];
   // Selfhold, while the page's wallet is in use: through a request if it's here, else where to add it.
-  if (!selfhold() && (window.lattice || !phone)) methods.push("selfhold");
-  methods.push("request");
-  return methods;
+  return window.lattice || !phone ? ["account", "selfhold", "request"] : ["account", "request"];
 }
 
 /**
@@ -669,14 +688,15 @@ async function requestFor(handle, entry, state) {
 /** Paying from the page's passkey account: its balance, and its fee, paid with this device's GPU where it can be. */
 async function accountPay(handle, entry) {
   const price = entry?.price ?? 0n;
-  // A claim, or a purchase: its button.
-  const go = entry ? `data-buy="${esc(handle)}" data-price="${price}"` : `data-claim="${esc(handle)}"`;
-  if (!connected) {
+  // A claim, or a purchase: its button, which turns to the page's wallet where Selfhold was in use.
+  const go = `${entry ? `data-buy="${esc(handle)}" data-price="${price}"` : `data-claim="${esc(handle)}"`} data-via="page"`;
+  const me = selfhold() ? await inPage.address() : connected;
+  if (!me) {
     return `<p style="margin: 0">${entry ? `Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.` : "Make your account first: a passkey keeps its key."}</p>
-        <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
-        <button class="pill big" type="button" data-sign-in>I have a passkey</button>`;
+        <button class="pill accent big" type="button" data-create-account data-via="page">Create a passkey</button>
+        <button class="pill big" type="button" data-sign-in data-via="page">I have a passkey</button>`;
   }
-  const funds = await inPage.funds(chainPath(), connected).catch(() => null);
+  const funds = await inPage.funds(chainPath(), me).catch(() => null);
   if (!funds) return `<p role="alert" style="margin: 0">No host answered for your account's balance.</p><button class="pill big" type="button" data-retry>Try again</button>`;
   const { balance, fee } = funds;
   // With a sponsor, this device's GPU pays the fee in work: free, wherever the account holds the price.
@@ -899,7 +919,7 @@ function viewSettings() {
         <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
         <div class="field"><label for="s-sponsor">Pay fees with this device's GPU, through this service; leave it empty to pay fees in coins</label><input id="s-sponsor" class="mono" value="${esc(settings.sponsor)}" placeholder="Fees paid in coins" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
-        ${window.lattice ? `<label class="check"><input type="checkbox" id="s-page-wallet"${settings.wallet === "page" ? " checked" : ""}> Use this page's passkey wallet, not Selfhold</label>` : ""}
+        ${window.lattice ? `<label class="check"><input type="checkbox" id="s-selfhold"${selfhold() ? " checked" : ""}> Use Selfhold, not this page's passkey wallet</label>` : ""}
         <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
           <button class="pill" type="button" data-reset>Defaults</button>
           <button class="pill dark" type="submit">Save</button>
@@ -1009,6 +1029,7 @@ document.addEventListener("click", async (event) => {
     render();
   } else if ("connect" in d || "createAccount" in d || "signIn" in d) {
     try {
+      if (d.via === "page") await usePageWallet();
       if ("createAccount" in d) await createAccount();
       else if ("signIn" in d) await signIn();
       else await connect();
@@ -1038,8 +1059,10 @@ document.addEventListener("click", async (event) => {
   } else if (d.openRequest) {
     payByRequest(checkout.handle, d.openRequest, d.owner);
   } else if (d.fund) {
-    const { balance } = await inPage.funds(chainPath(), connected);
-    fundSheet({ address: connected, needed: BigInt(d.fund), balance });
+    // Coins for the page's account, whichever wallet is in use.
+    const address = selfhold() ? await inPage.address() : connected;
+    const { balance } = await inPage.funds(chainPath(), address);
+    fundSheet({ address, needed: BigInt(d.fund), balance });
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("reset" in d) {
@@ -1049,10 +1072,12 @@ document.addEventListener("click", async (event) => {
     // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.claim) {
+    if (d.via === "page") await usePageWallet();
     if (!(await connectFirst(`claim @${d.claim}`))) return;
     const handle = d.claim;
     claim(handle);
   } else if (d.buy) {
+    if (d.via === "page") await usePageWallet();
     if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
     const shown = BigInt(d.price);
@@ -1212,13 +1237,14 @@ document.addEventListener("submit", async (event) => {
     location.hash = `#/buy/${handle}`;
   } else if (form.id === "settings") {
     event.preventDefault();
-    const pageWallet = $("#s-page-wallet") ? $("#s-page-wallet").checked : settings.wallet === "page";
-    const switched = pageWallet !== (settings.wallet === "page");
+    const pageWallet = $("#s-selfhold") ? !$("#s-selfhold").checked : !selfhold();
+    const switched = pageWallet === selfhold();
     saveSettings({
       nodes: $("#s-nodes").value.split(/\s+/).filter(Boolean).map((n) => n.replace(/\/$/, "")),
       chain: $("#s-chain").value.trim() || DEFAULTS.chain,
       sponsor: $("#s-sponsor").value.trim().replace(/\/$/, ""),
       wallet: pageWallet ? "page" : "selfhold",
+      walletChosen: settings.walletChosen || switched,
     });
     // Another wallet, another account: the one it remembers, if any, without asking.
     if (switched) connected = (await wallet().address?.().catch(() => null)) ?? null;
@@ -1256,6 +1282,7 @@ document.addEventListener("visibilitychange", () => {
 // Selfhold announces itself when it reaches a page: it is the wallet now, unless Settings choose the page's.
 window.addEventListener("lattice#initialized", async () => {
   awaiting(false);
+  await adoptSelfhold();
   if (selfhold()) {
     try {
       connected = (await window.lattice.address?.()) ?? null;
@@ -1268,6 +1295,7 @@ window.addEventListener("lattice#initialized", async () => {
 // A wallet already connected to this site, or the page's account, answers without asking.
 (async () => {
   try {
+    await adoptSelfhold();
     connected = (await wallet().address?.()) ?? null;
   } catch {}
   if (window.lattice) awaiting(false);
