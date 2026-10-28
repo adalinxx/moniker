@@ -16,7 +16,7 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
   NODE_VERSION: "24"
   LATTICE_NODE_REPO: 0xLattice/lattice-node
-  LATTICE_NODE_REF: 131bcbbbcb8b194bea3533cf35bccdff6b185b6c # lattice-sponsor (#20)
+  LATTICE_NODE_REF: 47c57ae7643363ecf64fa417c4f178bb6775dab7 # the node lattice-sponsor builds on
   LATTICE_SPONSOR_REPO: 0xLattice/lattice-sponsor
   LATTICE_SPONSOR_REF: e26cd7a84ae95c5c989a24eef77322eb8e36a5b8 # pays a purchase for work (lattice-sponsor#1)
   LATTICE_SDK_REPO: 0xLattice/lattice-sdk
