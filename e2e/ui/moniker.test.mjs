@@ -259,6 +259,21 @@ async function asOther(who, hash, body) {
 }
 
 const toast = (page, text) => page.locator(".toast", { hasText: text });
+/**
+ * The sponsor's account paid `amount` since it held `before`. The page's
+ * shares can be blocks, so it may also have won a block's reward meanwhile:
+ * 1000 on the stack's chain.
+ */
+async function expectSponsorPaid(sponsor, before, amount) {
+  const won = (await balance(sponsor.address)) - (before - amount);
+  expect(won >= 0n && won % 1000n === 0n).toBe(true);
+}
+
+/** On the checkout a Claim opens: its own Claim, by the way it offers first. */
+async function claimOnCheckout(page) {
+  await expect(page.locator("#buy-title")).toContainText("Claim");
+  await page.locator("main").getByRole("button", { name: /^Claim @/ }).click();
+}
 /** The row of `@handle` within `scope`, a page or a part of one. */
 const row = (scope, handle) => scope.locator(".row", { has: (scope.page?.() ?? scope).getByRole("link", { name: `@${handle}`, exact: true }) });
 const sheetButton = (page, name) => page.locator("#sheet").getByRole("button", { name, exact: true });
@@ -327,6 +342,7 @@ test("Alice claims @alice from a search, pointed at her, in one approval, then s
   await expect(page.locator(".result")).toContainText("It points at your account");
   const asked = page.context().approvals;
   await page.getByRole("button", { name: "Claim @alice" }).click();
+  await claimOnCheckout(page);
   await expect(page).toHaveURL(/#\/@alice$/);
   await expect(page.locator(".result .badge")).toHaveText("Yours");
   await expect(page.locator(".owned")).toHaveText("Owned by you");
@@ -404,17 +420,19 @@ test("a visitor sees who owns @alice, where it points and that it is shown; the 
   await expect(page.locator(".account-page")).toContainText("This account owns no names.");
 }, { wallet: false });
 
-test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and it points at him", async ({ page }) => {
+test("Alice claims @alice_art, lists it, then reprices it; Bob buys it, and it points at him", async ({ page }) => {
   await openApp(page, alice, "#/names");
   await page.getByLabel("Name", { exact: true }).fill("@Alice_Art");
-  await page.getByLabel("Sell it right away at (optional)").fill("05");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
-  await expect(toast(page, "The price: A whole number of coins")).toBeVisible();
-  await page.getByLabel("Sell it right away at (optional)").fill("50");
-  await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await claimOnCheckout(page);
   await expect(page).toHaveURL(/#\/@alice_art$/);
-  await expect(page.locator(".owned")).toHaveText("Owned by you · for sale · 50");
+  await expect(page.locator(".owned")).toHaveText("Owned by you");
   await page.goto(stack.app + "#/names");
+  await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you");
+  await menu(page, "alice_art", "Sell");
+  await answerSheet(page, "05", "List it");
+  await expect(page.locator("#sheet")).toContainText("A whole number of coins");
+  await answerSheet(page, "50", "List it");
   await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you · for sale · 50");
   await menu(page, "alice_art", "Stop selling");
   await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you");
@@ -519,22 +537,6 @@ test("Alice releases @alice after confirming in the page: it is free, pointing n
   await expect(page.locator(".result .badge")).toHaveText("Available");
 });
 
-test("Claim and show: a new account claims @una and shows it, in one approval", async ({ page }) => {
-  const una = newAccount();
-  await fund(una.address, 100n); // the wallet's fee, 1 by default
-  await openApp(page, una, "#/search/una");
-  const asked = page.context().approvals;
-  // The page draws again once Selfhold has answered; check the box on the page as last drawn.
-  await expect(page.locator(".result .badge")).toHaveText("Available");
-  await page.waitForLoadState("networkidle");
-  await page.getByLabel("Show it as my handle").check();
-  await expect(page.getByLabel("Show it as my handle")).toBeChecked();
-  await page.getByRole("button", { name: "Claim @una" }).click();
-  await expect(page.locator("#points")).toHaveText("Points at you · shown as @una");
-  expect(page.context().approvals).toBe(asked + 1);
-  expect(await names.handleOf(await state(), una.address)).toBe("una");
-});
-
 test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
   const fia = newAccount();
   await fund(fia.address, 100n);
@@ -543,6 +545,7 @@ test("A write asks for no fee: the wallet pays its own, 1 until the person chang
   await expect(page.locator(".result .badge")).toHaveText("Available");
   await page.waitForLoadState("networkidle");
   await page.getByRole("button", { name: "Claim @fia" }).click();
+  await claimOnCheckout(page);
   await until("@fia is Fia's", async () => (await names.resolve(await state(), "fia"))?.owner === fia.address);
   expect(await balance(fia.address)).toBe(99n);
 });
@@ -609,6 +612,7 @@ test("declining in Selfhold sends nothing, and the page says so", async ({ page 
   await page.goto(stack.app + "#/search/frank");
   context.answer = "decline";
   await page.getByRole("button", { name: "Claim @frank" }).click();
+  await claimOnCheckout(page);
   await expect(toast(page, "You declined it in the wallet. Nothing was sent.")).toBeVisible();
   expect(context.declines).toBe(2);
   expect(await held("frank")).toBeUndefined();
@@ -633,8 +637,10 @@ test("buying refuses a price that changed, or a name just taken, and asks the wa
   // A name no one owned, taken while Hal looks at it.
   await page.goto(stack.app + "#/@halsnext");
   await expect(page.getByRole("button", { name: "Claim @halsnext" })).toBeVisible();
-  await claimAs(gwen, "halsnext");
   await page.getByRole("button", { name: "Claim @halsnext" }).click();
+  await expect(page.locator("#buy-title")).toContainText("Claim");
+  await claimAs(gwen, "halsnext");
+  await page.locator("main").getByRole("button", { name: /^Claim @/ }).click();
   await expect(toast(page, "@halsnext was just taken.")).toBeVisible();
   expect(context.approvals).toBe(asked);
   expect(await names.namesOf(await state(), hal.address)).toEqual([]);
@@ -816,8 +822,8 @@ const pageAccount = (page) => page.evaluate(() => JSON.parse(localStorage.getIte
 test("without Selfhold, a passkey makes the account: a visitor claims @pia_pass, and after a reload Show asks the passkey again", async ({ page }) => {
   const app = await withPasskeys(page, "#/@pia_pass");
   await page.getByRole("button", { name: "Claim @pia_pass" }).click();
-  await expect(page.locator("#sheet-title")).toHaveText("Make an account to claim @pia_pass");
-  await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   // The passkey keeps the key: the page stores which passkey, and the address, never the key.
   const kept = await pageAccount(page);
@@ -841,6 +847,7 @@ test("I have a passkey: an account forgotten here comes back from its passkey, w
   const made = await pageAccount(page);
   await page.getByLabel("Name", { exact: true }).fill("ida_pass");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await claimOnCheckout(page);
   await until("@ida_pass", async () => (await held("ida_pass"))?.owner === made.address);
 
   await page.goto(app + "#/settings");
@@ -864,7 +871,9 @@ test("pressed twice, Claim sends once", async ({ page }) => {
   await page.getByLabel("Name", { exact: true }).fill("tia_twice");
   const claimButton = page.getByRole("button", { name: "Claim", exact: true });
   await claimButton.click();
-  await claimButton.click();
+  const onCheckout = page.locator("main").getByRole("button", { name: /^Claim @/ });
+  await onCheckout.click();
+  await onCheckout.click();
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect((await held("tia_twice")).owner).toBe(address);
   // A second write would have gone out by now, behind the first.
@@ -1020,7 +1029,7 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   expect((await held("wes_fee")).owner).toBe(address);
   // The account paid the price only; the sponsor, the fee.
   expect(await balance(address)).toBe(10n);
-  expect(await balance(sponsor.address)).toBe(before - 1n);
+  await expectSponsorPaid(sponsor, before, 1n);
 
   // The sponsor gone: the account has the coins, so they pay the fee, with nothing asked.
   await page.route(`${sponsor.url}/*`, (route) => route.abort("connectionrefused"));
@@ -1060,7 +1069,7 @@ test("an account with no coins buys with this device's GPU: it pays the price an
   // The seller has the price; the account, still nothing; the sponsor paid both.
   expect(await balance(seller.address)).toBe(sellerBefore + 20n);
   expect(await balance(address)).toBe(0n);
-  expect(await balance(sponsor.address)).toBe(sponsorBefore - 21n);
+  await expectSponsorPaid(sponsor, sponsorBefore, 21n);
 
   // Past the 100 this service pays of a price: coins, and why.
   await page.goto(app + "#/buy/yan_dear");
@@ -1116,7 +1125,8 @@ test("a free name with the GPU's fee service down, and no coins: the page says i
   await page.route(`${sponsor}/*`, (route) => route.abort("connectionrefused"));
   await withPasskeys(page, "#/@xia_down", { settings: { sponsor } });
   await page.getByRole("button", { name: "Claim @xia_down" }).click();
-  await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await claimOnCheckout(page);
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   await expect(page.locator("#sheet-body")).toContainText("Its fee is usually paid with this device's GPU, but that isn't working right now: try again in a few minutes, or send coins");
   await sheetButton(page, "Cancel").click();
@@ -1127,7 +1137,7 @@ test("where passkeys can't make a key, the key is kept in this browser: it claim
   const app = await withPasskeys(page, "#/@bea_key", { prf: false });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(app).origin });
   await page.getByRole("button", { name: "Claim @bea_key" }).click();
-  await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
   // Said before the write goes on, and the key offered to copy.
   await expect(page.locator("#sheet-title")).toHaveText("Your key is kept in this browser only");
   // A choice to make, not one to put off: no Cancel, and Escape doesn't close it.
@@ -1135,6 +1145,7 @@ test("where passkeys can't make a key, the key is kept in this browser: it claim
   await page.keyboard.press("Escape");
   await expect(page.locator("#sheet")).toBeVisible();
   await sheetButton(page, "Copy the key").click();
+  await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   const kept = await pageAccount(page);
   const keyOf = async () => sdk.accountFromPrivateKey(Uint8Array.from(Buffer.from(await page.evaluate(() => navigator.clipboard.readText()), "hex"))).address;
@@ -1175,6 +1186,7 @@ test("with Selfhold too, Settings switch to the page's wallet and back: each wri
   expect(made.address).not.toBe(kit.address);
   await page.getByLabel("Name", { exact: true }).fill("kit_page");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect((await held("kit_page")).owner).toBe(made.address);
   await page.goto(app + "#/names");
@@ -1190,6 +1202,7 @@ test("with Selfhold too, Settings switch to the page's wallet and back: each wri
   await expect(row(page, "kit_page")).toHaveCount(0);
   await page.getByLabel("Name", { exact: true }).fill("kit_self");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
+  await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect((await held("kit_self")).owner).toBe(kit.address);
   expect(page.context().approvals).toBe(asked + 1);
@@ -1227,7 +1240,9 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
   });
   await withPasskeys(page, "#/@ola_pass");
   await page.getByRole("button", { name: "Claim @ola_pass" }).click();
-  await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await expect(page.locator("main")).toContainText("This needs 1 more coin than your account holds.");
+  await page.getByRole("button", { name: "Add coins", exact: true }).click();
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   const { address } = await pageAccount(page);
   await expect(page.locator("#sheet-body")).toContainText(`needs 1 coin, and your account holds 0`);
@@ -1236,7 +1251,8 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
   expect(await held("ola_pass")).toBeUndefined();
 
   await fund(address, 10n);
-  await page.getByRole("button", { name: "Claim @ola_pass" }).click();
+  await page.reload();
+  await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect(await balance(address)).toBe(9n);
 }, { wallet: false });
@@ -1304,7 +1320,8 @@ test("a fee sponsor that asks more work than the page will do: it asks for coins
   });
   await withPasskeys(page, "#/@dee_pass", { settings: { sponsor } });
   await page.getByRole("button", { name: "Claim @dee_pass" }).click();
-  await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await claimOnCheckout(page);
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay for it in reasonable time, so send coins to your account ID");
   expect(asked).toEqual(["/sponsor/work"]);
@@ -1334,12 +1351,13 @@ for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu",
     await withPasskeys(page, `#/@${handle}`, { settings: { sponsor: sponsor.url } });
     const before = await balance(sponsor.address);
     await page.getByRole("button", { name: `Claim @${handle}` }).click();
-    await sheetButton(page, "Create a passkey").click();
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await claimOnCheckout(page);
     await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
     const { address } = await pageAccount(page);
     expect((await held(handle)).owner).toBe(address);
     expect(await balance(address)).toBe(0n);
-    expect(await balance(sponsor.address)).toBe(before - 1n);
+    await expectSponsorPaid(sponsor, before, 1n);
     const workers = await page.evaluate(() => window.workersStarted);
     if (gpu) expect(workers).toBe(0);
     else expect(workers).toBeGreaterThan(0);
