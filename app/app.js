@@ -484,15 +484,10 @@ function resultRow(r) {
   return `<div class="row"><span class="mono">@${esc(r.handle)}</span><div class="end">${tail}</div></div>`;
 }
 
-/** Claiming a free name: an optional price to list it at once, and Claim. */
+/** Claiming a free name: Claim, to the checkout. */
 function claimForm(handle) {
   return `
     <form id="claim" class="stack" data-handle="${esc(handle)}" style="width: 100%">
-      <div class="field">
-        <label for="claim-price">Sell it right away at (optional)</label>
-        <input id="claim-price" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Not for sale">
-      </div>
-      <label class="check"><input type="checkbox" id="claim-show"> Show it as my handle</label>
       <p class="note" style="margin: 0">It points at your account; you can point it elsewhere any time.</p>
       <button class="pill accent big" type="submit">Claim @${esc(handle)}</button>
     </form>`;
@@ -588,7 +583,7 @@ function connectPanel(why, alone = false) {
 // ---------------------------------------------------------------- checkout
 
 // The checkout's choice of how to pay, kept across its redraws.
-const checkout = { handle: null, method: null, listAt: "", show: false };
+const checkout = { handle: null, method: null };
 
 /** The ways to pay here, the first the one to offer first. */
 function payMethods() {
@@ -616,12 +611,10 @@ async function viewBuy(handle, state) {
   // No owner: a claim, for 0.
   const free = !entry;
   const price = free ? 0n : entry.price;
-  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null, listAt: "", show: false });
+  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null });
   const methods = payMethods();
   const method = methods.includes(checkout.method) ? checkout.method : methods[0];
   checkout.method = method;
-  // A request names no account, so it can't list the name or show it as one's handle.
-  const plain = free && (checkout.listAt || checkout.show) && (method === "request" || (method === "selfhold" && !selfhold()));
 
   const label = { account: "Your passkey account", selfhold: "Selfhold", request: "Another wallet or device" };
   const hint = { account: "Here, with your passkey", selfhold: "The browser extension", request: "Scan a code, or copy a request" };
@@ -652,7 +645,6 @@ async function viewBuy(handle, state) {
           <div><dt>Price</dt><dd>${free ? "0: no one owns it yet" : `${coins(price)}, paid to its owner, ${accountLink(entry.owner)}`}</dd></div>
         </dl>
         <p style="margin: 0">It becomes the paying account's, pointing at it; it can point elsewhere any time.</p>
-        ${plain ? `<p class="note" style="margin: 0">A request claims it only: sell it or show it from its page after.</p>` : ""}
       </section>
       <fieldset class="methods">
         <legend>Pay with</legend>
@@ -873,8 +865,6 @@ async function viewNames(state) {
       <form id="claim-new" class="panel stack section" aria-labelledby="claim-title">
         <h2 id="claim-title" style="margin: 0">Claim a name</h2>
         <div class="field"><label for="new-handle">Name</label><input id="new-handle" class="mono" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="yourname"></div>
-        <div class="field"><label for="new-price">Sell it right away at (optional)</label><input id="new-price" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Not for sale"></div>
-        <label class="check"><input type="checkbox" id="new-show"> Show it as my handle</label>
         <button class="pill accent" type="submit" style="align-self: flex-start">Claim</button>
       </form>
     </main>`;
@@ -1061,7 +1051,7 @@ document.addEventListener("click", async (event) => {
   } else if (d.claim) {
     if (!(await connectFirst(`claim @${d.claim}`))) return;
     const handle = d.claim;
-    claim(handle, checkout.handle === handle ? checkout.listAt : "", checkout.handle === handle && checkout.show);
+    claim(handle);
   } else if (d.buy) {
     if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
@@ -1190,15 +1180,15 @@ async function releaseHandle(handle, entry) {
   act(`Releasing @${handle}`, (s, me) => names.release(s, me, handle), async (s) => (await held(s, handle)) === undefined);
 }
 
-/** Claims `handle` if it is still free, pointed at you, for sale at `price` if one was typed, and shown as your handle with `show`. */
-function claim(handle, price, show) {
+/** Claims `handle` if it is still free, pointed at you. */
+function claim(handle) {
   act(
     `Claiming @${handle}`,
     async (state, me) => {
       if (await held(state, handle)) throw new Error(`@${handle} was just taken.`);
-      return names.claim(state, me, handle, { price: price === "" ? undefined : BigInt(price), point: true, show });
+      return names.claim(state, me, handle, { point: true });
     },
-    async (s, me) => (await held(s, handle))?.owner === me && (!show || (await names.handleOf(s, me)) === handle),
+    async (s, me) => (await held(s, handle))?.owner === me,
     () => {
       location.hash = `#/@${handle}`;
       render();
@@ -1217,11 +1207,8 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const typed = form.id === "claim-new";
     const handle = typed ? asHandle($("#new-handle").value) : form.dataset.handle;
-    const price = (typed ? $("#new-price") : $("#claim-price")).value.trim();
-    const show = (typed ? $("#new-show") : $("#claim-show")).checked;
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
-    if (price && priceProblem(price)) return toast(`The price: ${priceProblem(price)}`, { bad: true });
-    Object.assign(checkout, { handle, method: null, listAt: price, show });
+    Object.assign(checkout, { handle, method: null });
     location.hash = `#/buy/${handle}`;
   } else if (form.id === "settings") {
     event.preventDefault();

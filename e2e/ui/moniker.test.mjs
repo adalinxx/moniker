@@ -410,18 +410,19 @@ test("a visitor sees who owns @alice, where it points and that it is shown; the 
   await expect(page.locator(".account-page")).toContainText("This account owns no names.");
 }, { wallet: false });
 
-test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and it points at him", async ({ page }) => {
+test("Alice claims @alice_art, lists it, then reprices it; Bob buys it, and it points at him", async ({ page }) => {
   await openApp(page, alice, "#/names");
   await page.getByLabel("Name", { exact: true }).fill("@Alice_Art");
-  await page.getByLabel("Sell it right away at (optional)").fill("05");
-  await page.getByRole("button", { name: "Claim", exact: true }).click();
-  await expect(toast(page, "The price: A whole number of coins")).toBeVisible();
-  await page.getByLabel("Sell it right away at (optional)").fill("50");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
   await claimOnCheckout(page);
   await expect(page).toHaveURL(/#\/@alice_art$/);
-  await expect(page.locator(".owned")).toHaveText("Owned by you · for sale · 50");
+  await expect(page.locator(".owned")).toHaveText("Owned by you");
   await page.goto(stack.app + "#/names");
+  await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you");
+  await menu(page, "alice_art", "Sell");
+  await answerSheet(page, "05", "List it");
+  await expect(page.locator("#sheet")).toContainText("A whole number of coins");
+  await answerSheet(page, "50", "List it");
   await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you · for sale · 50");
   await menu(page, "alice_art", "Stop selling");
   await expect(row(page, "alice_art").locator(".label")).toHaveText("points at you");
@@ -524,23 +525,6 @@ test("Alice releases @alice after confirming in the page: it is free, pointing n
   expect((await held("alice_lend")).pointer).toBe(alice.address);
   await page.goto(stack.app + "#/search/alice");
   await expect(page.locator(".result .badge")).toHaveText("Available");
-});
-
-test("Claim and show: a new account claims @una and shows it, in one approval", async ({ page }) => {
-  const una = newAccount();
-  await fund(una.address, 100n); // the wallet's fee, 1 by default
-  await openApp(page, una, "#/search/una");
-  const asked = page.context().approvals;
-  // The page draws again once Selfhold has answered; check the box on the page as last drawn.
-  await expect(page.locator(".result .badge")).toHaveText("Available");
-  await page.waitForLoadState("networkidle");
-  await page.getByLabel("Show it as my handle").check();
-  await expect(page.getByLabel("Show it as my handle")).toBeChecked();
-  await page.getByRole("button", { name: "Claim @una" }).click();
-  await claimOnCheckout(page);
-  await expect(page.locator("#points")).toHaveText("Points at you · shown as @una");
-  expect(page.context().approvals).toBe(asked + 1);
-  expect(await names.handleOf(await state(), una.address)).toBe("una");
 });
 
 test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
