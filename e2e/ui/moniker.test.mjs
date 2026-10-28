@@ -451,11 +451,12 @@ test("Alice claims @alice_art, lists it, then reprices it; Bob buys it, and it p
     await bobPage.getByRole("link", { name: "Buy @alice_art for 40" }).click();
     await expect(bobPage.getByRole("heading", { name: "Buy @alice_art" })).toBeVisible();
     await expect(bobPage.locator(".summary")).toContainText("Price40, paid to its owner");
-    // With Selfhold the wallet here, it is the way to pay offered first; the passkey account and a request, the others.
-    await expect(bobPage.getByRole("radio", { name: /^Selfhold/ })).toBeChecked();
+    // With Selfhold for Chrome the wallet here, it is the way to pay offered first; Selfhold's window and a request, the others.
+    await expect(bobPage.getByRole("radio", { name: /^Selfhold for Chrome/ })).toBeChecked();
     await bobPage.getByText("Other ways to pay").click();
     await expect(bobPage.getByRole("radio", { name: /^Another wallet or device/ })).not.toBeChecked();
-    await expect(bobPage.getByRole("radio", { name: /^Your passkey account/ })).not.toBeChecked();
+    await expect(bobPage.getByRole("radio", { name: /^Selfhold\s*In a window/ })).not.toBeChecked();
+    await expect(bobPage.locator("main")).toContainText("Selfhold for Chrome's account.");
     await expect(bobPage.getByText("Selfhold shows the payment and its fee, set there, for you to approve.")).toBeVisible();
     expect(bobPage.context().approvals).toBe(asked);
     await bobPage.getByRole("button", { name: "Pay 40 with Selfhold" }).click();
@@ -537,7 +538,7 @@ test("Alice releases @alice after confirming in the page: it is free, pointing n
   await expect(page.locator(".result .badge")).toHaveText("Available");
 });
 
-test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
+test("A write asks for no fee: the wallet sets its own, from what the node asks", async ({ page }) => {
   const fia = newAccount();
   await fund(fia.address, 100n);
   await until("Fia is funded", async () => (await balance(fia.address)) === 100n);
@@ -547,7 +548,8 @@ test("A write asks for no fee: the wallet pays its own, 1 until the person chang
   await page.getByRole("button", { name: "Claim @fia" }).click();
   await claimOnCheckout(page);
   await until("@fia is Fia's", async () => (await names.resolve(await state(), "fia"))?.owner === fia.address);
-  expect(await balance(fia.address)).toBe(99n);
+  // The stack's node asks no fee (its floor, 0, while blocks have room), so Selfhold pays none, and nothing else moves.
+  expect(await balance(fia.address)).toBe(100n);
 });
 
 test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {
