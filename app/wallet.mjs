@@ -394,6 +394,7 @@ async function grind(url, work, effort, progress) {
         const { credit } = await ask(url, "shares", { assignment: work.assignment, nonce: String(nonce) });
         if (BigInt(credit) >= fee) finish(true);
       } catch (error) {
+        console.info(`[fee] share refused: ${error.message}`);
         // A doubled share earns nothing; expired work, or a full block, calls for new work.
         if (/duplicateShare|missesShareTarget/.test(error.message)) return;
         if (error.status === 400 || error.status === 503) finish(false);

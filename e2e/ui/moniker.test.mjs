@@ -230,13 +230,16 @@ const test = (name, body, { wallet: withWallet = true, expectedErrors, timeout =
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => message.type() === "error" && !expectedErrors?.test(message.text()) && errors.push(message.text()));
+    // What the page's wallet heard from the fee sponsor, said only on a failure.
+    const notes = [];
+    page.on("console", (message) => message.text().startsWith("[fee]") && notes.push(message.text()));
     try {
       await body({ page });
       if (errors.length) throw new Error(`page errors: ${errors.join(" | ")}`);
     } catch (error) {
       const shown = await page.locator("#app").innerText().catch(() => "(no page)");
       const said = await page.locator("#toasts, #alerts").allInnerTexts().catch(() => []);
-      error.message += `\n--- page at ${page.url()}:\n${shown.slice(0, 800)}\n--- status: ${said.join(" ") || "none"}\n--- wallet approvals: ${context.approvals ?? "n/a"}\n--- wallet said: ${context.walletNotes?.join(" || ") || "none"}\n--- page errors: ${errors.join(" | ") || "none"}`;
+      error.message += `\n--- page at ${page.url()}:\n${shown.slice(0, 800)}\n--- status: ${said.join(" ") || "none"}\n--- wallet approvals: ${context.approvals ?? "n/a"}\n--- wallet said: ${context.walletNotes?.join(" || ") || "none"}\n--- page errors: ${errors.join(" | ") || "none"}\n--- fee notes: ${[...new Set(notes)].slice(0, 20).join(" | ") || "none"}`;
       throw error;
     } finally {
       await context.close();
@@ -432,6 +435,7 @@ test("Alice claims @alice_art listed at once, reprices it; Bob buys it, and it p
     await expect(bobPage.locator(".summary")).toContainText("Price40, paid to its owner");
     // With Selfhold here, it is the way to pay offered first; a request is the other.
     await expect(bobPage.getByRole("radio", { name: /^Selfhold/ })).toBeChecked();
+    await bobPage.getByText("Other ways to pay").click();
     await expect(bobPage.getByRole("radio", { name: /^Another wallet or device/ })).not.toBeChecked();
     await expect(bobPage.getByRole("radio", { name: /^Your passkey account/ })).toHaveCount(0);
     await expect(bobPage.getByText("Selfhold shows the payment and its fee, set there, for you to approve.")).toBeVisible();
@@ -986,6 +990,7 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   const sponsor = await running.sponsor((address) => fund(address, 1000n));
   const app = await withPasskeys(page, "#/buy/wes_fee", { settings: { sponsor: sponsor.url } });
   await page.getByRole("button", { name: "Create a passkey" }).click();
+  await expect(page.getByRole("button", { name: "Add coins" })).toBeVisible();
   const { address } = await pageAccount(page);
   await fund(address, 40n);
   await page.goto(app + "#/@wes_fee");
