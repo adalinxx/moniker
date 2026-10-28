@@ -1028,7 +1028,108 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   await page.getByRole("button", { name: "Pay 5 and buy @wes_down" }).click();
   await expect(page.locator(".result .badge")).toHaveText("Yours");
   expect(await balance(address)).toBe(4n);
-}, { wallet: false, expectedErrors: /status of 503|ERR_CONNECTION_REFUSED/ });
+}, { wallet: false, expectedErrors: /status of (400|503)|ERR_CONNECTION_REFUSED/ });
+
+test("an account with no coins buys with this device's GPU: it pays the price and the fee; past what the service pays, it asks for coins", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const seller = newAccount();
+  await claimAs(seller, "yan_gpu", { price: 20n });
+  await claimAs(seller, "yan_dear", { price: 150n });
+  const sponsor = await running.sponsor((address) => fund(address, 1000n));
+  const app = await withPasskeys(page, "#/buy/yan_gpu", { settings: { sponsor: sponsor.url } });
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  // Nothing in the account, and the GPU offered first; coins, second.
+  await expect(page.getByRole("button", { name: "Pay with this device's GPU" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add coins instead" })).toBeVisible();
+  const main = page.locator("main");
+  await expect(main).toContainText("This device's GPU can pay the 20 your account is short, as it pays the fee.");
+  await expect(main).not.toContainText(/sponsor/i);
+  const { address } = await pageAccount(page);
+  const [sellerBefore, sponsorBefore] = [await balance(seller.address), await balance(sponsor.address)];
+  await page.evaluate(() => {
+    window.said = [];
+    new MutationObserver(() => window.said.push(document.querySelector("#toasts").innerText)).observe(document.querySelector("#toasts"), { subtree: true, childList: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await expect(page.locator(".result .badge")).toHaveText("Yours", { timeout: 120_000 });
+  expect((await page.evaluate(() => window.said)).join(" ")).toContain("Buying @yan_gpu: paying with this device's GPU");
+  expect((await held("yan_gpu")).owner).toBe(address);
+  // The seller has the price; the account, still nothing; the sponsor paid both.
+  expect(await balance(seller.address)).toBe(sellerBefore + 20n);
+  expect(await balance(address)).toBe(0n);
+  expect(await balance(sponsor.address)).toBe(sponsorBefore - 21n);
+
+  // Past the 100 this service pays of a price: coins, and why.
+  await page.goto(app + "#/buy/yan_dear");
+  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not a price this high, so send coins");
+  await sheetButton(page, "Cancel").click();
+  expect((await held("yan_dear")).owner).toBe(seller.address);
+}, { wallet: false, expectedErrors: /status of 400/ });
+
+test("a fee sponsor that changes what it pays the account: the page signs nothing, and sends nothing", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const seller = newAccount();
+  await claimAs(seller, "yan_bent", { price: 20n });
+  const sponsor = await running.sponsor((address) => fund(address, 1000n));
+  // Its answers, bent: its credit to the account one more than asked, then
+  // paid to someone else.
+  const bends = [
+    (actions) => (actions.at(-2).delta = String(BigInt(actions.at(-2).delta) + 1n)),
+    (actions) => (actions.at(-2).owner = seller.address),
+  ];
+  let bent = 0;
+  await page.route(`${sponsor.url}/sponsor`, async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    if (json.transaction) bends[bent++ % bends.length](json.transaction.body.accountActions);
+    await route.fulfill({ response, json });
+  });
+  await withPasskeys(page, "#/buy/yan_bent", { settings: { sponsor: sponsor.url } });
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  const { address } = await pageAccount(page);
+  const sellerBefore = await balance(seller.address);
+  for (let i = 0; i < bends.length; i++) {
+    await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+    await expect(page.getByText("The fee sponsor changed the transaction. Nothing was sent.").first()).toBeVisible({ timeout: 120_000 });
+    expect(bent).toBe(i + 1);
+    expect((await held("yan_bent")).owner).toBe(seller.address);
+    await page.reload();
+  }
+  expect(await balance(seller.address)).toBe(sellerBefore);
+  expect(await balance(address)).toBe(0n);
+}, { wallet: false, expectedErrors: /status of (400|503)/ });
+
+test("a fee sponsor from before it paid prices ignores the ask: the page sends nothing, and asks for coins, saying so", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const seller = newAccount();
+  await claimAs(seller, "zed_old", { price: 5n });
+  // It answers work for the fee alone, with no `pay`.
+  const sponsor = "http://localhost:27199/sponsor";
+  const asked = [];
+  await page.route(`${sponsor}/*`, (route) => {
+    asked.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ json: { client: "c", assignment: "a", prefixHex: "00", shareTarget: "f".repeat(64), startNonce: "0", count: "4294967296", fee: "1", sharesForFee: "1", expiresInMilliseconds: "30000" } });
+  });
+  await withPasskeys(page, "#/buy/zed_old", { settings: { sponsor } });
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not prices, so send coins");
+  expect(asked).toEqual(["/sponsor/work"]);
+  await sheetButton(page, "Cancel").click();
+  expect((await held("zed_old")).owner).toBe(seller.address);
+}, { wallet: false });
 
 test("a free name with the GPU's fee service down, and no coins: the page says its fee is usually paid with the GPU, and to try again", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
@@ -1229,7 +1330,7 @@ test("a fee sponsor that asks more work than the page will do: it asks for coins
   await page.getByRole("button", { name: "Claim @dee_pass" }).click();
   await sheetButton(page, "Create a passkey").click();
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
-  await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay its fee in reasonable time, so send coins to your account ID");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay for it in reasonable time, so send coins to your account ID");
   expect(asked).toEqual(["/sponsor/work"]);
   await sheetButton(page, "Cancel").click();
   expect(await held("dee_pass")).toBeUndefined();
@@ -1266,8 +1367,9 @@ for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu",
     const workers = await page.evaluate(() => window.workersStarted);
     if (gpu) expect(workers).toBe(0);
     else expect(workers).toBeGreaterThan(0);
-    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next.
-  }, { wallet: false, expectedErrors: /status of 503/ });
+    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next,
+    // and a share of work from before the chain moved on is refused (400) until the page asks for more.
+  }, { wallet: false, expectedErrors: /status of (400|503)/ });
 }
 
 // ---------------------------------------------------------------- the handle picker, in another app's page

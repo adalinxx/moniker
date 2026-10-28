@@ -26,8 +26,9 @@ let pace = null; // hashes per millisecond this device last managed
 /** A write the account can't pay for: it needs `needed` coins and holds `balance`. */
 export class NeedsCoins extends Error {
   /**
-   * `sponsor`: why the sponsor didn't pay the fee, if it was asked: "dear",
-   * it wants more work than this page will do; "down", it can't now.
+   * `sponsor`: why the sponsor didn't pay, if it was asked: "dear", it wants
+   * more work than this page will do; "down", it can't now; "most", it pays
+   * fees, but not this much of a price; "fees", it pays fees only.
    */
   constructor({ address, needed, balance, sponsor = null }) {
     super(`Your account needs ${needed} ${needed === 1n ? "coin" : "coins"} for this and holds ${balance}.`);
@@ -42,6 +43,10 @@ export const workDevice = async () => ((await gpuGrinder()) ? "GPU" : "processor
 class TooMuchWork extends Error {}
 /** The sponsor can't pay the fee now: not answering, busy or sold out, or taking no work. */
 class NoSponsor extends Error {}
+/** The sponsor won't pay this much of a price for work (its --most-pay). */
+class NoPay extends Error {}
+/** The sponsor pays no prices at all: one from before it could. */
+class FeesOnly extends NoPay {}
 
 const saved = () => {
   try {
@@ -230,7 +235,8 @@ export function embeddedWallet({ hosts, sponsor }) {
      *
      * With a sponsor, the fee is paid in work first, so the account spends only
      * what the write pays; where the sponsor can't help (unreachable, sold out,
-     * or too slow here), from the account's coins if it has them.
+     * or too slow here), from the account's coins if it has them. What the
+     * account is short of the payments, the sponsor pays too, for more work.
      */
     async writeRecords(request, { progress = () => {} } = {}) {
       const record = saved();
@@ -245,17 +251,17 @@ export function embeddedWallet({ hosts, sponsor }) {
       const fee = request.fee === undefined ? at.fee : BigInt(request.fee) > at.fee ? BigInt(request.fee) : at.fee;
       const build = (fee) => transaction({ owner, actions: request.actions, payments, fee, nonce, chainPath: request.chainPath });
       const covered = at.balance >= paying + fee;
+      const short = paying > at.balance ? paying - at.balance : 0n;
       const url = sponsor();
-      if (fee > 0n && url && at.balance >= paying) {
+      if (fee > 0n && url) {
         let sponsored;
         try {
           // With coins to fall back on, a busy sponsor isn't waited for.
-          sponsored = await sponsorFee(url, build(0n), progress, { wait: !covered });
+          sponsored = await sponsorFee(url, build(0n), progress, { wait: !covered, pay: short });
         } catch (error) {
           if (!covered) {
-            if (error instanceof TooMuchWork || error instanceof NoSponsor) {
-              throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsor: error instanceof TooMuchWork ? "dear" : "down" });
-            }
+            const why = error instanceof TooMuchWork ? "dear" : error instanceof NoSponsor ? "down" : error instanceof FeesOnly ? "fees" : error instanceof NoPay ? "most" : null;
+            if (why) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsor: why });
             throw error;
           }
         }
@@ -284,6 +290,8 @@ async function ask(url, path, body) {
     throw new NoSponsor(error.name === "TimeoutError" ? "The fee sponsor didn't answer." : "The fee sponsor can't be reached.");
   }
   const text = await response.text();
+  // It pays fees, but not this much of a price: from /work, or /sponsor with a token already earned.
+  if (response.status === 400 && /pays at most/.test(text)) throw new NoPay(text);
   if (!response.ok) throw Object.assign(new Error(`The fee sponsor: ${text || response.status}`), { status: response.status });
   return JSON.parse(text);
 }
@@ -301,18 +309,23 @@ const canonical = (value) =>
 
 /**
  * The sponsored transaction for `draft` (fee 0, one signer): the sponsor's
- * fee debit and signature added, nothing else changed. Earns the fee first,
- * grinding the sponsor's shares, when this browser's credit there is short.
+ * fee debit and signature added, and with a `pay`, its credit of `pay` to the
+ * account; nothing else changed. Earns both first, grinding the sponsor's
+ * shares, when this browser's credit there is short.
  */
-async function sponsorFee(url, draft, progress, { wait = true } = {}) {
+async function sponsorFee(url, draft, progress, { wait = true, pay = 0n } = {}) {
   const chain = draft.chainPath.join("/");
+  const paid = pay > 0n ? { pay: String(pay) } : {};
   let client = null;
   try {
     client = localStorage.getItem(SPONSOR_CLIENT);
   } catch {}
   const sponsored = async () => {
-    const { transaction: signed, fee } = await ask(url, "sponsor", { client, transaction: { signatures: {}, body: toWire(draft) } });
-    return { ...check(draft, fromWire(signed.body), BigInt(fee)), signatures: signed.signatures };
+    const answer = await ask(url, "sponsor", { client, transaction: { signatures: {}, body: toWire(draft) }, ...paid });
+    // A sponsor from before `pay` ignores it, and signs the fee alone.
+    if (pay > 0n && BigInt(answer.pay ?? 0) !== pay) throw new FeesOnly("The fee sponsor pays fees only.");
+    const { transaction: signed, fee } = answer;
+    return { ...check(draft, fromWire(signed.body), BigInt(fee), pay), signatures: signed.signatures };
   };
   if (client) {
     try {
@@ -333,7 +346,7 @@ async function sponsorFee(url, draft, progress, { wait = true } = {}) {
     if (Date.now() > deadline) throw new NoSponsor("The fee sponsor took none of this device's work.");
     let work;
     try {
-      work = await ask(url, "work", { ...(client && { client }), chain });
+      work = await ask(url, "work", { ...(client && { client }), chain, ...paid });
     } catch (error) {
       // Busy, or this block's fees all sold: a block or two from now, it has work again.
       if (error.status === 503 && Date.now() < patience) {
@@ -347,6 +360,7 @@ async function sponsorFee(url, draft, progress, { wait = true } = {}) {
       client = null;
       continue;
     }
+    if (pay > 0n && BigInt(work.pay ?? 0) !== pay) throw new FeesOnly("The fee sponsor pays fees only.");
     client = work.client;
     try {
       localStorage.setItem(SPONSOR_CLIENT, client);
@@ -355,12 +369,19 @@ async function sponsorFee(url, draft, progress, { wait = true } = {}) {
   }
 }
 
-/** `sponsored` if it is `draft` with only the sponsor's fee added; else throws. */
-function check(draft, sponsored, fee) {
+/**
+ * `sponsored` if it is `draft` with only the sponsor's debit for the fee and
+ * `pay` added, and with a `pay`, its credit of exactly `pay` to the draft's
+ * signer; else throws.
+ */
+function check(draft, sponsored, fee, pay = 0n) {
   const sponsor = sponsored.signers[1];
+  const added = pay > 0n ? 2 : 1;
+  const credit = pay > 0n ? sponsored.accountActions.at(-2) : null;
   const debit = sponsored.accountActions.at(-1);
-  const same = canonical(toWire({ ...sponsored, accountActions: sponsored.accountActions.slice(0, -1), signers: sponsored.signers.slice(0, 1) })) === canonical(toWire(draft));
-  if (!same || sponsored.signers.length !== 2 || sponsor === draft.signers[0] || debit?.owner !== sponsor || debit.delta >= 0n || -debit.delta > fee) {
+  const same = canonical(toWire({ ...sponsored, accountActions: sponsored.accountActions.slice(0, -added), signers: sponsored.signers.slice(0, 1) })) === canonical(toWire(draft));
+  const credited = pay === 0n || (credit?.owner === draft.signers[0] && credit.delta === pay);
+  if (!same || !credited || sponsored.signers.length !== 2 || sponsor === draft.signers[0] || debit?.owner !== sponsor || debit.delta >= 0n || -debit.delta > fee + pay) {
     throw new Error("The fee sponsor changed the transaction. Nothing was sent.");
   }
   return { body: sponsored };
@@ -373,12 +394,14 @@ function check(draft, sponsored, fee) {
  * TooMuchWork once this device's pace shows the fee would take too long.
  */
 async function grind(url, work, effort, progress) {
-  const fee = BigInt(work.fee);
+  // What the credit buys: the fee, and what the sponsor pays the account.
+  const fee = BigInt(work.fee) + BigInt(work.pay ?? 0);
   // A share is worth 2^256 / (target + 1) hashes, expected.
   const needed = Number(BigInt(work.sharesForFee) * (2n ** 256n / (BigInt(`0x${work.shareTarget}`) + 1n)));
   if (pace && needed / pace > LONGEST) throw new TooMuchWork();
   const device = await workDevice();
-  if (!effort.began) progress(`paying the fee with this device's ${device}…`);
+  const what = BigInt(work.pay ?? 0) > 0n ? "paying" : "paying the fee";
+  if (!effort.began) progress(`${what} with this device's ${device}…`);
 
   let settle;
   const outcome = new Promise((resolve, reject) => (settle = { resolve, reject }));
@@ -414,7 +437,7 @@ async function grind(url, work, effort, progress) {
     pace = effort.hashes / spent;
     const expected = needed / pace;
     if (expected > LONGEST) return finish(false, new TooMuchWork());
-    progress(`paying the fee with this device's ${device}, about ${seconds(Math.max(1000, expected - spent))} more…`);
+    progress(`${what} with this device's ${device}, about ${seconds(Math.max(1000, expected - spent))} more…`);
   };
 
   const timer = setTimeout(() => finish(false), Number(work.expiresInMilliseconds));
@@ -446,7 +469,7 @@ async function hasher(work, found, hashed) {
     const done = (async () => {
       let next = BigInt(work.startNonce);
       const end = next + BigInt(work.count);
-      let batch = 1 << 20;
+      let batch = 1 << 16;
       try {
         while (!stopped && next < end) {
           const size = end - next < BigInt(batch) ? Number(end - next) : batch;
@@ -456,8 +479,11 @@ async function hasher(work, found, hashed) {
           next += BigInt(size);
           hashed(size);
           shares.forEach(found);
-          // Batches of a tenth of a second or so: few round trips, and the chip still draws the page.
-          if (performance.now() - began < 100 && batch < 1 << 26) batch *= 2;
+          // Batches of a tenth of a second or so: few round trips, the chip still draws the page,
+          // and a share reaches the sponsor before the chain moves past its work.
+          const spent = performance.now() - began;
+          if (spent < 100 && batch < 1 << 26) batch *= 2;
+          else if (spent > 400 && batch > 1 << 12) batch /= 2;
         }
       } finally {
         job.close();

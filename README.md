@@ -102,8 +102,11 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   first offered, and the others folded under "Other ways to pay". Only Pay
   asks a wallet anything, and the name comes pointing at the paying account.
   - *Your passkey account*: the page's wallet. Its fee reads "Free, paid
-    with this device's GPU", so the account pays the price alone; short of
-    it, the page offers Add coins.
+    with this device's GPU", so the account pays the price alone. Short of
+    it, the page offers "Pay with this device's GPU" first: the GPU earns
+    what the account lacks as it earns the fee, from a sponsor that pays
+    prices (`--most-pay`). Add coins comes second, and is what remains where
+    the sponsor won't pay that much.
   - *Selfhold*: the connected account. With the page's wallet in use, a
     `lattice://write` request Selfhold opens for an account picked there; not
     installed, where to add it.
@@ -145,7 +148,7 @@ phones included:
   With a **fee sponsor** set, every fee is paid in this device's work
   first, and the page says only that this device's GPU pays it: by default
   Moniker's sponsor, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
-  (lattice-node's `lattice-sponsor`), changed or turned off in Settings
+  (0xLattice/lattice-sponsor), changed or turned off in Settings
   ("Pay fees with this device's GPU"). Where the sponsor can't help (no
   answer in 15 s, busy, sold out, taking no work for two minutes, or too slow
   here), the account's coins pay the fee if it has them, unasked; if not, the
@@ -154,7 +157,8 @@ phones included:
   WebGPU (`app/share-gpu.mjs`), or where it has none, in Web Workers on its
   processor (`app/share-worker.mjs`); both hash as `app/sha256.mjs` lays out.
   The sponsor then adds the fee and co-signs. The page signs only if the
-  sponsor added that one fee debit and itself as second signer. With no
+  sponsor added that one fee debit and itself as second signer, and, when it
+  pays some of the price too, one credit of exactly that to the account. With no
   coins to fall back on, a sponsor busy or sold out for the block is asked
   again for up to a minute. With no sponsor, or none that can help and too
   few coins, the page asks for coins and shows the account ID to send them

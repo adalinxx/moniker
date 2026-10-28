@@ -2,7 +2,8 @@
 // a Moniker chain from a fast test spec, with public reads and submits, and a
 // static server for the repository so the real app/ page runs against it.
 //
-//   LATTICE=<lattice-node>/.build/debug/lattice   (lattice-sponsor beside it)
+//   LATTICE=<lattice-node>/.build/debug/lattice
+//   LATTICE_SPONSOR=<lattice-sponsor>/.build/debug/lattice-sponsor   (default: beside lattice)
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js
 import { execFileSync, spawn } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -82,8 +83,8 @@ export async function start() {
   const web = await serve(ports.web);
 
   // A fee sponsor (lattice-sponsor), started on first use: it pays a fee of 1
-  // for small shares of work, though these hosts would take 0. Its account
-  // holds nothing until `fund` pays it.
+  // for small shares of work, though these hosts would take 0, and up to 100
+  // of a price. Its account holds nothing until `fund` pays it.
   let sponsor;
   async function startSponsor(fund) {
     if (sponsor) return sponsor.info;
@@ -92,9 +93,9 @@ export async function start() {
     const { address } = JSON.parse(readFileSync(key, "utf8"));
     await fund(address);
     const log = openSync(`${root}/sponsor.log`, "a");
-    const child = spawn(join(dirname(process.env.LATTICE), "lattice-sponsor"), [
+    const child = spawn(process.env.LATTICE_SPONSOR || join(dirname(process.env.LATTICE), "lattice-sponsor"), [
       "--node", `http://127.0.0.1:${ports.rpc}`, "--cookie-file", `${root}/chains/Nexus/.cookie`, "--key", key,
-      "--share-work", "2^12", "--fee", "1", "--port", String(ports.sponsor),
+      "--share-work", "2^12", "--fee", "1", "--most-pay", "100", "--port", String(ports.sponsor),
     ], { stdio: ["ignore", log, log] });
     sponsor = { child, info: { url: `http://127.0.0.1:${ports.sponsor}`, address } };
     await until("the sponsor prices Moniker", async () => {

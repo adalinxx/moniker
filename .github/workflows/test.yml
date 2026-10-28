@@ -16,7 +16,9 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
   NODE_VERSION: "24"
   LATTICE_NODE_REPO: 0xLattice/lattice-node
-  LATTICE_NODE_REF: 131bcbbbcb8b194bea3533cf35bccdff6b185b6c # lattice-sponsor (#20)
+  LATTICE_NODE_REF: 47c57ae7643363ecf64fa417c4f178bb6775dab7 # the node lattice-sponsor builds on
+  LATTICE_SPONSOR_REPO: 0xLattice/lattice-sponsor
+  LATTICE_SPONSOR_REF: 986f23eceaacbf63f30ff1279e48aa9c186427f7 # pays a purchase for work (lattice-sponsor#1)
   LATTICE_SDK_REPO: 0xLattice/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
@@ -125,13 +127,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: lattice-node-${{ env.LATTICE_NODE_REF }}-static-2
+          key: lattice-node-${{ env.LATTICE_NODE_REF }}-sponsor-${{ env.LATTICE_SPONSOR_REF }}-static-2
       - if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ env.LATTICE_NODE_REPO }}
           ref: ${{ env.LATTICE_NODE_REF }}
           path: lattice-node
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LATTICE_SPONSOR_REPO }}
+          ref: ${{ env.LATTICE_SPONSOR_REF }}
+          path: lattice-sponsor
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build
         shell: bash
@@ -140,10 +148,14 @@ jobs:
           cd lattice-node
           # Static Swift runtime, so the binaries run on a plain runner. The
           # lattice command runs the node, the miner and its coordinator from
-          # beside it; the UI tests run lattice-sponsor from there too.
+          # beside it; the UI tests run lattice-sponsor from there too, built
+          # from its own repository.
           swift build --static-swift-stdlib
           mkdir ../bin
-          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner,lattice-mining-coordinator,lattice-sponsor} ../bin/
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/{lattice,lattice-node,lattice-miner,lattice-mining-coordinator} ../bin/
+          cd ../lattice-sponsor
+          swift build --static-swift-stdlib --product lattice-sponsor
+          cp "$(swift build --static-swift-stdlib --show-bin-path)"/lattice-sponsor ../bin/
       - uses: actions/upload-artifact@v4
         with:
           name: lattice
