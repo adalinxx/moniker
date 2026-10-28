@@ -1028,7 +1028,7 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   await page.getByRole("button", { name: "Pay 5 and buy @wes_down" }).click();
   await expect(page.locator(".result .badge")).toHaveText("Yours");
   expect(await balance(address)).toBe(4n);
-}, { wallet: false, expectedErrors: /status of 503|ERR_CONNECTION_REFUSED/ });
+}, { wallet: false, expectedErrors: /status of (400|503)|ERR_CONNECTION_REFUSED/ });
 
 test("an account with no coins buys with this device's GPU: it pays the price and the fee; past what the service pays, it asks for coins", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
@@ -1105,7 +1105,7 @@ test("a fee sponsor that changes what it pays the account: the page signs nothin
   }
   expect(await balance(seller.address)).toBe(sellerBefore);
   expect(await balance(address)).toBe(0n);
-}, { wallet: false, expectedErrors: /status of 503/ });
+}, { wallet: false, expectedErrors: /status of (400|503)/ });
 
 test("a fee sponsor from before it paid prices ignores the ask: the page sends nothing, and asks for coins, saying so", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
@@ -1367,8 +1367,9 @@ for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu",
     const workers = await page.evaluate(() => window.workersStarted);
     if (gpu) expect(workers).toBe(0);
     else expect(workers).toBeGreaterThan(0);
-    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next.
-  }, { wallet: false, expectedErrors: /status of 503/ });
+    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next,
+    // and a share of work from before the chain moved on is refused (400) until the page asks for more.
+  }, { wallet: false, expectedErrors: /status of (400|503)/ });
 }
 
 // ---------------------------------------------------------------- the handle picker, in another app's page
