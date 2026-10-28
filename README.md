@@ -101,15 +101,17 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 - **Checkout** (`#/buy/<h>`): the price and whom it pays, the way to pay
   first offered, and the others folded under "Other ways to pay". Only Pay
   asks a wallet anything, and the name comes pointing at the paying account.
-  - *Your passkey account*: the page's wallet. Its fee reads "Free, paid
-    with this device's GPU", so the account pays the price alone. Short of
-    it, the page offers "Pay with this device's GPU" first: the GPU earns
-    what the account lacks as it earns the fee, from a sponsor that pays
-    prices (`--most-pay`). Add coins comes second, and is what remains where
-    the sponsor won't pay that much.
-  - *Selfhold*: the connected account. With the page's wallet in use, a
-    `lattice://write` request Selfhold opens for an account picked there; not
-    installed, where to add it.
+  - *Selfhold*: Selfhold's window, with the account it gave this site, or
+    Continue with Selfhold to get one. Its fee reads "Free, paid with this
+    device's GPU", so the account pays the price alone. Short of it, the
+    page offers "Pay with this device's GPU" first: the GPU earns what the
+    account lacks as it earns the fee, from a sponsor that pays prices
+    (`--most-pay`). Add coins comes second, and is what remains where the
+    sponsor won't pay that much.
+  - *Selfhold for Chrome*: only where it is the wallet, the account it
+    connects. Each Selfhold keeps its own account, so the checkout never offers
+    the other's beside it; the checkout, My names and Settings say which
+    wallet keeps the account in use.
   - *Another wallet or device*: the purchase as a `lattice://write` request
     (moniker-sdk's `writeRequestURI`), good for 15 minutes, as a QR code to
     scan, text to copy, and a card to drag into a wallet's tab, as Selfhold
@@ -128,45 +130,37 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   the names it owns.
 
 There is no log in: the page asks the wallet only where a key is needed,
-and only from a click, as Selfhold and passkeys require. It uses its own
-wallet, `app/wallet.mjs`, so nothing needs installing, phones included.
-Selfhold is an option: Settings can choose it, a checkout can pay with it,
-and whoever connected it here while it was the default keeps it:
+and only from a click. Its wallet is Selfhold's window, at
+`wallet.selfhold.app` ([selfhold-wallet](https://github.com/adalinxx/selfhold-wallet),
+its client vendored as `app/vendor/selfhold.mjs`), so nothing needs
+installing, phones included. Selfhold for Chrome is an option: Settings can
+choose it, a checkout can pay with it, and whoever connected it here while
+it was the default keeps it:
 
-- **The key is a passkey's.** Create a passkey derives the account's
-  Ed25519 key from a new passkey through WebAuthn's PRF extension; the
-  passkey's provider keeps it and syncs it to the person's other devices,
-  where I have a passkey brings the same account back. The page stores
-  which passkey and the address it makes, never the key, which it holds in
-  memory and asks of the passkey again after a reload, at the first write.
-  Where the browser or provider can't derive a key, the page keeps one in
-  the browser instead and says so before the write goes on, offering the
-  key to copy; Settings copies it too. Passkeys work only
-  on the page's own domain or `localhost`, not an IP address.
-- **It signs as Selfhold would** and sends to the chain's hosts, paying
-  their relay floor (`minRelayFee`, 1 on Moniker's hosts) from the account.
-  With a **fee sponsor** set, every fee is paid in this device's work
-  first, and the page says only that this device's GPU pays it: by default
-  Moniker's sponsor, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
-  (0xLattice/lattice-sponsor), changed or turned off in Settings
-  ("Pay fees with this device's GPU"). Where the sponsor can't help (no
-  answer in 15 s, busy, sold out, taking no work for two minutes, or too slow
-  here), the account's coins pay the fee if it has them, unasked; if not, the
-  page says the fee is usually paid with the GPU, and to try again. The
-  page grinds the sponsor's shares on the device's graphics chip through
-  WebGPU (`app/share-gpu.mjs`), or where it has none, in Web Workers on its
-  processor (`app/share-worker.mjs`); both hash as `app/sha256.mjs` lays out.
-  The sponsor then adds the fee and co-signs. The page signs only if the
-  sponsor added that one fee debit and itself as second signer, and, when it
-  pays some of the price too, one credit of exactly that to the account. With no
-  coins to fall back on, a sponsor busy or sold out for the block is asked
-  again for up to a minute. With no sponsor, or none that can help and too
-  few coins, the page asks for coins and shows the account ID to send them
-  to.
-- Anyone who prefers an extension can still add Selfhold from the account
-  panel; back on the tab after adding it, the page reloads at the same place.
+- **The window keeps the key.** Continue with Selfhold opens Selfhold's
+  window over the page, as a payment window does. There a passkey makes the
+  account, or brings back one made before: its key is derived through
+  WebAuthn's PRF extension and kept by the passkey's provider, synced to the
+  person's other devices. Moniker gets the address and each write's answer,
+  never the key.
+- **A write opens the window from its click**, while the page reads the
+  chain and builds the write for the account it was given; the window shows
+  it with its fee, asks the passkey, and signs only as that account.
+- **Fees.** With a **fee sponsor** set, the window pays every fee in this
+  device's work first: by default Moniker's sponsor, at
+  `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
+  (0xLattice/lattice-sponsor), changed or turned off in Settings ("Pay fees
+  with this device's GPU"). The checkout says only that this device's GPU
+  pays it. Where the sponsor can't help, the account's coins pay the fee if
+  it has them; if not, the page asks for coins, shows the account ID to send
+  them to, and says why: the fee is usually paid with the GPU. How the window
+  grinds the shares, and checks what the sponsor adds before signing, is in
+  selfhold-wallet's README.
+- Anyone who prefers an extension can still add Selfhold for Chrome from the
+  account panel; back on the tab after adding it, the page reloads at the
+  same place.
 
-With Selfhold, a write asks for no fee: Selfhold pays the fee the person
+With Selfhold for Chrome, a write asks for no fee: it pays the fee the person
 sets there for the chain (1 unit until they change it), so an account needs
 coins to write unless its fee is 0.
 It reads every record by CID from the hosts Nexus lists for `Nexus/moniker`,
@@ -193,8 +187,9 @@ python3 -m http.server 8765   # from the repository root, then open http://local
   the Lattice SDK bundle.
 - `e2e/moniker.mjs`: names against a real node, launched as the launch is,
   with names claimed in the genesis; moniker-sdk included.
-- `e2e/ui/`: the page in headless Chromium with the real Selfhold wallet,
-  or with none and a virtual passkey authenticator.
+- `e2e/ui/`: the page in headless Chromium with Selfhold for Chrome, or with
+  Selfhold's window (selfhold-wallet's `dist-web/`, served on `localhost`)
+  and a virtual passkey authenticator.
 - `index.html`, `CNAME`: the app on GitHub Pages at
   [app.moniker.bio](https://app.moniker.bio/), `app/` served from the root.
 
@@ -210,11 +205,14 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 cd e2e/ui && npm install
 LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
-  LATTICE_WALLET=<selfhold>/dist npm test
+  LATTICE_WALLET=<selfhold>/dist LATTICE_WALLET_WEB=<selfhold>/dist-web npm test
 ```
 
+`<selfhold>` is selfhold-wallet built with `npm run build` (Selfhold for
+Chrome, `dist/`) and `npm run build:web` (Selfhold's window, `dist-web/`).
+
 The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
-builds both). They grind its shares on the machine's graphics chip; on Linux
+builds both). Selfhold's window grinds its shares on the machine's graphics chip; on Linux
 they give Chromium SwiftShader's, in software, for a machine with none.
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`

@@ -22,7 +22,7 @@ env:
   LATTICE_SDK_REPO: 0xLattice/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
-  LATTICE_WALLET_REF: 114f949ab60b10f28540fb4235a1eb1cc9188697 # page writes may ask no fee (selfhold-wallet#23)
+  LATTICE_WALLET_REF: fc0cb1cadd748aa2ff80201bd5b3d04f49a28c60 # Selfhold's window signs only as the site's account (selfhold-wallet#41)
 
 jobs:
   policy:
@@ -175,6 +175,7 @@ jobs:
       LATTICE: ${{ github.workspace }}/.deps/bin/lattice
       LATTICE_SDK: ${{ github.workspace }}/.deps/lattice-sdk/packages/sdk/dist/index.js
       LATTICE_WALLET: ${{ github.workspace }}/.deps/lattice-wallet/dist
+      LATTICE_WALLET_WEB: ${{ github.workspace }}/.deps/lattice-wallet/dist-web
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,9 +216,12 @@ jobs:
           path: .deps/lattice-wallet
           submodules: true
       - if: matrix.suite == 'ui'
-        name: Build Selfhold
+        name: Build Selfhold for Chrome, and Selfhold's window
         working-directory: .deps/lattice-wallet
-        run: npm ci && npm run build
+        run: npm ci && npm run build && npm run build:web
+      - if: matrix.suite == 'ui'
+        name: The page's selfhold.js is the pinned one's
+        run: tail -n +3 app/vendor/selfhold.mjs | cmp - .deps/lattice-wallet/dist-web/selfhold.js
       - if: matrix.suite == 'ui'
         name: Install Playwright
         working-directory: e2e/ui

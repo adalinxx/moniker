@@ -9,23 +9,23 @@ import { execFileSync, spawn } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHAIN = ["Nexus", "moniker"];
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 const repo = here("../../");
-const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190, sponsor: 27191 };
+const ports = { listen: 27101, rpc: 27180, publicRead: 27181, web: 27190, sponsor: 27191, wallet: 27192 };
 
-const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
+const types = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 
-/** Serves the repository root, as a static host does. */
-function serve(port) {
+/** Serves `root`, the repository's by default, as a static host does. */
+function serve(port, root = repo) {
   const server = createServer((request, response) => {
     const path = normalize(decodeURIComponent(new URL(request.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
-    let file = join(repo, path);
+    let file = join(root, path);
     if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
-    if (!file.startsWith(repo) || !existsSync(file)) {
+    if (!file.startsWith(join(root, "/")) || !existsSync(file)) {
       response.writeHead(404).end();
       return;
     }
@@ -81,6 +81,9 @@ export async function start() {
     return r.ok && BigInt((await r.json()).balance ?? 0) > 5000n;
   });
   const web = await serve(ports.web);
+  // Selfhold's window, on localhost, where passkeys work and the app (on 127.0.0.1) is another site.
+  const walletWeb = process.env.LATTICE_WALLET_WEB && resolvePath(process.env.LATTICE_WALLET_WEB);
+  const wallet = walletWeb ? await serve(ports.wallet, walletWeb) : null;
 
   // A fee sponsor (lattice-sponsor), started on first use: it pays a fee of 1
   // for small shares of work, though these hosts would take 0, and up to 100
@@ -106,7 +109,7 @@ export async function start() {
   }
 
   const info = {
-    root, node, app: `http://127.0.0.1:${ports.web}/app/`,
+    root, node, app: `http://127.0.0.1:${ports.web}/app/`, walletPage: `http://localhost:${ports.wallet}/`,
     chain: CHAIN.join("/"), minerKey: Buffer.from(minerKey).toString("hex"), miner: miner.address,
   };
   return {
@@ -115,6 +118,7 @@ export async function start() {
     stop: async () => {
       sponsor?.child.kill();
       web.close();
+      wallet?.close();
       try { lattice("mine", "stop"); } catch {}
       try { lattice("down"); } catch {}
     },

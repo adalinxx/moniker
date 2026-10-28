@@ -1,6 +1,6 @@
-// Moniker: @names, read from the names chain by CID and written through the
-// Selfhold wallet, which asks the owner to approve every change, or, without
-// Selfhold, through the wallet in the page, whose key a passkey keeps. An account
+// Moniker: @names, read from the names chain by CID and written through
+// Selfhold, which asks the owner to approve every change: in its window, over
+// the page, whose key a passkey keeps, or in Selfhold for Chrome. An account
 // (a key) owns names, and points each at an account, any account. An account
 // shows `@h` only while it names h and h points at it. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
@@ -8,7 +8,7 @@ import * as names from "../sdk/src/records/names.mjs";
 import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
 import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
 import encodeQR from "./vendor/qr.mjs";
-import { embeddedWallet, workDevice } from "./wallet.mjs";
+import { selfhold } from "./vendor/selfhold.mjs";
 
 // ---------------------------------------------------------------- settings
 
@@ -16,11 +16,26 @@ const DEFAULTS = {
   // None named: reads go to the hosts Nexus lists for the chain.
   nodes: [],
   chain: "Nexus/moniker",
-  // A fee sponsor: the page's wallet pays it fees in this device's GPU work, before coins; "" for none.
+  // A fee sponsor: Selfhold's window pays it fees in this device's GPU work, before coins; "" for none.
   sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
-  // "page" uses the page's own passkey wallet; "selfhold", Selfhold where it is installed.
-  wallet: "page",
+  // "web" uses Selfhold's window; "extension", Selfhold for Chrome where it is installed.
+  wallet: "web",
+  // Selfhold's window; the tests serve their own.
+  walletPage: "https://wallet.selfhold.app/",
 };
+/**
+ * Selfhold's window: its own page, or, for a page served on this computer,
+ * one served on this computer too, as the tests do. Never anywhere else: the
+ * window keeps the account.
+ */
+function walletPageOf(saved) {
+  const local = (host) => host === "localhost" || host === "127.0.0.1";
+  try {
+    const url = new URL(saved);
+    if (url.protocol === "http:" && local(url.hostname) && local(location.hostname) && !url.username && !url.password) return url.href;
+  } catch {}
+  return DEFAULTS.walletPage;
+}
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
@@ -32,8 +47,9 @@ function loadSettings() {
       nodes: Array.isArray(saved.nodes) && saved.nodes.length ? saved.nodes : DEFAULTS.nodes,
       chain: typeof saved.chain === "string" && saved.chain ? saved.chain : DEFAULTS.chain,
       sponsor: typeof saved.sponsor === "string" ? saved.sponsor : DEFAULTS.sponsor,
-      // Selfhold only as chosen in Settings; once the default, an older "selfhold" chose nothing.
-      wallet: saved.walletChosen && saved.wallet === "selfhold" ? "selfhold" : DEFAULTS.wallet,
+      // Selfhold for Chrome only as chosen in Settings ("selfhold", once); once the default, an older one chose nothing.
+      wallet: saved.walletChosen && ["extension", "selfhold"].includes(saved.wallet) ? "extension" : DEFAULTS.wallet,
+      walletPage: walletPageOf(saved.walletPage),
       walletChosen: Boolean(saved.walletChosen),
     };
   } catch {
@@ -43,14 +59,16 @@ function loadSettings() {
 let settings = loadSettings();
 function saveSettings(next) {
   settings = { ...DEFAULTS, ...next };
+  // Selfhold's own window is not stored, so a new default reaches everyone.
+  const { walletPage, ...stored } = settings;
   try {
-    localStorage.setItem("moniker.settings", JSON.stringify(settings));
+    localStorage.setItem("moniker.settings", JSON.stringify(walletPage === DEFAULTS.walletPage ? stored : settings));
   } catch {}
   moniker = null;
 }
 const chainPath = () => settings.chain.split("/").filter(Boolean);
 // A write asks for no fee: Selfhold pays the fee the person sets there for
-// the chain, and shows it for approval with the write; the page's wallet
+// the chain, and shows it for approval with the write; Selfhold's window
 // pays the hosts' relay floor, or a sponsor in work.
 // Where someone gets Selfhold, the wallet for Lattice (once named Lattice Wallet).
 const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoiicihhfglkhpce";
@@ -72,33 +90,37 @@ const held = (state, handle) => names.resolve(state, handle);
 // ---------------------------------------------------------------- wallet
 
 let connected = null;
-const inPage = embeddedWallet({ hosts: () => client().hosts(), sponsor: () => settings.sponsor });
-/** The page's own passkey wallet, or Selfhold where Settings choose it and it is installed. */
-const wallet = () => (settings.wallet === "selfhold" && window.lattice) || inPage;
-const selfhold = () => wallet() !== inPage;
+// Selfhold's window: each call that needs the person opens it over the page, from a click.
+const web = selfhold({ wallet: settings.walletPage, hosts: () => client().hosts(), sponsor: () => settings.sponsor });
+/** Selfhold's window, or Selfhold for Chrome where Settings choose it and it is installed. */
+const wallet = () => (settings.wallet === "extension" && window.lattice) || web;
+const extension = () => wallet() !== web;
+// Each keeps its own account: the page always says which.
+const WALLET_NAME = { web: "Selfhold's window", extension: "Selfhold for Chrome" };
+const walletName = () => WALLET_NAME[extension() ? "extension" : "web"];
 
 /**
- * Selfhold, for whoever connected it to this site while it was the default
- * and hasn't chosen a wallet since: their names are its account's. Decided
- * once.
+ * Selfhold for Chrome, for whoever connected it to this site while it was
+ * the default and hasn't chosen a wallet since: their names are its
+ * account's. Decided once.
  */
 async function adoptSelfhold() {
   if (settings.walletChosen || !window.lattice) return;
   const address = await window.lattice.address?.().catch(() => null);
-  if (address) saveSettings({ ...settings, wallet: "selfhold", walletChosen: true });
+  if (address) saveSettings({ ...settings, wallet: "extension", walletChosen: true });
 }
 
-/** From here on, the page's own wallet: the checkout's passkey account was picked to pay. */
-async function usePageWallet() {
-  if (!selfhold()) return;
-  saveSettings({ ...settings, wallet: "page", walletChosen: true });
-  connected = (await inPage.address()) ?? null;
+/** From here on, Selfhold's window: the checkout's way to pay with it was picked. */
+async function useWeb() {
+  if (!extension()) return;
+  saveSettings({ ...settings, wallet: "web", walletChosen: true });
+  connected = await web.address();
 }
 
 /**
- * Asks the wallet for this site's account: Selfhold's address, or the page's
- * account unlocked by its passkey. Both answer only within a click or key
- * press, so call it before any other wait.
+ * Asks the wallet for this site's account. Selfhold's window opens only in
+ * answer to a click, and Selfhold for Chrome answers only within one, so
+ * call it before any other wait.
  */
 async function connect() {
   connected = await wallet().connect();
@@ -106,107 +128,58 @@ async function connect() {
 }
 
 /**
- * Connects first if this site isn't connected, or the page's wallet is
- * locked; with no account in the page's wallet, offers to make one or sign
- * in, `purpose` ("claim @river") saying what for. False (and says why) if
- * that fails.
+ * Connects first if this site isn't connected; true if the write can go on
+ * in this click, `purpose` ("claim @river") saying what for. Selfhold's
+ * window takes the click to connect, so after it the person presses again:
+ * false. False too, saying why, if it fails.
  */
 async function connectFirst(purpose) {
-  if (connected && (selfhold() || !inPage.locked())) return true;
+  if (connected) return true;
   try {
-    if (!selfhold() && !(await inPage.address())) return await startAccount(purpose);
     await connect();
-    return true;
+    if (extension()) return true;
+    render();
+    toast(`Connected. Now ${purpose}.`);
   } catch (error) {
     toast(walletMessage(error), { bad: true });
-    return false;
   }
-}
-
-/** With no account in the page's wallet: makes one with a passkey, or signs in with one made before. */
-async function startAccount(purpose) {
-  const choice = await sheet({
-    title: purpose ? `Make an account to ${purpose}` : "Make an account",
-    body: PASSKEY_KEEPS,
-    choices: [
-      { value: "create", label: "Create a passkey", primary: true },
-      { value: "signin", label: "I have a passkey" },
-    ],
-  });
-  if (choice === null) return false;
-  return choice === "create" ? createAccount() : signIn();
-}
-
-const PASSKEY_KEEPS = "Your names belong to your account. A passkey keeps its key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.";
-
-/** A new account, kept by a new passkey (or by this browser, where passkeys can't keep one). */
-async function createAccount() {
-  const made = await inPage.create();
-  connected = made.address;
-  if (made.kind === "browser") await keptHere();
-  return true;
-}
-
-/**
- * Says, where it can't be missed, that the account's key is kept in this
- * browser only, offering it to copy: a toast would give way to the write's own.
- */
-async function keptHere() {
-  const choice = await sheet({
-    title: "Your key is kept in this browser only",
-    body: "This browser's passkeys can't keep a key, so your account's key is kept here. Clear this browser's data and the account and its names are gone. Copy the key and keep it somewhere safe; Settings has it too.",
-    choices: [
-      { value: "copy", label: "Copy the key", primary: true },
-      { value: "go", label: "Continue without a copy" },
-    ],
-    cancel: false,
-  });
-  if (choice === "copy" && !(await copyKey())) {
-    await sheet({ title: "Couldn't copy the key", body: "Copy it from Settings before you rely on this account.", confirm: "OK" });
-  }
-}
-
-/** Copies the page's browser-kept key, saying so; whether it was copied. */
-async function copyKey() {
-  const key = inPage.exportKey();
-  try {
-    await navigator.clipboard.writeText(key);
-  } catch {
-    return false;
-  }
-  toast("Key copied. Keep it somewhere safe, and never share it.");
-  return true;
-}
-
-/** The account a passkey made here before. */
-async function signIn() {
-  connected = await inPage.signIn();
-  return true;
+  return false;
 }
 
 function walletMessage(error) {
   const text = String(error?.message ?? error);
   if (/just declined|ask again in a moment/i.test(text)) return "The wallet waits a few seconds after a decline. Try again in a moment.";
   if (/declined|rejected|denied/i.test(text)) return "You declined it in the wallet. Nothing was sent.";
-  if (/locked/i.test(text)) return selfhold() ? "Unlock Selfhold, then try again." : "Use your passkey, then try again.";
+  if (/locked/i.test(text) && extension()) return "Unlock Selfhold, then try again.";
   return text;
 }
 
-// The wallet takes one request from a page at a time.
+// Selfhold for Chrome takes one request from a page at a time.
 let walletTurn = Promise.resolve();
-/** Sends `write`, built for account `me`, through the wallet; the page's wallet tells `progress` what it is doing. */
-function send(write, me, progress = () => {}) {
+/**
+ * Sends the write `written` resolves to, built for account `me`, through the
+ * wallet; null, nothing to send, resolves to null. Selfhold's window opens at
+ * once, in the click, waits for the write, and tells `progress` what it does.
+ */
+async function send(written, me, progress) {
+  // A write is built for one account. If the wallet was since disconnected
+  // from this site, or connected to another account, say so and send nothing.
+  const changed = (now) => {
+    written.catch(() => {});
+    connected = now;
+    render();
+    return new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
+  };
+  if (!extension()) {
+    const now = await web.address();
+    if (now !== me) throw changed(now);
+    return web.writeRecords(written.then((write) => write && writeRequest(chainPath(), write)), { progress });
+  }
   const turn = walletTurn.then(async () => {
-    // A write is built for one account. If Selfhold was since disconnected
-    // from this site, or connected to another account, say so and send nothing.
     const now = await wallet().address();
-    if (now !== me) {
-      connected = now;
-      render();
-      if (!selfhold()) throw new Error("This page's account changed. Look again, then try again.");
-      throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
-    }
-    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress });
+    if (now !== me) throw changed(now);
+    const write = await written;
+    return write && wallet().writeRecords(writeRequest(chainPath(), write));
   });
   walletTurn = turn.catch(() => {});
   return turn;
@@ -231,20 +204,16 @@ async function act(label, build, landed, done = render) {
 
 async function acted(label, build, landed, done) {
   const me = connected;
-  const progress = toast(selfhold() ? `${label}: approve it in your wallet.` : `${label}…`);
+  const progress = toast(`${label}: approve it in ${extension() ? "your wallet" : "Selfhold's window"}.`);
   try {
-    // The page's key, locked since the page loaded: its passkey unlocks it, now, while the click still counts.
-    if (!selfhold() && inPage.locked()) {
-      progress.update(`${label}: confirm with your passkey.`);
-      await connect();
-    }
-    const write = await build(await readState(), me);
-    if (write.actions.length === 0) {
+    // Read and built while the wallet opens.
+    const written = readState().then((state) => build(state, me)).then((write) => (write.actions.length ? write : null));
+    const sent = await send(written, me, (text) => progress.update(`${label}: ${text.charAt(0).toLowerCase()}${text.slice(1)}`));
+    if (sent === null) {
       progress.update(`${label}: it is so already.`);
       setTimeout(progress.close, 2500);
       return;
     }
-    await send(write, me, (text) => progress.update(`${label}: ${text}`));
     progress.update(`${label}: confirming…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
@@ -258,13 +227,19 @@ async function acted(label, build, landed, done) {
     setTimeout(progress.close, 2500);
     done();
   } catch (error) {
+    // Selfhold's window may have another account now: it forgets this site's, to connect again.
+    const now = extension() ? me : await web.address();
+    if (now !== me) {
+      connected = now;
+      render();
+    }
     if (error.name !== "NeedsCoins") return progress.update(walletMessage(error), { bad: true });
     progress.close();
     fundSheet(error);
   }
 }
 
-/** The page's account can't pay for a write: what it needs, and where to send coins. */
+/** The account can't pay for a write in Selfhold's window: what it needs, and where to send coins. */
 async function fundSheet({ address, needed, balance, sponsor }) {
   // Fees are usually paid with this device's GPU: say so when, this time, they can't be.
   const why = {
@@ -575,20 +550,21 @@ const awaiting = (on) => {
   return false;
 };
 
-/** Where a key is needed and there is no account yet: a passkey makes one, or brings back one made before; or Selfhold. */
+/** Where a key is needed and this site has no account yet: Selfhold's window makes one with a passkey, or finds one made before; or Selfhold for Chrome. */
 function accountPanel(why, alone = false) {
-  const selfholdLink = phone ? "" : `
+  const extensionLink = phone ? "" : `
     <p class="note" style="margin: 0">Rather keep your key in a browser extension? <a href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? "" : " for Chrome"}</a>, then come back to this tab.</p>
     <p class="note" id="wallet-wait" aria-live="polite" style="margin: 0"${awaiting() ? "" : " hidden"}>Waiting for Selfhold… When it's set up, come back to this tab.</p>`;
   return `
     <section class="panel stack" aria-labelledby="get-wallet" style="width: 100%">
       <h${alone ? 1 : 2} id="get-wallet">${esc(why)}</h${alone ? 1 : 2}>
-      <p class="lede" style="margin: 0">A passkey keeps your account's key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.</p>
-      <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
-      <button class="pill big" type="button" data-sign-in>I have a passkey</button>
-      ${selfholdLink}
+      <p class="lede" style="margin: 0">${SELFHOLD_KEEPS}</p>
+      <button class="pill accent big" type="button" data-connect>Continue with Selfhold</button>
+      ${extensionLink}
     </section>`;
 }
+
+const SELFHOLD_KEEPS = "Selfhold opens in a window over this page. A passkey keeps your account's key on this device and the ones it syncs to, unlocked with your face, fingerprint or screen lock. Moniker never sees it.";
 
 /** Where a key is needed, Selfhold is here, and this site isn't connected yet: one click asks it. */
 function connectPanel(why, alone = false) {
@@ -607,10 +583,10 @@ const checkout = { handle: null, method: null };
 
 /** The ways to pay here, the first the one to offer first. */
 function payMethods() {
-  // The passkey account, its fee paid with this device's GPU, always; Selfhold first where it is the wallet.
-  if (selfhold()) return ["selfhold", "account", "request"];
-  // Selfhold, while the page's wallet is in use: through a request if it's here, else where to add it.
-  return window.lattice || !phone ? ["account", "selfhold", "request"] : ["account", "request"];
+  // Selfhold for Chrome only where it is the wallet: each Selfhold has its own
+  // account, and one offered beside the other would pay from an account the
+  // person may not know they have.
+  return extension() ? ["extension", "web", "request"] : ["web", "request"];
 }
 
 /**
@@ -618,9 +594,9 @@ function payMethods() {
  * it pays, then a choice of how to pay, each with its fee and total. Its Pay
  * is the last step, and the only one that asks a wallet anything.
  *
- *   account   the page's passkey account; its fee paid with this device's GPU, through the sponsor
- *   selfhold  Selfhold: the connected account, or with the page's wallet in use, a request it opens
- *   request   a lattice://write request, as a QR code, text or a card to drag, for any wallet anywhere
+ *   web        Selfhold's window, its account a passkey's; its fee paid with this device's GPU, through the sponsor
+ *   extension  Selfhold for Chrome, where it is the wallet: the account it connects here
+ *   request    a lattice://write request, as a QR code, text or a card to drag, for any wallet anywhere
  */
 async function viewBuy(handle, state) {
   const entry = await held(state, handle);
@@ -635,8 +611,8 @@ async function viewBuy(handle, state) {
   const method = methods.includes(checkout.method) ? checkout.method : methods[0];
   checkout.method = method;
 
-  const label = { account: "Your passkey account", selfhold: "Selfhold", request: "Another wallet or device" };
-  const hint = { account: "Here, with your passkey", selfhold: "The browser extension", request: "Scan a code, or copy a request" };
+  const label = { web: "Selfhold", extension: "Selfhold for Chrome", request: "Another wallet or device" };
+  const hint = { web: "In a window, with your passkey", extension: "The browser extension", request: "Scan a code, or copy a request" };
   const choice = (m) => `
         <label class="method">
           <input type="radio" name="pay" value="${m}"${m === method ? " checked" : ""}>
@@ -651,8 +627,8 @@ async function viewBuy(handle, state) {
         </details>`;
 
   let detail;
-  if (method === "account") detail = await accountPay(handle, entry);
-  else if (method === "selfhold") detail = selfholdPay(handle, entry, await requestFor(handle, entry, state));
+  if (method === "web") detail = await webPay(handle, entry);
+  else if (method === "extension") detail = extensionPay(handle, entry);
   else detail = requestPay(handle, entry, await requestFor(handle, entry, state));
 
   return `
@@ -685,25 +661,50 @@ async function requestFor(handle, entry, state) {
   return { uri, expiresAt };
 }
 
-/** Paying from the page's passkey account: its balance, and its fee, paid with this device's GPU where it can be. */
-async function accountPay(handle, entry) {
-  const price = entry?.price ?? 0n;
-  // A claim, or a purchase: its button, which turns to the page's wallet where Selfhold was in use.
-  const go = `${entry ? `data-buy="${esc(handle)}" data-price="${price}"` : `data-claim="${esc(handle)}"`} data-via="page"`;
-  const me = selfhold() ? await inPage.address() : connected;
-  if (!me) {
-    return `<p style="margin: 0">${entry ? `Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.` : "Make your account first: a passkey keeps its key."}</p>
-        <button class="pill accent big" type="button" data-create-account data-via="page">Create a passkey</button>
-        <button class="pill big" type="button" data-sign-in data-via="page">I have a passkey</button>`;
+/**
+ * What `address` holds on the names chain, and the fee the first host that
+ * takes transactions asks: `{ balance, fee }`, read fresh, or null if none answers.
+ */
+async function funds(address) {
+  const chain = encodeURIComponent(chainPath().join("/"));
+  for (const host of await client().hosts().catch(() => [])) {
+    try {
+      const get = async (path) => {
+        const response = await fetch(`${host}${path}?chainPath=${chain}`, { cache: "no-store" });
+        if (response.status === 404) return {};
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      };
+      const [info, account] = await Promise.all([get("/api/chain/info"), get(`/api/state/account/${address}`)]);
+      if (info.acceptsSubmit !== false) return { balance: BigInt(account.balance ?? 0), fee: BigInt(info.minRelayFee ?? 0) };
+    } catch {}
   }
-  const funds = await inPage.funds(chainPath(), me).catch(() => null);
-  if (!funds) return `<p role="alert" style="margin: 0">No host answered for your account's balance.</p><button class="pill big" type="button" data-retry>Try again</button>`;
-  const { balance, fee } = funds;
+  return null;
+}
+
+/** What does a sponsor's work here: "GPU" where the browser has one for the page, else "processor". */
+let device;
+const workDevice = () => (device ??= Promise.resolve(navigator.gpu?.requestAdapter()).then((adapter) => (adapter ? "GPU" : "processor"), () => "processor"));
+
+/** Paying in Selfhold's window: what its account holds, and its fee, paid with this device's GPU where it can be. */
+async function webPay(handle, entry) {
+  const price = entry?.price ?? 0n;
+  // A claim, or a purchase: its button, which turns to Selfhold's window where Selfhold for Chrome was in use.
+  const go = `${entry ? `data-buy="${esc(handle)}" data-price="${price}"` : `data-claim="${esc(handle)}"`} data-via="web"`;
+  const me = await web.address();
+  if (!me) {
+    return `<p style="margin: 0">${SELFHOLD_KEEPS}${entry ? ` Buying takes coins: once your account is there, add at least ${coins(price)} to it, or pay with this device's GPU.` : ""}</p>
+        <button class="pill accent big" type="button" data-connect data-via="web">Continue with Selfhold</button>`;
+  }
+  const funded = await funds(me);
+  if (!funded) return `<p role="alert" style="margin: 0">No host answered for your account's balance.</p><button class="pill big" type="button" data-retry>Try again</button>`;
+  const { balance, fee } = funded;
   // With a sponsor, this device's GPU pays the fee in work: free, wherever the account holds the price.
   const byWork = fee > 0n && Boolean(settings.sponsor);
   const total = byWork ? price : price + fee;
   const feeText = fee === 0n ? "None" : byWork ? `Free, paid with this device's ${await workDevice()}` : coins(fee);
   const rows = `<dl class="summary">
+        <div><dt>From</dt><dd>${accountRef(me)}, ${WALLET_NAME.web}'s account</dd></div>
         <div><dt>Fee</dt><dd>${feeText}</dd></div>
         ${total > price ? `<div><dt>Total</dt><dd>${coins(total)}</dd></div>` : ""}
         <div><dt>Your account holds</dt><dd>${coins(balance)}</dd></div>
@@ -725,20 +726,12 @@ async function accountPay(handle, entry) {
         <button class="pill accent big" type="button" ${go}>${entry ? `Pay ${coins(price)} and buy` : "Claim"} @${esc(handle)}</button>`;
 }
 
-/** Paying with Selfhold: the account it connects here, or a request it opens for one you pick; or where to add it. */
-function selfholdPay(handle, entry, { uri }) {
+/** Paying with Selfhold for Chrome, the wallet here: the account it connects. */
+function extensionPay(handle, entry) {
   const price = entry?.price ?? 0n;
-  if (selfhold()) {
-    return `<p style="margin: 0">Selfhold shows the ${entry ? "payment" : "claim"} and its fee, set there, for you to approve.</p>
+  return `${connected ? `<p style="margin: 0">From ${accountRef(connected)}, ${WALLET_NAME.extension}'s account.</p>` : ""}
+        <p style="margin: 0">Selfhold shows the ${entry ? "payment" : "claim"} and its fee, set there, for you to approve.</p>
         <button class="pill accent big" type="button" ${entry ? `data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} with Selfhold` : `data-claim="${esc(handle)}">Claim @${esc(handle)} with Selfhold`}</button>`;
-  }
-  if (window.lattice) {
-    return `<p style="margin: 0">Selfhold opens the ${entry ? "purchase" : "claim"} for an account you pick there, with its fee, for you to approve.</p>
-        <button class="pill accent big" type="button" data-open-request="${esc(uri)}" data-owner="${esc(entry?.owner ?? "")}">Open in Selfhold</button>`;
-  }
-  return `<p style="margin: 0">Selfhold is a browser extension that keeps your key and shows each payment before you approve it.</p>
-        <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? "" : " for Chrome"}</a>
-        <p class="note" style="margin: 0">Then come back to this tab, and pay with it here.</p>`;
 }
 
 /** Paying from any wallet, anywhere: the request as a QR code, text to copy, and a card to drag into a wallet's tab. */
@@ -789,40 +782,14 @@ async function watchSale({ handle, owner, price, expiresAt }) {
   }
 }
 
-/** Hands Selfhold the request, from the click; then waits for the chain to show the name bought. */
-async function payByRequest(handle, uri, owner) {
-  const label = `Buying @${handle}`;
-  if (acting.has(label)) return;
-  acting.add(label);
-  const progress = toast(`${label}: approve it in Selfhold.`);
-  try {
-    await window.lattice.openRequest(uri);
-    progress.update(`${label}: confirming…`);
-    const deadline = Date.now() + 5 * 60_000;
-    for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      const entry = await held(await readState(), handle).catch(() => undefined);
-      if (entry && entry.owner !== owner) break;
-      if (Date.now() > deadline) throw new Error("Sent, but not confirmed yet. It may still go through: look again in a minute.");
-    }
-    progress.update(`${label}: done.`);
-    setTimeout(progress.close, 2500);
-    location.hash = `#/@${handle}`;
-  } catch (error) {
-    progress.update(walletMessage(error), { bad: true });
-  } finally {
-    acting.delete(label);
-  }
-}
-
 /** A name offered to your account: take it, for nothing. */
 async function viewTake(handle, state) {
   const entry = await held(state, handle);
   if (entry && entry.owner === connected) return viewMessage(`@${handle} is yours`, "", `<a class="pill big" href="#/names" style="margin-top: 20px">Go to My names</a>`);
   if (!entry || entry.offer !== connected) {
-    return viewMessage(`@${handle} isn't offered to you`, selfhold()
+    return viewMessage(`@${handle} isn't offered to you`, extension()
       ? `Selfhold connects account ${accountRef(connected)} here. If the gift is for another of your accounts, switch to it in Selfhold and open the link again.`
-      : `Your account here is ${accountRef(connected)}. If the gift is for another of your accounts, open the link where that one is.`);
+      : `Your account here is ${accountRef(connected)}. If the gift is for another of your accounts, open the link where that one is, or use its passkey in Selfhold's window.`);
   }
   return `
     <main class="col card" style="margin-top: 48px">
@@ -867,6 +834,7 @@ async function viewNames(state) {
       <h1 style="margin: 0">My names</h1>
       <section class="panel stack section" aria-labelledby="account-title">
         <h2 id="account-title" style="margin: 0">Your account ${accountLink(connected)}</h2>
+        <p class="note" style="margin: 0">Kept by ${walletName()}${extension() ? "" : ", with your passkey"}. Your names are this account's: another wallet's account has its own.</p>
         <p id="shows" style="margin: 0">${said}</p>
         ${named ? `<button class="pill" type="button" data-stop-showing style="align-self: flex-start">Stop showing</button>` : ""}
       </section>
@@ -919,7 +887,8 @@ function viewSettings() {
         <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
         <div class="field"><label for="s-sponsor">Pay fees with this device's GPU, through this service; leave it empty to pay fees in coins</label><input id="s-sponsor" class="mono" value="${esc(settings.sponsor)}" placeholder="Fees paid in coins" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
-        ${window.lattice ? `<label class="check"><input type="checkbox" id="s-selfhold"${selfhold() ? " checked" : ""}> Use Selfhold, not this page's passkey wallet</label>` : ""}
+        ${window.lattice ? `<label class="check"><input type="checkbox" id="s-extension"${extension() ? " checked" : ""}> Use Selfhold for Chrome, not Selfhold's window</label>
+        <p class="note" style="margin: 0">Each keeps its own account. Your names stay with the account that owns them: switch, and you see the other account's.</p>` : ""}
         <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
           <button class="pill" type="button" data-reset>Defaults</button>
           <button class="pill dark" type="submit">Save</button>
@@ -928,20 +897,17 @@ function viewSettings() {
     </main>`;
 }
 
-/** The page's wallet, in Settings: its account, how its key is kept, and forgetting it here. */
+/** Selfhold's window, in Settings: the account it gave this site, and disconnecting it here. */
 function accountSettings() {
-  const address = selfhold() ? null : connected;
+  const address = extension() ? null : connected;
   if (!address) return "";
-  const browserKey = inPage.kind() === "browser";
   return `
       <section class="panel stack" aria-labelledby="account-settings" style="margin-bottom: 20px">
-        <h2 id="account-settings" style="margin: 0">This page's wallet</h2>
-        <p style="margin: 0">Account ${accountLink(address)}, ${browserKey ? "its key kept in this browser only" : "its key kept by your passkey"}.</p>
-        ${browserKey ? `<p class="note" style="margin: 0">Lose this browser's data and you lose the account, unless you keep a copy of its key.</p>` : ""}
+        <h2 id="account-settings" style="margin: 0">Selfhold</h2>
+        <p style="margin: 0">Account ${accountLink(address)}, its key kept by your passkey.</p>
         <div style="display: flex; gap: 8px; flex-wrap: wrap">
           <button class="pill" type="button" data-copy="${esc(address)}">Copy account ID</button>
-          ${browserKey && !inPage.locked() ? `<button class="pill" type="button" data-copy-key>Copy the key</button>` : ""}
-          <button class="pill${browserKey ? " bad" : ""}" type="button" data-forget-account>Forget this account here</button>
+          <button class="pill" type="button" data-disconnect>Disconnect</button>
         </div>
       </section>`;
 }
@@ -974,11 +940,11 @@ async function render() {
     else {
       // Selfhold connects only within a click, so ask now, before the read, if this render came from one.
       const needs = page === "names" || page === "take";
-      if (needs && !connected && selfhold() && navigator.userActivation?.isActive) await connect();
+      if (needs && !connected && extension() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
       const take = isHandle(arg) ? `To take @${arg}` : "To take a name";
-      if (needs && !connected && !selfhold()) {
+      if (needs && !connected && !extension()) {
         html = `<main class="col stack" style="margin-top: 24px">${accountPanel(page === "take" ? `${take}, make your account` : "Your names belong to your account's key", true)}</main>`;
       } else if (needs && !connected) {
         const why = page === "take" ? `${take}, connect Selfhold` : "Your names belong to your wallet's key";
@@ -1027,57 +993,48 @@ document.addEventListener("click", async (event) => {
   }
   if ("retry" in d) {
     render();
-  } else if ("connect" in d || "createAccount" in d || "signIn" in d) {
+  } else if ("connect" in d) {
     try {
-      if (d.via === "page") await usePageWallet();
-      if ("createAccount" in d) await createAccount();
-      else if ("signIn" in d) await signIn();
-      else await connect();
+      // From the checkout, with Selfhold for Chrome in use: the window becomes the wallet once it connects.
+      if (d.via === "web" && extension()) {
+        await web.connect();
+        await useWeb();
+      } else await connect();
       render();
     } catch (error) {
       toast(walletMessage(error), { bad: true });
     }
-  } else if ("copyKey" in d) {
-    if (!(await copyKey())) toast("Couldn't copy the key.", { bad: true });
-  } else if ("forgetAccount" in d) {
-    const browserKey = inPage.kind() === "browser";
-    const ok = await sheet({
-      title: "Forget this account here?",
-      body: browserKey
-        ? "Its key is kept only in this browser: unless you copied it, the account and its names are gone for good."
-        : "Your passkey keeps the account: use I have a passkey to bring it back.",
-      confirm: "Forget it",
-      danger: browserKey,
-    });
-    if (!ok) return;
-    inPage.forget();
+  } else if ("disconnect" in d) {
+    await web.disconnect();
     connected = null;
     render();
   } else if ("getWallet" in d) {
     awaiting(true);
     $("#wallet-wait")?.removeAttribute("hidden");
-  } else if (d.openRequest) {
-    payByRequest(checkout.handle, d.openRequest, d.owner);
   } else if (d.fund) {
-    // Coins for the page's account, whichever wallet is in use.
-    const address = selfhold() ? await inPage.address() : connected;
-    const { balance } = await inPage.funds(chainPath(), address);
-    fundSheet({ address, needed: BigInt(d.fund), balance });
+    // Coins for the account in Selfhold's window, whichever wallet is in use.
+    const address = await web.address();
+    const funded = address && (await funds(address));
+    if (funded) fundSheet({ address, needed: BigInt(d.fund), balance: funded.balance });
+    else toast("No host answered for your account's balance.", { bad: true });
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("reset" in d) {
-    saveSettings({});
+    // Chosen, so that Selfhold for Chrome, connected here once, doesn't take over again.
+    saveSettings({ walletPage: settings.walletPage, walletChosen: true });
+    // Selfhold's window again, and the account it gave this site, if any.
+    connected = await web.address();
     render();
   } else if (d.nameMenu) {
     // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
   } else if (d.claim) {
-    if (d.via === "page") await usePageWallet();
+    if (d.via === "web") await useWeb();
     if (!(await connectFirst(`claim @${d.claim}`))) return;
     const handle = d.claim;
     claim(handle);
   } else if (d.buy) {
-    if (d.via === "page") await usePageWallet();
+    if (d.via === "web") await useWeb();
     if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
     const shown = BigInt(d.price);
@@ -1237,18 +1194,20 @@ document.addEventListener("submit", async (event) => {
     location.hash = `#/buy/${handle}`;
   } else if (form.id === "settings") {
     event.preventDefault();
-    const pageWallet = $("#s-selfhold") ? !$("#s-selfhold").checked : !selfhold();
-    const switched = pageWallet === selfhold();
+    // Selfhold for Chrome not here (yet): the choice stays as it was.
+    const useExtension = $("#s-extension") ? $("#s-extension").checked : settings.wallet === "extension";
+    const switched = useExtension !== extension();
     saveSettings({
       nodes: $("#s-nodes").value.split(/\s+/).filter(Boolean).map((n) => n.replace(/\/$/, "")),
       chain: $("#s-chain").value.trim() || DEFAULTS.chain,
       sponsor: $("#s-sponsor").value.trim().replace(/\/$/, ""),
-      wallet: pageWallet ? "page" : "selfhold",
+      wallet: useExtension ? "extension" : "web",
+      walletPage: settings.walletPage,
       walletChosen: settings.walletChosen || switched,
     });
     // Another wallet, another account: the one it remembers, if any, without asking.
     if (switched) connected = (await wallet().address?.().catch(() => null)) ?? null;
-    toast("Settings saved.");
+    toast(switched ? `Settings saved. Now ${walletName()}, and its own account: your names stay with the account that owns them.` : "Settings saved.");
     location.hash = "#/";
   }
 });
@@ -1279,11 +1238,11 @@ window.addEventListener("hashchange", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && awaiting() && !window.lattice) location.reload();
 });
-// Selfhold announces itself when it reaches a page: it is the wallet now, unless Settings choose the page's.
+// Selfhold for Chrome announces itself when it reaches a page: it is the wallet now, if Settings or an old connection choose it.
 window.addEventListener("lattice#initialized", async () => {
   awaiting(false);
   await adoptSelfhold();
-  if (selfhold()) {
+  if (extension()) {
     try {
       connected = (await window.lattice.address?.()) ?? null;
     } catch {
@@ -1292,7 +1251,7 @@ window.addEventListener("lattice#initialized", async () => {
   }
   render();
 });
-// A wallet already connected to this site, or the page's account, answers without asking.
+// A wallet already connected to this site answers without asking.
 (async () => {
   try {
     await adoptSelfhold();

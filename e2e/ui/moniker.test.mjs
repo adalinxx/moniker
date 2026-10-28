@@ -1,12 +1,11 @@
 // Moniker, the names manager, through the real page in headless Chromium with
-// the Lattice Wallet installed, or with none and a passkey (Chromium's virtual
-// authenticator), against a private stack (stack.mjs). The person here
-// approves whatever the wallet asks.
+// Selfhold for Chrome installed, or with Selfhold's window and a passkey
+// (Chromium's virtual authenticator), against a private stack (stack.mjs).
+// The person here approves whatever the wallet asks.
 //
 //   LATTICE=<lattice-node>/.build/debug/lattice \
 //   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
-//   LATTICE_WALLET=<lattice-wallet>/dist npm test
-import { createHash } from "node:crypto";
+//   LATTICE_WALLET=<lattice-wallet>/dist LATTICE_WALLET_WEB=<lattice-wallet>/dist-web npm test
 import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -22,6 +21,7 @@ import { CHAIN, start } from "./stack.mjs";
 
 const wallet = process.env.LATTICE_WALLET && fileURLToPath(new URL(process.env.LATTICE_WALLET, `file://${process.cwd()}/`));
 if (!wallet) throw new Error("LATTICE_WALLET: the built Lattice Wallet extension (its dist/ directory)");
+if (!process.env.LATTICE_WALLET_WEB || !existsSync(`${process.env.LATTICE_WALLET_WEB}/selfhold.js`)) throw new Error("LATTICE_WALLET_WEB: Selfhold's window, built (selfhold-wallet's dist-web/ directory, from npm run build:web)");
 // The wallet as installed by someone who runs the stack's node.
 const walletInstalled = mkdtempSync(`${tmpdir()}/moniker-ui-wallet-`);
 cpSync(wallet, walletInstalled, { recursive: true });
@@ -38,14 +38,16 @@ const running = await start();
 const stack = running.info;
 writeFileSync(new URL("./.stack.json", import.meta.url), JSON.stringify(stack));
 
-// The page's wallet grinds a fee sponsor's shares on the graphics chip. A
+// Selfhold's window grinds a fee sponsor's shares on the graphics chip. A
 // machine without one (CI's) gets Chromium's own, SwiftShader, in software.
 const gpuArgs = process.platform === "linux"
   ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-webgpu-adapter=swiftshader", "--use-angle=swiftshader"]
   : [];
 
 let browser;
-before(async () => (browser = await chromium.launch({ args: gpuArgs })));
+// Pop-ups blocked as for anyone: Selfhold's window opens only from a click, and a test catches one that doesn't.
+const popupsBlocked = { ignoreDefaultArgs: ["--disable-popup-blocking"] };
+before(async () => (browser = await chromium.launch({ args: gpuArgs, ...popupsBlocked })));
 after(async () => {
   await browser?.close();
   await running.stop();
@@ -132,6 +134,7 @@ async function claimAs(who, handle, { point, price } = {}) {
 async function walletBrowser() {
   const context = await chromium.launchPersistentContext(mkdtempSync(`${tmpdir()}/moniker-ui-browser-`), {
     headless: false,
+    ...popupsBlocked,
     args: ["--headless=new", `--disable-extensions-except=${walletInstalled}`, `--load-extension=${walletInstalled}`],
   });
   const [worker] = context.serviceWorkers().length ? context.serviceWorkers()
@@ -230,16 +233,14 @@ const test = (name, body, { wallet: withWallet = true, expectedErrors, timeout =
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => message.type() === "error" && !expectedErrors?.test(message.text()) && errors.push(message.text()));
-    // What the page's wallet heard from the fee sponsor, said only on a failure.
-    const notes = [];
-    page.on("console", (message) => message.text().startsWith("[fee]") && notes.push(message.text()));
     try {
       await body({ page });
       if (errors.length) throw new Error(`page errors: ${errors.join(" | ")}`);
     } catch (error) {
       const shown = await page.locator("#app").innerText().catch(() => "(no page)");
       const said = await page.locator("#toasts, #alerts").allInnerTexts().catch(() => []);
-      error.message += `\n--- page at ${page.url()}:\n${shown.slice(0, 800)}\n--- status: ${said.join(" ") || "none"}\n--- wallet approvals: ${context.approvals ?? "n/a"}\n--- wallet said: ${context.walletNotes?.join(" || ") || "none"}\n--- page errors: ${errors.join(" | ") || "none"}\n--- fee notes: ${[...new Set(notes)].slice(0, 20).join(" | ") || "none"}`;
+      const selfholdShown = await context.selfholdWindow?.locator("body").innerText().catch(() => "?");
+      error.message += `\n--- page at ${page.url()}:\n${shown.slice(0, 800)}\n--- status: ${said.join(" ") || "none"}\n--- wallet approvals: ${context.approvals ?? "n/a"}\n--- wallet said: ${context.walletNotes?.join(" || ") || "none"}\n--- Selfhold's window: ${selfholdShown?.replace(/\s+/g, " ").slice(0, 600) ?? "never opened"}\n--- page errors: ${errors.join(" | ") || "none"}`;
       throw error;
     } finally {
       await context.close();
@@ -304,7 +305,7 @@ test("a visitor searches: a name no one owns costs 0, and reading needs no walle
   await expect(page).toHaveURL(/#\/search\/nobody$/);
   await expect(page.locator(".result .badge")).toHaveText("Available");
   await expect(page.locator(".result")).toContainText("No one owns it yet, so it costs 0.");
-  // No wallet: Claim all the same; the page's wallet makes the account when it is pressed.
+  // No wallet: Claim all the same; Selfhold's window makes the account when it is pressed.
   await expect(page.getByRole("button", { name: "Claim @nobody" })).toBeVisible();
   // Names close to it, each free.
   await expect(page.getByRole("link", { name: "Claim @nobody_ for 0" })).toBeVisible();
@@ -313,22 +314,21 @@ test("a visitor searches: a name no one owns costs 0, and reading needs no walle
   await page.goto(stack.app + "#/search/no!body");
   await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
 
-  // Where a key is needed, a passkey makes the account, or Selfhold keeps it; old links go there too.
+  // Where a key is needed, Selfhold's window keeps the account, or Selfhold for Chrome; old links go there too.
   await page.goto(stack.app + "#/profiles");
   await expect(page).toHaveURL(/#\/names$/);
   await expect(page.locator("#get-wallet")).toHaveText("Your names belong to your account's key");
-  await expect(page.getByRole("button", { name: "Create a passkey" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "I have a passkey" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Selfhold" })).toBeVisible();
   const store = page.waitForEvent("popup");
   await page.getByRole("link", { name: /^Add Selfhold/ }).click();
   await (await store).close();
   await expect(page.locator("#wallet-wait")).toBeVisible();
 
-  // A phone can't add Selfhold: it isn't offered there; a passkey is.
+  // A phone can't add Selfhold for Chrome: it isn't offered there; the window is.
   const phone = await browser.newContext({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148" });
   const p = await phone.newPage();
   await openApp(p, null, "#/names");
-  await expect(p.getByRole("button", { name: "Create a passkey" })).toBeVisible();
+  await expect(p.getByRole("button", { name: "Continue with Selfhold" })).toBeVisible();
   await expect(p.getByRole("link", { name: /^Add Selfhold/ })).toHaveCount(0);
   await phone.close();
 }, { wallet: false });
@@ -451,11 +451,12 @@ test("Alice claims @alice_art, lists it, then reprices it; Bob buys it, and it p
     await bobPage.getByRole("link", { name: "Buy @alice_art for 40" }).click();
     await expect(bobPage.getByRole("heading", { name: "Buy @alice_art" })).toBeVisible();
     await expect(bobPage.locator(".summary")).toContainText("Price40, paid to its owner");
-    // With Selfhold the wallet here, it is the way to pay offered first; the passkey account and a request, the others.
-    await expect(bobPage.getByRole("radio", { name: /^Selfhold/ })).toBeChecked();
+    // With Selfhold for Chrome the wallet here, it is the way to pay offered first; Selfhold's window and a request, the others.
+    await expect(bobPage.getByRole("radio", { name: /^Selfhold for Chrome/ })).toBeChecked();
     await bobPage.getByText("Other ways to pay").click();
     await expect(bobPage.getByRole("radio", { name: /^Another wallet or device/ })).not.toBeChecked();
-    await expect(bobPage.getByRole("radio", { name: /^Your passkey account/ })).not.toBeChecked();
+    await expect(bobPage.getByRole("radio", { name: /^Selfhold\s*In a window/ })).not.toBeChecked();
+    await expect(bobPage.locator("main")).toContainText("Selfhold for Chrome's account.");
     await expect(bobPage.getByText("Selfhold shows the payment and its fee, set there, for you to approve.")).toBeVisible();
     expect(bobPage.context().approvals).toBe(asked);
     await bobPage.getByRole("button", { name: "Pay 40 with Selfhold" }).click();
@@ -537,7 +538,7 @@ test("Alice releases @alice after confirming in the page: it is free, pointing n
   await expect(page.locator(".result .badge")).toHaveText("Available");
 });
 
-test("A write asks for no fee: the wallet pays its own, 1 until the person changes it", async ({ page }) => {
+test("A write asks for no fee: the wallet sets its own, from what the node asks", async ({ page }) => {
   const fia = newAccount();
   await fund(fia.address, 100n);
   await until("Fia is funded", async () => (await balance(fia.address)) === 100n);
@@ -547,7 +548,8 @@ test("A write asks for no fee: the wallet pays its own, 1 until the person chang
   await page.getByRole("button", { name: "Claim @fia" }).click();
   await claimOnCheckout(page);
   await until("@fia is Fia's", async () => (await names.resolve(await state(), "fia"))?.owner === fia.address);
-  expect(await balance(fia.address)).toBe(99n);
+  // The stack's node asks no fee (its floor, 0, while blocks have room), so Selfhold pays none, and nothing else moves.
+  expect(await balance(fia.address)).toBe(100n);
 });
 
 test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {
@@ -757,7 +759,7 @@ test("Settings saved for a trial chain follow the move to Moniker, and keep thei
   await page.reload();
   await page.goto(stack.app + "#/settings");
   await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor", wallet: "page", walletChosen: false });
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor", wallet: "web", walletChosen: false });
 }, { wallet: false, expectedErrors: /status of 404/ }); // the stack's node serves no Nexus/other-names
 
 test("Settings saved with the hosts once named by default find them through Nexus instead", async ({ page }) => {
@@ -798,114 +800,171 @@ test("back from adding Selfhold: the page reloads at the same place, then offers
   expect(await page.evaluate(() => sessionStorage.getItem("moniker.awaitingWallet"))).toBeNull();
 }, { wallet: false });
 
-// ---------------------------------------------------------------- the page's wallet, with a passkey
+// ---------------------------------------------------------------- Selfhold's window, with a passkey
+
+const REQUESTS = "moniker-test-selfhold"; // sessionStorage: the page's requests to Selfhold's window so far
+const walletOrigin = new URL(stack.walletPage).origin;
 
 /**
- * `page` with a platform passkey provider, one that derives keys (PRF) unless
- * `prf` is false, opened at `hash` on localhost: passkeys refuse an IP address.
+ * `page` opened at `hash`, its wallet Selfhold's window, served on
+ * localhost, with a platform passkey provider there. Chromium's virtual
+ * authenticator belongs to one page, and a passkey made in one window
+ * derives no key in another, so every window the page opens is one window,
+ * kept open: each request navigates it, `?n=` counting them.
  */
-async function withPasskeys(page, hash, { settings = {}, prf = true } = {}) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: prf, automaticPresenceSimulation: true },
-  });
+async function withSelfhold(page, hash, { settings = {} } = {}) {
+  const context = page.context();
+  await context.addInitScript((origin) => {
+    if (location.origin === origin) window.close = () => {};
+  }, walletOrigin);
+  await page.addInitScript((key) => {
+    const open = window.open.bind(window);
+    window.open = (url, _name, features) => {
+      const to = new URL(url);
+      const n = Number(sessionStorage.getItem(key) ?? 0) + 1;
+      sessionStorage.setItem(key, String(n));
+      to.searchParams.set("n", String(n));
+      return open(to.href, "selfhold-test", features);
+    };
+  }, REQUESTS);
   await page.addInitScript((settings) => {
     if (!localStorage.getItem("moniker.settings")) localStorage.setItem("moniker.settings", JSON.stringify(settings));
-  }, { nodes: [stack.node], chain: stack.chain, sponsor: "", ...settings });
-  const app = stack.app.replace("127.0.0.1", "localhost");
-  await page.goto(app + hash);
-  return app;
+  }, { nodes: [stack.node], chain: stack.chain, sponsor: "", walletPage: stack.walletPage, ...settings });
+  const arm = () => (context.selfhold = new Promise((resolve) => {
+    const opened = async (popup) => {
+      if (!(await popup.opener().catch(() => null))) return;
+      context.off("page", opened);
+      const cdp = await context.newCDPSession(popup);
+      await cdp.send("WebAuthn.enable");
+      await cdp.send("WebAuthn.addVirtualAuthenticator", {
+        options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true },
+      });
+      context.selfholdWindow = popup;
+      // Closed by the page itself (a write with nothing to send, or one it couldn't build): the next request opens another.
+      popup.on("close", () => arm());
+      resolve(popup);
+    };
+    context.on("page", opened);
+  }));
+  arm();
+  await page.goto(stack.app + hash);
 }
-const pageAccount = (page) => page.evaluate(() => JSON.parse(localStorage.getItem("moniker.wallet")));
 
-test("without Selfhold, a passkey makes the account: a visitor claims @pia_pass, and after a reload Show asks the passkey again", async ({ page }) => {
-  const app = await withPasskeys(page, "#/@pia_pass");
-  await page.getByRole("button", { name: "Claim @pia_pass" }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await claimOnCheckout(page);
-  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-  // The passkey keeps the key: the page stores which passkey, and the address, never the key.
-  const kept = await pageAccount(page);
-  expect(kept.kind).toBe("passkey");
-  expect(kept.key).toBeUndefined();
-  expect((await held("pia_pass")).owner).toBe(kept.address);
+/** Presses `button` on `page`, and resolves with Selfhold's window once it shows this request. */
+async function inSelfhold(page, button) {
+  const n = Number(await page.evaluate((key) => sessionStorage.getItem(key) ?? 0, REQUESTS)) + 1;
+  await button.click();
+  const opened = await page.context().selfhold;
+  await until(`Selfhold's window, request ${n}`, async () => new URL(opened.url()).searchParams.get("n") === String(n), 30);
+  // Its approving button wakes only in a focused window.
+  await opened.bringToFront();
+  return opened;
+}
 
-  // A reload forgets the key; the account is still known, so My names asks nothing until a write.
-  await page.reload();
-  await page.goto(app + "#/names");
-  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  await page.getByRole("button", { name: "Show this handle @pia_pass" }).click();
-  await expect(page.locator("#shows")).toHaveText("Your account is shown as @pia_pass.");
-  expect(await names.handleOf(await state(), kept.address)).toBe("pia_pass");
-}, { wallet: false });
+/** The account Selfhold's window gave this site, as the page remembers it, or null. */
+const selfholdAccount = (page) => page.evaluate((origin) => localStorage.getItem(`selfhold.web.address ${origin}`), walletOrigin);
 
-test("I have a passkey: an account forgotten here comes back from its passkey, with its names", async ({ page }) => {
-  const app = await withPasskeys(page, "#/names");
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  const made = await pageAccount(page);
-  await page.getByLabel("Name", { exact: true }).fill("ida_pass");
-  await page.getByRole("button", { name: "Claim", exact: true }).click();
-  await claimOnCheckout(page);
-  await until("@ida_pass", async () => (await held("ida_pass"))?.owner === made.address);
+/** Continue with Selfhold: in its window, a new account, made with a passkey, connected here. Its address. */
+async function newSelfholdAccount(page) {
+  const opened = await inSelfhold(page, page.getByRole("button", { name: "Continue with Selfhold" }).first());
+  await opened.getByRole("button", { name: "Create an account" }).click();
+  await opened.getByRole("button", { name: "Connect", exact: true }).click();
+  await until("Selfhold's account, here", async () => Boolean(await selfholdAccount(page)), 30);
+  return selfholdAccount(page);
+}
 
-  await page.goto(app + "#/settings");
-  await page.getByRole("button", { name: "Forget this account here" }).click();
-  await sheetButton(page, "Forget it").click();
-  await expect(page.getByRole("heading", { name: "This page's wallet" })).toHaveCount(0);
-  expect(await pageAccount(page)).toBeNull();
-  await page.goto(app + "#/names");
-  await page.getByRole("button", { name: "I have a passkey" }).click();
-  await expect(row(page, "ida_pass")).toBeVisible();
-  expect((await pageAccount(page)).address).toBe(made.address);
-}, { wallet: false });
-
-test("pressed twice, Claim sends once", async ({ page }) => {
-  const app = await withPasskeys(page, "#/names");
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  const { address } = await pageAccount(page);
+/** Presses `button`, then approves the write in Selfhold's window, with the passkey. */
+async function approveInSelfhold(page, button) {
+  const opened = await inSelfhold(page, button);
+  await opened.getByRole("button", { name: "Approve with your passkey" }).click();
+  return opened;
+}
+const onCheckout = (page) => page.locator("main").getByRole("button", { name: /^Claim @/ });
+/** Every request to the hosts' /transactions, from any of the context's pages. */
+function sends(context) {
   const sent = [];
-  page.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
+  context.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
+  return sent;
+}
+/** The hosts, as Moniker's: they ask a relay fee of 1. */
+const relayFee = (context) => context.route("**/api/chain/info?*", async (route) => {
+  const response = await route.fetch();
+  await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+});
+/** Every status the page shows, however briefly, from now. */
+const watchToasts = (page) => page.evaluate(() => {
+  window.said = [];
+  new MutationObserver(() => window.said.push(document.querySelector("#toasts").innerText)).observe(document.querySelector("#toasts"), { subtree: true, childList: true, characterData: true });
+});
+
+test("Selfhold's window makes the account with a passkey: a visitor claims @pia_web; the page never holds a key; Disconnect forgets the account here only", async ({ page }) => {
+  await withSelfhold(page, "#/@pia_web");
+  await page.getByRole("button", { name: "Claim @pia_web" }).click();
+  await expect(page.getByRole("radio", { name: /^Selfhold\s*In a window/ })).toBeChecked();
+  const address = await newSelfholdAccount(page);
+  await approveInSelfhold(page, onCheckout(page));
+  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
+  expect((await held("pia_web")).owner).toBe(address);
+  // The page keeps its settings and the address it was given: nothing else.
+  expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual(["moniker.settings", `selfhold.web.address ${walletOrigin}`]);
+
+  // After a reload, My names asks nothing until a write, and a write asks only the window.
+  await page.reload();
+  await page.goto(stack.app + "#/names");
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  await approveInSelfhold(page, page.getByRole("button", { name: "Show this handle @pia_web" }));
+  await expect(page.locator("#shows")).toHaveText("Your account is shown as @pia_web.");
+  expect(await names.handleOf(await state(), address)).toBe("pia_web");
+
+  // Disconnected, the page forgets the account; the window keeps it, and connects it again.
+  await page.goto(stack.app + "#/settings");
+  await expect(page.getByRole("heading", { name: "Selfhold" })).toBeVisible();
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  expect(await selfholdAccount(page)).toBeNull();
+  await page.goto(stack.app + "#/names");
+  const opened = await inSelfhold(page, page.getByRole("button", { name: "Continue with Selfhold" }));
+  await opened.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(row(page, "pia_web")).toBeVisible();
+}, { wallet: false });
+
+test("pressed twice, Claim opens Selfhold's window once, and sends once", async ({ page }) => {
+  await withSelfhold(page, "#/names");
+  const address = await newSelfholdAccount(page);
+  await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  const sent = sends(page.context());
   await page.getByLabel("Name", { exact: true }).fill("tia_twice");
-  const claimButton = page.getByRole("button", { name: "Claim", exact: true });
-  await claimButton.click();
-  const onCheckout = page.locator("main").getByRole("button", { name: /^Claim @/ });
-  await onCheckout.click();
-  await onCheckout.click();
+  await page.getByRole("button", { name: "Claim", exact: true }).click();
+  const opened = await inSelfhold(page, onCheckout(page));
+  await onCheckout(page).click();
+  await opened.getByRole("button", { name: "Approve with your passkey" }).click();
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect((await held("tia_twice")).owner).toBe(address);
   // A second write would have gone out by now, behind the first.
   await page.waitForTimeout(3000);
   expect(sent).toHaveLength(1);
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), REQUESTS)).toBe("2"); // the connection, and the claim
   await expect(page.locator("#alerts")).toBeEmpty();
-  await page.goto(app + "#/names");
-  await expect(row(page, "tia_twice")).toBeVisible();
 }, { wallet: false });
 
-test("the page's wallet buys from a page that shows the price, whom it pays, the fee and the balance; short of coins, it offers to add them", async ({ page }) => {
+test("Selfhold's window buys from a page that shows the price, whom it pays, the fee and the balance; short of coins, the page offers to add them", async ({ page }) => {
   const seller = newAccount();
   await claimAs(seller, "uma_sale", { price: 30n });
   await claimAs(seller, "uma_dear", { price: 5000n });
-  // A visitor's review starts with the account, since buying takes coins.
-  const app = await withPasskeys(page, "#/buy/uma_sale");
+  // A visitor's checkout starts with the account, since buying takes coins.
+  await withSelfhold(page, "#/buy/uma_sale");
   await expect(page.getByRole("heading", { name: "Buy @uma_sale" })).toBeVisible();
-  await expect(page.getByText("Buying takes coins, so make your account first")).toBeVisible();
+  await expect(page.locator("main")).toContainText("Buying takes coins");
   await expect(page.getByRole("button", { name: /^Pay/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "Create a passkey" }).click();
+  const address = await newSelfholdAccount(page);
   await expect(page.locator("main")).toContainText("Your account holds0");
   await expect(page.getByRole("button", { name: "Add coins" })).toBeVisible();
-  const { address } = await pageAccount(page);
   await fund(address, 100n);
 
-  const sent = [];
-  page.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
-  await page.goto(app + "#/@uma_sale");
+  const sent = sends(page.context());
+  await page.goto(stack.app + "#/@uma_sale");
   await page.getByRole("link", { name: "Buy @uma_sale for 30" }).click();
   await expect(page.getByRole("heading", { name: "Buy @uma_sale" })).toBeVisible();
-  // The page's account is the way to pay offered first.
-  await expect(page.getByRole("radio", { name: /^Your passkey account/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /^Selfhold\s*In a window/ })).toBeChecked();
   const summary = page.locator("main");
   await expect(summary).toContainText("Price30, paid to its owner");
   await expect(summary).toContainText("FeeNone"); // these hosts ask no fee
@@ -915,14 +974,14 @@ test("the page's wallet buys from a page that shows the price, whom it pays, the
   await expect(page.locator("#exact")).toHaveText("@uma_sale");
   expect(sent).toHaveLength(0);
   await page.getByRole("link", { name: "Buy @uma_sale for 30" }).click();
-  await page.getByRole("button", { name: "Pay 30 and buy @uma_sale" }).click();
+  await approveInSelfhold(page, page.getByRole("button", { name: "Pay 30 and buy @uma_sale" }));
   await expect(page.locator(".result .badge")).toHaveText("Yours");
   expect(sent).toHaveLength(1);
   expect((await held("uma_sale")).owner).toBe(address);
   expect(await balance(address)).toBe(70n);
 
   // More than the account holds: no Pay, and Add coins shows where to send them.
-  await page.goto(app + "#/buy/uma_dear");
+  await page.goto(stack.app + "#/buy/uma_dear");
   await expect(page.locator("main").getByRole("status")).toHaveText("This needs 4,930 more coins than your account holds.");
   await expect(page.getByRole("button", { name: /^Pay/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Add coins" }).click();
@@ -937,13 +996,10 @@ test("another wallet pays by request: the page draws it as a QR code and text, a
   const buyer = newAccount();
   await fund(buyer.address, 100n);
   await claimAs(seller, "vic_qr", { price: 25n });
-  await withPasskeys(page, "#/buy/vic_qr");
-  const sent = [];
-  page.on("request", (request) => request.method() === "POST" && new URL(request.url()).pathname === "/transactions" && sent.push(request));
-  // Without Selfhold, it is offered to add; a request needs no account here at all.
+  await withSelfhold(page, "#/buy/vic_qr");
+  const sent = sends(page.context());
+  // A request needs no account here at all.
   await page.getByText("Other ways to pay").click();
-  await page.getByRole("radio", { name: /^Selfhold/ }).check();
-  await expect(page.getByRole("link", { name: /^Add Selfhold/ })).toBeVisible();
   await page.getByRole("radio", { name: /^Another wallet or device/ }).check();
   await expect(page.getByRole("radio", { name: /^Another wallet or device/ })).toBeFocused();
   await expect(page.getByRole("img", { name: "QR code of the request to buy @vic_qr" })).toBeVisible();
@@ -991,21 +1047,17 @@ test("another wallet pays by request: the page draws it as a QR code and text, a
   expect(sent).toHaveLength(0);
 }, { wallet: false });
 
-test("the page's account pays only the price: its fee, free, paid with this device's GPU; with that down, coins pay the fee, unasked", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
+test("the account pays only the price: its fee, free, paid with this device's GPU; with that down, coins pay the fee, unasked", async ({ page }) => {
+  await relayFee(page.context());
   const seller = newAccount();
   await claimAs(seller, "wes_fee", { price: 30n });
   await claimAs(seller, "wes_down", { price: 5n });
   const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  const app = await withPasskeys(page, "#/buy/wes_fee", { settings: { sponsor: sponsor.url } });
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await expect(page.getByRole("button", { name: "Add coins" })).toBeVisible();
-  const { address } = await pageAccount(page);
+  await withSelfhold(page, "#/buy/wes_fee", { settings: { sponsor: sponsor.url } });
+  const address = await newSelfholdAccount(page);
+  await expect(page.getByRole("button", { name: "Add coins instead" })).toBeVisible();
   await fund(address, 40n);
-  await page.goto(app + "#/@wes_fee");
+  await page.goto(stack.app + "#/@wes_fee");
   await page.getByRole("link", { name: "Buy @wes_fee for 30" }).click();
   // The price, the fee said to be free and paid with the GPU, and Pay: no total, no choice of how.
   await expect(page.getByRole("button", { name: "Pay 30 and buy @wes_fee" })).toBeVisible();
@@ -1016,55 +1068,41 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   // The other ways wait, folded.
   await expect(page.getByRole("radio", { name: /^Another wallet or device/ })).toBeHidden();
   const before = await balance(sponsor.address);
-  // Every status shown, however briefly.
-  await page.evaluate(() => {
-    window.said = [];
-    new MutationObserver(() => window.said.push(document.querySelector("#toasts").innerText)).observe(document.querySelector("#toasts"), { subtree: true, childList: true, characterData: true });
-  });
-  await page.getByRole("button", { name: "Pay 30 and buy @wes_fee" }).click();
+  await watchToasts(page);
+  await approveInSelfhold(page, page.getByRole("button", { name: "Pay 30 and buy @wes_fee" }));
   await expect(page.locator(".result .badge")).toHaveText("Yours");
-  const said = await page.evaluate(() => window.said);
-  expect(said.join(" ")).toContain("Buying @wes_fee: paying the fee with this device's GPU");
-  expect(said.join(" ")).not.toMatch(/sponsor/i);
+  // The window says what it is doing, and the page passes it on.
+  expect((await page.evaluate(() => window.said)).join(" ")).toContain("Buying @wes_fee: paying the fee with this device's GPU");
   expect((await held("wes_fee")).owner).toBe(address);
   // The account paid the price only; the sponsor, the fee.
   expect(await balance(address)).toBe(10n);
   await expectSponsorPaid(sponsor, before, 1n);
 
-  // The sponsor gone: the account has the coins, so they pay the fee, with nothing asked.
-  await page.route(`${sponsor.url}/*`, (route) => route.abort("connectionrefused"));
-  await page.goto(app + "#/buy/wes_down");
-  await page.getByRole("button", { name: "Pay 5 and buy @wes_down" }).click();
+  // The sponsor gone: the account has the coins, so they pay the fee, with nothing more asked.
+  await page.context().route(`${sponsor.url}/*`, (route) => route.abort("connectionrefused"));
+  await page.goto(stack.app + "#/buy/wes_down");
+  await approveInSelfhold(page, page.getByRole("button", { name: "Pay 5 and buy @wes_down" }));
   await expect(page.locator(".result .badge")).toHaveText("Yours");
   expect(await balance(address)).toBe(4n);
 }, { wallet: false, expectedErrors: /status of (400|503)|ERR_CONNECTION_REFUSED/ });
 
-test("an account with no coins buys with this device's GPU: it pays the price and the fee; past what the service pays, it asks for coins", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
+test("an account with no coins buys with this device's GPU: it pays the price and the fee; past what the service pays, the page asks for coins", async ({ page }) => {
+  await relayFee(page.context());
   const seller = newAccount();
   await claimAs(seller, "yan_gpu", { price: 20n });
   await claimAs(seller, "yan_dear", { price: 150n });
   const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  const app = await withPasskeys(page, "#/buy/yan_gpu", { settings: { sponsor: sponsor.url } });
-  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await withSelfhold(page, "#/buy/yan_gpu", { settings: { sponsor: sponsor.url } });
+  const address = await newSelfholdAccount(page);
   // Nothing in the account, and the GPU offered first; coins, second.
   await expect(page.getByRole("button", { name: "Pay with this device's GPU" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add coins instead" })).toBeVisible();
   const main = page.locator("main");
   await expect(main).toContainText("This device's GPU can pay the 20 your account is short, as it pays the fee.");
   await expect(main).not.toContainText(/sponsor/i);
-  const { address } = await pageAccount(page);
   const [sellerBefore, sponsorBefore] = [await balance(seller.address), await balance(sponsor.address)];
-  await page.evaluate(() => {
-    window.said = [];
-    new MutationObserver(() => window.said.push(document.querySelector("#toasts").innerText)).observe(document.querySelector("#toasts"), { subtree: true, childList: true, characterData: true });
-  });
-  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await approveInSelfhold(page, page.getByRole("button", { name: "Pay with this device's GPU" }));
   await expect(page.locator(".result .badge")).toHaveText("Yours", { timeout: 120_000 });
-  expect((await page.evaluate(() => window.said)).join(" ")).toContain("Buying @yan_gpu: paying with this device's GPU");
   expect((await held("yan_gpu")).owner).toBe(address);
   // The seller has the price; the account, still nothing; the sponsor paid both.
   expect(await balance(seller.address)).toBe(sellerBefore + 20n);
@@ -1072,224 +1110,141 @@ test("an account with no coins buys with this device's GPU: it pays the price an
   await expectSponsorPaid(sponsor, sponsorBefore, 21n);
 
   // Past the 100 this service pays of a price: coins, and why.
-  await page.goto(app + "#/buy/yan_dear");
-  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await page.goto(stack.app + "#/buy/yan_dear");
+  await approveInSelfhold(page, page.getByRole("button", { name: "Pay with this device's GPU" }));
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not a price this high, so send coins");
   await sheetButton(page, "Cancel").click();
   expect((await held("yan_dear")).owner).toBe(seller.address);
 }, { wallet: false, expectedErrors: /status of 400/ });
 
-test("a fee sponsor that changes what it pays the account: the page signs nothing, and sends nothing", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
-  const seller = newAccount();
-  await claimAs(seller, "yan_bent", { price: 20n });
-  const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  // Its answers, bent: its credit to the account one more than asked, then
-  // paid to someone else.
-  const bends = [
-    (actions) => (actions.at(-2).delta = String(BigInt(actions.at(-2).delta) + 1n)),
-    (actions) => (actions.at(-2).owner = seller.address),
-  ];
-  let bent = 0;
-  await page.route(`${sponsor.url}/sponsor`, async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    if (json.transaction) bends[bent++ % bends.length](json.transaction.body.accountActions);
-    await route.fulfill({ response, json });
-  });
-  await withPasskeys(page, "#/buy/yan_bent", { settings: { sponsor: sponsor.url } });
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  const { address } = await pageAccount(page);
-  const sellerBefore = await balance(seller.address);
-  for (let i = 0; i < bends.length; i++) {
-    await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
-    await expect(page.getByText("The fee sponsor changed the transaction. Nothing was sent.").first()).toBeVisible({ timeout: 120_000 });
-    expect(bent).toBe(i + 1);
-    expect((await held("yan_bent")).owner).toBe(seller.address);
-    await page.reload();
-  }
-  expect(await balance(seller.address)).toBe(sellerBefore);
-  expect(await balance(address)).toBe(0n);
-}, { wallet: false, expectedErrors: /status of (400|503)/ });
-
 test("a free name with the GPU's fee service down, and no coins: the page says its fee is usually paid with the GPU, and to try again", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
+  await relayFee(page.context());
   const sponsor = "http://localhost:27199/sponsor";
-  await page.route(`${sponsor}/*`, (route) => route.abort("connectionrefused"));
-  await withPasskeys(page, "#/@xia_down", { settings: { sponsor } });
+  await page.context().route(`${sponsor}/*`, (route) => route.abort("connectionrefused"));
+  await withSelfhold(page, "#/@xia_down", { settings: { sponsor } });
   await page.getByRole("button", { name: "Claim @xia_down" }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await claimOnCheckout(page);
+  await newSelfholdAccount(page);
+  await approveInSelfhold(page, onCheckout(page));
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   await expect(page.locator("#sheet-body")).toContainText("Its fee is usually paid with this device's GPU, but that isn't working right now: try again in a few minutes, or send coins");
   await sheetButton(page, "Cancel").click();
   expect(await held("xia_down")).toBeUndefined();
 }, { wallet: false, expectedErrors: /ERR_CONNECTION_REFUSED/ });
 
-test("where passkeys can't make a key, the key is kept in this browser: it claims, outlasts a reload, and Copy the key gives it", async ({ page }) => {
-  const app = await withPasskeys(page, "#/@bea_key", { prf: false });
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(app).origin });
-  await page.getByRole("button", { name: "Claim @bea_key" }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  // Said before the write goes on, and the key offered to copy.
-  await expect(page.locator("#sheet-title")).toHaveText("Your key is kept in this browser only");
-  // A choice to make, not one to put off: no Cancel, and Escape doesn't close it.
-  await expect(sheetButton(page, "Cancel")).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#sheet")).toBeVisible();
-  await sheetButton(page, "Copy the key").click();
-  await claimOnCheckout(page);
-  await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-  const kept = await pageAccount(page);
-  const keyOf = async () => sdk.accountFromPrivateKey(Uint8Array.from(Buffer.from(await page.evaluate(() => navigator.clipboard.readText()), "hex"))).address;
-  expect(await keyOf()).toBe(kept.address);
-  expect(kept.kind).toBe("browser");
-  expect((await held("bea_key")).owner).toBe(kept.address);
-
-  // After a reload the key is still here: a write asks nothing.
-  await page.reload();
-  await page.goto(app + "#/settings");
-  await expect(page.getByText("its key kept in this browser only")).toBeVisible();
-  await page.evaluate(() => navigator.clipboard.writeText(""));
-  await page.getByRole("button", { name: "Copy the key" }).click();
-  await expect(page.locator("#toasts")).toContainText("Key copied");
-  expect(await keyOf()).toBe(kept.address);
-  await page.goto(app + "#/names");
-  await page.getByRole("button", { name: "Show this handle @bea_key" }).click();
-  await expect(page.locator("#shows")).toHaveText("Your account is shown as @bea_key.");
-}, { wallet: false });
-
-test("with Selfhold too, Settings switch to Selfhold and back: each writes as its own account, and only Selfhold asks Selfhold", async ({ page }) => {
+test("with Selfhold for Chrome too, Settings switch to it and back: each writes as its own account, and only it asks the extension", async ({ page }) => {
   const kit = newAccount();
-  await fund(kit.address, 100n); // Selfhold's fee
+  await fund(kit.address, 100n); // Selfhold for Chrome's fee
   await walletHolds(page.context(), kit);
-  const app = await withPasskeys(page, "#/settings");
-  await page.getByLabel("Use Selfhold, not this page's passkey wallet").check();
+  await withSelfhold(page, "#/settings");
+  const useExtension = page.getByLabel("Use Selfhold for Chrome, not Selfhold's window");
+  await expect(page.getByText("Each keeps its own account.")).toBeVisible();
+  await useExtension.check();
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
-  // Settings read the account Selfhold connects here, if it remembers one.
-  await page.goto(app + "#/names");
+  await expect(toast(page, "Now Selfhold for Chrome, and its own account")).toBeVisible();
+  // Settings read the account Selfhold for Chrome connects here, if it remembers one; else it is asked.
+  await page.goto(stack.app + "#/names");
   const connect = page.getByRole("button", { name: "Connect Selfhold" });
   await expect(page.getByRole("heading", { name: "My names" }).or(connect)).toBeVisible();
   if (await connect.isVisible()) await connect.click();
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  await expect(page.locator("main")).toContainText(shortAccount(kit.address));
+  await expect(page.locator("main")).toContainText("Kept by Selfhold for Chrome.");
 
-  await page.goto(app + "#/settings");
-  await page.getByLabel("Use Selfhold, not this page's passkey wallet").uncheck();
+  await page.goto(stack.app + "#/settings");
+  await useExtension.uncheck();
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
-  await page.goto(app + "#/names");
+  await expect(page).toHaveURL(/#\/$/);
+  await page.goto(stack.app + "#/names");
   const asked = page.context().approvals;
-  await page.getByRole("button", { name: "Create a passkey" }).click();
+  const made = await newSelfholdAccount(page);
+  expect(made).not.toBe(kit.address);
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  const made = await pageAccount(page);
-  expect(made.address).not.toBe(kit.address);
-  await page.getByLabel("Name", { exact: true }).fill("kit_page");
+  await page.getByLabel("Name", { exact: true }).fill("kit_web");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
-  await claimOnCheckout(page);
+  await approveInSelfhold(page, onCheckout(page));
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-  expect((await held("kit_page")).owner).toBe(made.address);
-  await page.goto(app + "#/names");
-  await expect(row(page, "kit_page")).toBeVisible();
+  expect((await held("kit_web")).owner).toBe(made);
   expect(page.context().approvals).toBe(asked);
 
-  await page.goto(app + "#/settings");
-  await page.getByLabel("Use Selfhold, not this page's passkey wallet").check();
+  await page.goto(stack.app + "#/settings");
+  await useExtension.check();
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
-  await page.goto(app + "#/names");
+  await expect(page).toHaveURL(/#\/$/);
+  await page.goto(stack.app + "#/names");
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  await expect(row(page, "kit_page")).toHaveCount(0);
+  await expect(row(page, "kit_web")).toHaveCount(0);
   await page.getByLabel("Name", { exact: true }).fill("kit_self");
   await page.getByRole("button", { name: "Claim", exact: true }).click();
   await claimOnCheckout(page);
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect((await held("kit_self")).owner).toBe(kit.address);
   expect(page.context().approvals).toBe(asked + 1);
-  // The page's account is still here, for when it's switched back.
-  expect((await pageAccount(page)).address).toBe(made.address);
+  // The window's account is still given here, for when it's switched back.
+  expect(await selfholdAccount(page)).toBe(made);
 });
 
-test("the page's passkey wallet is the default, Selfhold installed or not; whoever connected Selfhold here while it was the default keeps it", async ({ page }) => {
+test("Selfhold's window is the default, Selfhold for Chrome installed or not; whoever connected Selfhold for Chrome here while it was the default keeps it", async ({ page }) => {
   const sol = newAccount();
   await walletHolds(page.context(), sol);
-  // Installed, nothing chosen: the page's wallet.
+  // Installed, nothing chosen: the window.
   await openApp(page, null, "#/names", { nodes: [stack.node], chain: stack.chain, sponsor: "" });
-  await expect(page.getByRole("button", { name: "Create a passkey" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Selfhold" })).toBeVisible();
   // Chosen, and connected here.
-  await page.evaluate((nodes) => localStorage.setItem("moniker.settings", JSON.stringify({ nodes, chain: "Nexus/moniker", sponsor: "", wallet: "selfhold", walletChosen: true })), [stack.node]);
+  await page.evaluate((nodes) => localStorage.setItem("moniker.settings", JSON.stringify({ nodes, chain: "Nexus/moniker", sponsor: "", wallet: "extension", walletChosen: true })), [stack.node]);
   await page.reload();
   await page.getByRole("button", { name: "Connect Selfhold" }).click();
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
-  // Saved as Selfhold was once by default, chosen by no one: still Selfhold, as it is connected here, and now chosen.
+  // Saved as Selfhold for Chrome was once by default, chosen by no one: still it, as it is connected here, and now chosen.
   await page.evaluate((nodes) => localStorage.setItem("moniker.settings", JSON.stringify({ nodes, chain: "Nexus/moniker", sponsor: "", wallet: "selfhold" })), [stack.node]);
   await page.reload();
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
   await expect(page.locator("main")).toContainText(shortAccount(sol.address));
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toMatchObject({ wallet: "selfhold", walletChosen: true });
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toMatchObject({ wallet: "extension", walletChosen: true });
 });
 
-test("with Selfhold in use, the checkout still offers the passkey account, its fee paid with the GPU; claiming with it turns the page to its wallet", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
+test("with Selfhold for Chrome in use, the checkout still offers Selfhold's window, its fee paid with the GPU; claiming with it turns the page to the window", async ({ page }) => {
+  await relayFee(page.context());
   await walletHolds(page.context(), newAccount());
   const sponsor = await running.sponsor((address) => fund(address, 1000n));
-  await withPasskeys(page, "#/@ned_gpu", { settings: { sponsor: sponsor.url, wallet: "selfhold", walletChosen: true } });
+  await withSelfhold(page, "#/@ned_gpu", { settings: { sponsor: sponsor.url, wallet: "extension", walletChosen: true } });
   await page.getByRole("button", { name: "Claim @ned_gpu" }).click();
-  await expect(page.getByRole("radio", { name: /^Selfhold/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /^Selfhold for Chrome/ })).toBeChecked();
   await page.getByText("Other ways to pay").click();
-  await page.getByRole("radio", { name: /^Your passkey account/ }).check();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
+  await page.getByRole("radio", { name: /^Selfhold\s*In a window/ }).check();
+  const made = await newSelfholdAccount(page);
   await expect(page.locator("main")).toContainText("FeeFree, paid with this device's");
   const asked = page.context().approvals;
-  await claimOnCheckout(page);
+  await approveInSelfhold(page, onCheckout(page));
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-  const made = await pageAccount(page);
-  expect((await held("ned_gpu")).owner).toBe(made.address);
+  expect((await held("ned_gpu")).owner).toBe(made);
   expect(page.context().approvals).toBe(asked);
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toMatchObject({ wallet: "page", walletChosen: true });
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toMatchObject({ wallet: "web", walletChosen: true });
 }, { expectedErrors: /status of (400|503)/ });
 
-test("with the page's wallet in use, the checkout can still pay with Selfhold: it opens a request there, for an account picked there", async ({ page }) => {
-  const lou = newAccount();
-  const seller = newAccount();
-  await fund(lou.address, 100n);
-  await walletHolds(page.context(), lou);
-  await claimAs(seller, "lou_open", { price: 20n });
-  const app = await withPasskeys(page, "#/buy/lou_open");
-  await expect(page.getByRole("radio", { name: /^Your passkey account/ })).toBeChecked();
-  await page.getByText("Other ways to pay").click();
-  await page.getByRole("radio", { name: /^Selfhold/ }).check();
-  const asked = page.context().approvals;
-  await page.getByRole("button", { name: "Open in Selfhold" }).click();
-  await expect(page.locator("#exact")).toHaveText("@lou_open", { timeout: 30_000 });
-  expect(page.context().approvals, page.context().walletNotes.join("\n")).toBe(asked + 1);
-  expect((await held("lou_open")).owner).toBe(lou.address);
-  expect(await balance(seller.address)).toBeGreaterThanOrEqual(20n);
+test("with Selfhold's window in use, the checkout never offers Selfhold for Chrome, installed or not, and says whose account pays", async ({ page }) => {
+  await walletHolds(page.context(), newAccount());
+  await withSelfhold(page, "#/@lou_one");
+  await page.getByRole("button", { name: "Claim @lou_one" }).click();
+  const address = await newSelfholdAccount(page);
+  await expect(page.getByRole("radio", { name: /^Selfhold\s*In a window/ })).toBeChecked();
+  // The window, and a request for any wallet, folded: nothing else.
+  expect(await page.locator('input[name="pay"]').evaluateAll((inputs) => inputs.map((i) => i.value))).toEqual(["web", "request"]);
+  await expect(page.locator("main")).toContainText(`From${shortAccount(address)}, Selfhold's window's account`);
+  // My names says which wallet keeps it.
+  await page.goto(stack.app + "#/names");
+  await expect(page.locator("main")).toContainText("Kept by Selfhold's window, with your passkey.");
 });
 
-test("the page's wallet pays the hosts' relay fee: without the coins it asks for them and sends nothing; funded, it pays", async ({ page }) => {
-  // The hosts here take any fee; as Moniker's hosts, they ask 1.
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
-  await withPasskeys(page, "#/@ola_pass");
+test("without a sponsor the account pays the hosts' relay fee: short of it, the page asks for coins and sends nothing; funded, it pays", async ({ page }) => {
+  await relayFee(page.context());
+  await withSelfhold(page, "#/@ola_pass");
   await page.getByRole("button", { name: "Claim @ola_pass" }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
+  const address = await newSelfholdAccount(page);
   await expect(page.locator("main")).toContainText("This needs 1 more coin than your account holds.");
   await page.getByRole("button", { name: "Add coins", exact: true }).click();
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
-  const { address } = await pageAccount(page);
   await expect(page.locator("#sheet-body")).toContainText(`needs 1 coin, and your account holds 0`);
   await expect(page.locator("#sheet .sheet-detail")).toHaveText(address);
   await sheetButton(page, "Cancel").click();
@@ -1297,76 +1252,25 @@ test("the page's wallet pays the hosts' relay fee: without the coins it asks for
 
   await fund(address, 10n);
   await page.reload();
-  await claimOnCheckout(page);
+  await approveInSelfhold(page, onCheckout(page));
   await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
   expect(await balance(address)).toBe(9n);
 }, { wallet: false });
 
-test("the graphics chip and the processor find the same shares as SHA-256 does, wherever the nonce falls", async ({ page }) => {
-  // This stack's hosts, not Moniker's live ones.
-  await page.addInitScript((settings) => localStorage.setItem("moniker.settings", JSON.stringify(settings)), { nodes: [stack.node], chain: stack.chain, sponsor: "" });
-  await page.goto(stack.app);
-  const target = `003fffff${"f".repeat(56)}`; // a share in 1024
-  const start = 2n ** 32n - 5000n; // the nonce's low half carries into its high half
-  const count = 1 << 14;
-  const runs = await page.evaluate(async ({ app, target, start, count }) => {
-    const { gpuGrinder } = await import(new URL("share-gpu.mjs", app).href);
-    const gpu = await gpuGrinder();
-    if (!gpu) return null;
-    const runs = [];
-    // Every offset of the nonce in its block, in one last block and two.
-    for (let length = 0; length <= 130; length++) {
-      const prefixHex = Array.from(crypto.getRandomValues(new Uint8Array(length)), (b) => b.toString(16).padStart(2, "0")).join("");
-      const job = gpu.job(prefixHex, target);
-      const onGpu = (await job.run(BigInt(start), count)).map(String);
-      job.close();
-      const onCpu = await new Promise((resolve, reject) => {
-        const worker = new Worker(new URL("share-worker.mjs", app), { type: "module" });
-        const found = [];
-        worker.onerror = (event) => reject(new Error(event.message));
-        worker.onmessage = ({ data }) => {
-          if (data.share) found.push(data.share);
-          if (data.done) {
-            worker.terminate();
-            resolve(found);
-          }
-        };
-        worker.postMessage({ prefixHex, targetHex: target, start, count: String(count) });
-      });
-      runs.push({ prefixHex, onGpu: onGpu.sort(), onCpu: onCpu.sort() });
-    }
-    return runs;
-  }, { app: stack.app, target, start: String(start), count });
-  expect(runs, "no WebGPU adapter: on Linux, Chromium needs SwiftShader's flags (gpuArgs)").not.toBeNull();
-  for (const { prefixHex, onGpu, onCpu } of runs) {
-    const want = [];
-    for (let i = 0n; i < BigInt(count); i++) {
-      const nonce = Buffer.alloc(8);
-      nonce.writeBigUInt64BE(start + i);
-      const hash = createHash("sha256").update(Buffer.from(prefixHex, "hex")).update(nonce).digest("hex");
-      if (BigInt(`0x${hash}`) <= BigInt(`0x${target}`)) want.push(String(start + i));
-    }
-    expect({ length: prefixHex.length / 2, onGpu, onCpu }).toEqual({ length: prefixHex.length / 2, onGpu: want.sort(), onCpu: want });
-  }
-}, { wallet: false });
-
-test("a fee sponsor that asks more work than the page will do: it asks for coins instead, and grinds nothing", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
+test("a fee sponsor that asks more work than the window will do: the page asks for coins instead, and nothing is ground", async ({ page }) => {
+  await relayFee(page.context());
   // One share of 2^60 hashes for the fee: years, on any device.
   const sponsor = "http://localhost:27199/sponsor";
   const asked = [];
-  await page.route(`${sponsor}/*`, (route) => {
+  await page.context().route(`${sponsor}/*`, (route) => {
     asked.push(new URL(route.request().url()).pathname);
     if (!route.request().url().endsWith("/work")) return route.fulfill({ status: 402, json: { error: { message: "insufficientCredit" } } });
     return route.fulfill({ json: { client: "c", assignment: "a", prefixHex: "00", shareTarget: `${"0".repeat(15)}${"f".repeat(49)}`, startNonce: "0", count: "4294967296", fee: "1", sharesForFee: "1", expiresInMilliseconds: "30000" } });
   });
-  await withPasskeys(page, "#/@dee_pass", { settings: { sponsor } });
+  await withSelfhold(page, "#/@dee_pass", { settings: { sponsor } });
   await page.getByRole("button", { name: "Claim @dee_pass" }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await claimOnCheckout(page);
+  await newSelfholdAccount(page);
+  await approveInSelfhold(page, onCheckout(page));
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
   await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay for it in reasonable time, so send coins to your account ID");
   expect(asked).toEqual(["/sponsor/work"]);
@@ -1376,12 +1280,10 @@ test("a fee sponsor that asks more work than the page will do: it asks for coins
 
 for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu", gpu: true }, { on: "the processor, with no graphics chip", handle: "sia_cpu", gpu: false }]) {
   test(`with a fee sponsor, an account with no coins pays the relay fee in work, on ${on}: the sponsor's account pays it`, async ({ page }) => {
-    await page.route("**/api/chain/info?*", async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-    });
-    // Counts the workers the page starts, and with `gpu` false, hides WebGPU.
-    await page.addInitScript((gpu) => {
+    await relayFee(page.context());
+    // Counts the workers Selfhold's window starts, and with `gpu` false, hides WebGPU from it.
+    await page.context().addInitScript(({ origin, gpu }) => {
+      if (location.origin !== origin) return;
       if (!gpu) Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
       const Base = Worker;
       window.workersStarted = 0;
@@ -1391,23 +1293,20 @@ for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu",
           window.workersStarted += 1;
         }
       };
-    }, gpu);
+    }, { origin: walletOrigin, gpu });
     const sponsor = await running.sponsor((address) => fund(address, 1000n));
-    await withPasskeys(page, `#/@${handle}`, { settings: { sponsor: sponsor.url } });
+    await withSelfhold(page, `#/@${handle}`, { settings: { sponsor: sponsor.url } });
     const before = await balance(sponsor.address);
     await page.getByRole("button", { name: `Claim @${handle}` }).click();
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await claimOnCheckout(page);
+    const address = await newSelfholdAccount(page);
+    const opened = await approveInSelfhold(page, onCheckout(page));
     await expect(page.locator("#points")).toHaveText("Points at you · not shown there");
-    const { address } = await pageAccount(page);
     expect((await held(handle)).owner).toBe(address);
     expect(await balance(address)).toBe(0n);
     await expectSponsorPaid(sponsor, before, 1n);
-    const workers = await page.evaluate(() => window.workersStarted);
+    const workers = await opened.evaluate(() => window.workersStarted);
     if (gpu) expect(workers).toBe(0);
     else expect(workers).toBeGreaterThan(0);
-    // A share here is worth a block, so the sponsor may sell out a height and say so (503) until the next,
-    // and a share of work from before the chain moved on is refused (400) until the page asks for more.
   }, { wallet: false, expectedErrors: /status of (400|503)/ });
 }
 
