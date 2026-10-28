@@ -469,7 +469,7 @@ async function hasher(work, found, hashed) {
     const done = (async () => {
       let next = BigInt(work.startNonce);
       const end = next + BigInt(work.count);
-      let batch = 1 << 20;
+      let batch = 1 << 16;
       try {
         while (!stopped && next < end) {
           const size = end - next < BigInt(batch) ? Number(end - next) : batch;
@@ -479,8 +479,11 @@ async function hasher(work, found, hashed) {
           next += BigInt(size);
           hashed(size);
           shares.forEach(found);
-          // Batches of a tenth of a second or so: few round trips, and the chip still draws the page.
-          if (performance.now() - began < 100 && batch < 1 << 26) batch *= 2;
+          // Batches of a tenth of a second or so: few round trips, the chip still draws the page,
+          // and a share reaches the sponsor before the chain moves past its work.
+          const spent = performance.now() - began;
+          if (spent < 100 && batch < 1 << 26) batch *= 2;
+          else if (spent > 400 && batch > 1 << 12) batch /= 2;
         }
       } finally {
         job.close();
