@@ -175,6 +175,7 @@ jobs:
       LATTICE: ${{ github.workspace }}/.deps/bin/lattice
       LATTICE_SDK: ${{ github.workspace }}/.deps/lattice-sdk/packages/sdk/dist/index.js
       LATTICE_WALLET: ${{ github.workspace }}/.deps/lattice-wallet/dist
+      LATTICE_WALLET_WEB: ${{ github.workspace }}/.deps/lattice-wallet/dist-web
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,9 +216,9 @@ jobs:
           path: .deps/lattice-wallet
           submodules: true
       - if: matrix.suite == 'ui'
-        name: Build Selfhold
+        name: Build Selfhold for Chrome, and Selfhold's window
         working-directory: .deps/lattice-wallet
-        run: npm ci && npm run build
+        run: npm ci && npm run build && npm run build:web
       - if: matrix.suite == 'ui'
         name: Install Playwright
         working-directory: e2e/ui
