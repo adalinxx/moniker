@@ -259,6 +259,16 @@ async function asOther(who, hash, body) {
 }
 
 const toast = (page, text) => page.locator(".toast", { hasText: text });
+/**
+ * The sponsor's account paid `amount` since it held `before`. The page's
+ * shares can be blocks, so it may also have won a block's reward meanwhile:
+ * 1000 on the stack's chain.
+ */
+async function expectSponsorPaid(sponsor, before, amount) {
+  const won = (await balance(sponsor.address)) - (before - amount);
+  expect(won >= 0n && won % 1000n === 0n).toBe(true);
+}
+
 /** On the checkout a Claim opens: its own Claim, by the way it offers first. */
 async function claimOnCheckout(page) {
   await expect(page.locator("#buy-title")).toContainText("Claim");
@@ -1019,7 +1029,7 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   expect((await held("wes_fee")).owner).toBe(address);
   // The account paid the price only; the sponsor, the fee.
   expect(await balance(address)).toBe(10n);
-  expect(await balance(sponsor.address)).toBe(before - 1n);
+  await expectSponsorPaid(sponsor, before, 1n);
 
   // The sponsor gone: the account has the coins, so they pay the fee, with nothing asked.
   await page.route(`${sponsor.url}/*`, (route) => route.abort("connectionrefused"));
@@ -1059,7 +1069,7 @@ test("an account with no coins buys with this device's GPU: it pays the price an
   // The seller has the price; the account, still nothing; the sponsor paid both.
   expect(await balance(seller.address)).toBe(sellerBefore + 20n);
   expect(await balance(address)).toBe(0n);
-  expect(await balance(sponsor.address)).toBe(sponsorBefore - 21n);
+  await expectSponsorPaid(sponsor, sponsorBefore, 21n);
 
   // Past the 100 this service pays of a price: coins, and why.
   await page.goto(app + "#/buy/yan_dear");
@@ -1347,7 +1357,7 @@ for (const { on, handle, gpu } of [{ on: "the graphics chip", handle: "sia_gpu",
     const { address } = await pageAccount(page);
     expect((await held(handle)).owner).toBe(address);
     expect(await balance(address)).toBe(0n);
-    expect(await balance(sponsor.address)).toBe(before - 1n);
+    await expectSponsorPaid(sponsor, before, 1n);
     const workers = await page.evaluate(() => window.workersStarted);
     if (gpu) expect(workers).toBe(0);
     else expect(workers).toBeGreaterThan(0);
