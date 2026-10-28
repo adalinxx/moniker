@@ -249,7 +249,8 @@ async function fundSheet({ address, needed, balance, sponsor }) {
   // Fees are usually paid with this device's GPU: say so when, this time, they can't be.
   const why = {
     down: " Its fee is usually paid with this device's GPU, but that isn't working right now: try again in a few minutes, or",
-    dear: " This device's GPU can't pay its fee in reasonable time, so",
+    dear: " This device's GPU can't pay for it in reasonable time, so",
+    most: " This device's GPU pays fees here, but not a price this high, so",
   }[sponsor] ?? "";
   const on = settings.chain === DEFAULTS.chain ? "" : ` on ${settings.chain}`;
   const copy = await sheet({
@@ -687,6 +688,13 @@ async function accountPay(handle, entry) {
         ${total > price ? `<div><dt>Total</dt><dd>${coins(total)}</dd></div>` : ""}
         <div><dt>Your account holds</dt><dd>${coins(balance)}</dd></div>
       </dl>`;
+  // The GPU pays what the account is short, too, where the fee service pays prices.
+  if (byWork && balance < total) {
+    return `${rows}
+        <p class="note" style="margin: 0">This device's GPU can pay the ${coins(total - balance)} your account is short, as it pays the fee. It takes a little while.</p>
+        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay with this device's GPU</button>
+        <button class="pill big" type="button" data-fund="${esc(String(total))}">Add coins instead</button>`;
+  }
   if (balance < total) {
     const more = total - balance;
     return `${rows}

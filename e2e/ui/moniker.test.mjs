@@ -1030,6 +1030,47 @@ test("the page's account pays only the price: its fee, free, paid with this devi
   expect(await balance(address)).toBe(4n);
 }, { wallet: false, expectedErrors: /status of 503|ERR_CONNECTION_REFUSED/ });
 
+test("an account with no coins buys with this device's GPU: it pays the price and the fee; past what the service pays, it asks for coins", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const seller = newAccount();
+  await claimAs(seller, "yan_gpu", { price: 20n });
+  await claimAs(seller, "yan_dear", { price: 150n });
+  const sponsor = await running.sponsor((address) => fund(address, 1000n));
+  const app = await withPasskeys(page, "#/buy/yan_gpu", { settings: { sponsor: sponsor.url } });
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  // Nothing in the account, and the GPU offered first; coins, second.
+  await expect(page.getByRole("button", { name: "Pay with this device's GPU" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add coins instead" })).toBeVisible();
+  const main = page.locator("main");
+  await expect(main).toContainText("This device's GPU can pay the 20 your account is short, as it pays the fee.");
+  await expect(main).not.toContainText(/sponsor/i);
+  const { address } = await pageAccount(page);
+  const [sellerBefore, sponsorBefore] = [await balance(seller.address), await balance(sponsor.address)];
+  await page.evaluate(() => {
+    window.said = [];
+    new MutationObserver(() => window.said.push(document.querySelector("#toasts").innerText)).observe(document.querySelector("#toasts"), { subtree: true, childList: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await expect(page.locator(".result .badge")).toHaveText("Yours", { timeout: 120_000 });
+  expect((await page.evaluate(() => window.said)).join(" ")).toContain("Buying @yan_gpu: paying with this device's GPU");
+  expect((await held("yan_gpu")).owner).toBe(address);
+  // The seller has the price; the account, still nothing; the sponsor paid both.
+  expect(await balance(seller.address)).toBe(sellerBefore + 20n);
+  expect(await balance(address)).toBe(0n);
+  expect(await balance(sponsor.address)).toBe(sponsorBefore - 21n);
+
+  // Past the 100 this service pays of a price: coins, and why.
+  await page.goto(app + "#/buy/yan_dear");
+  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not a price this high, so send coins");
+  await sheetButton(page, "Cancel").click();
+  expect((await held("yan_dear")).owner).toBe(seller.address);
+}, { wallet: false, expectedErrors: /status of 400/ });
+
 test("a free name with the GPU's fee service down, and no coins: the page says its fee is usually paid with the GPU, and to try again", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
     const response = await route.fetch();
@@ -1229,7 +1270,7 @@ test("a fee sponsor that asks more work than the page will do: it asks for coins
   await page.getByRole("button", { name: "Claim @dee_pass" }).click();
   await sheetButton(page, "Create a passkey").click();
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
-  await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay its fee in reasonable time, so send coins to your account ID");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU can't pay for it in reasonable time, so send coins to your account ID");
   expect(asked).toEqual(["/sponsor/work"]);
   await sheetButton(page, "Cancel").click();
   expect(await held("dee_pass")).toBeUndefined();
