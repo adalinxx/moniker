@@ -93,13 +93,27 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 
 - **Search**: a name's page says whether it is free (Claim it, pointed at
   you, optionally listed at a price at once, optionally shown as your
-  handle in the same approval), for sale (Buy opens a review, `#/buy/<h>`:
-  the price and whom it pays, the fee and how it's paid, what the account
-  holds; only its Pay asks a wallet anything, and it comes pointing at you),
-  offered to you (Take), yours or taken; who owns it ("Owned by …" and the
+  handle in the same approval), for sale (Buy opens a checkout, `#/buy/<h>`;
+  see below), offered to you (Take), yours or taken; who owns it ("Owned by …" and the
   account's last 6 characters, linking to its page); where it points
   ("Points at …", linking to that account) and whether that account shows
   it. A name pointing at you offers Show this handle.
+- **Checkout** (`#/buy/<h>`): the price and whom it pays, then a choice
+  of how to pay, each showing its own fee and total. Only Pay asks a wallet
+  anything, and the name comes pointing at the paying account.
+  - *Your passkey account*: the page's wallet. Its fee comes from the
+    account, or with a fee sponsor set, from this device's work instead;
+    short of coins, it offers Add coins.
+  - *Selfhold*: the connected account. With the page's wallet in use, a
+    `lattice://write` request Selfhold opens for an account picked there; not
+    installed, where to add it.
+  - *Another wallet or device*: the purchase as a `lattice://write` request
+    (moniker-sdk's `writeRequestURI`), good for 15 minutes, as a QR code to
+    scan, text to copy, and a card to drag into a wallet's tab, as Selfhold
+    reads a drop. It names no account and no fee: the wallet picks both. The
+    page watches the chain and follows the name to its buyer.
+  The QR code is drawn by paulmillr's `qr` 0.7.2 (`app/vendor/qr.mjs`, its
+  encoder, at Selfhold's pin; MIT).
 - **My names**: the handle your account shows, with Stop showing; each
   name with a menu: Show this handle, Point at me, Point at an account…,
   Stop pointing, Sell, Give to an account, Stop selling or Take back the

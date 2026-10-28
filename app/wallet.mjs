@@ -218,9 +218,11 @@ export function embeddedWallet({ hosts, sponsor }) {
     /**
      * Signs and sends a Selfhold write request (`{ chainPath, actions,
      * payments?, fee? }`) as the account, paying the hosts' relay floor, or a
-     * sponsor in work. `progress(text)` hears what is happening.
+     * sponsor in work. `progress(text)` hears what is happening. `feeBy`
+     * "coins" or "work" pays the fee only that way; without it, coins where the
+     * account has them, else work.
      */
-    async writeRecords(request, { progress = () => {} } = {}) {
+    async writeRecords(request, { progress = () => {}, feeBy } = {}) {
       const record = saved();
       if (!record || !key) throw new Error("The wallet is locked: use your passkey, then try again.");
       const owner = record.address;
@@ -232,9 +234,9 @@ export function embeddedWallet({ hosts, sponsor }) {
       const nonce = at.nonce > sent ? at.nonce : sent;
       const fee = request.fee === undefined ? at.fee : BigInt(request.fee) > at.fee ? BigInt(request.fee) : at.fee;
       const build = (fee) => transaction({ owner, actions: request.actions, payments, fee, nonce, chainPath: request.chainPath });
-      if (at.balance >= paying + fee) return submit(at.host, build(fee));
+      if (at.balance >= paying + fee && (fee === 0n || feeBy !== "work")) return submit(at.host, build(fee));
       const url = sponsor();
-      if (fee === 0n || at.balance < paying || !url) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
+      if (fee === 0n || feeBy === "coins" || at.balance < paying || !url) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
       let sponsored;
       try {
         sponsored = await sponsorFee(url, build(0n), progress);

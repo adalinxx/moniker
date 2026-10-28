@@ -5,8 +5,9 @@
 // shows `@h` only while it names h and h points at it. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
 import * as names from "../sdk/src/records/names.mjs";
-import { writeRequest } from "../sdk/src/records/wallet.mjs";
+import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
 import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
+import encodeQR from "./vendor/qr.mjs";
 import { embeddedWallet } from "./wallet.mjs";
 
 // ---------------------------------------------------------------- settings
@@ -174,7 +175,7 @@ function walletMessage(error) {
 // The wallet takes one request from a page at a time.
 let walletTurn = Promise.resolve();
 /** Sends `write`, built for account `me`, through the wallet; the page's wallet tells `progress` what it is doing. */
-function send(write, me, progress = () => {}) {
+function send(write, me, progress = () => {}, { feeBy } = {}) {
   const turn = walletTurn.then(async () => {
     // A write is built for one account. If Selfhold was since disconnected
     // from this site, or connected to another account, say so and send nothing.
@@ -185,7 +186,7 @@ function send(write, me, progress = () => {}) {
       if (!selfhold()) throw new Error("This page's account changed. Look again, then try again.");
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress });
+    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress, feeBy });
   });
   walletTurn = turn.catch(() => {});
   return turn;
@@ -198,17 +199,18 @@ function send(write, me, progress = () => {}) {
  */
 const acting = new Set(); // the labels of writes under way, each sent once however often it's pressed
 
-async function act(label, build, landed, done = render) {
+/** `options.feeBy`: for the page's wallet, "coins" or "work" to pay the fee only that way. */
+async function act(label, build, landed, done = render, options = {}) {
   if (acting.has(label)) return;
   acting.add(label);
   try {
-    await acted(label, build, landed, done);
+    await acted(label, build, landed, done, options);
   } finally {
     acting.delete(label);
   }
 }
 
-async function acted(label, build, landed, done) {
+async function acted(label, build, landed, done, options) {
   const me = connected;
   const progress = toast(selfhold() ? `${label}: approve it in your wallet.` : `${label}…`);
   try {
@@ -223,7 +225,7 @@ async function acted(label, build, landed, done) {
       setTimeout(progress.close, 2500);
       return;
     }
-    await send(write, me, (text) => progress.update(`${label}: ${text}`));
+    await send(write, me, (text) => progress.update(`${label}: ${text}`), options);
     progress.update(`${label}: confirming…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
@@ -581,10 +583,29 @@ function connectPanel(why, alone = false) {
     </section>`;
 }
 
+// ---------------------------------------------------------------- checkout
+
+// The checkout's choices, kept across its redraws: how to pay, and for the
+// page's account, how its fee is paid.
+const checkout = { handle: null, method: null, feeBy: null };
+
+/** The ways to pay here, the first the one to offer first. */
+function payMethods() {
+  const methods = [selfhold() ? "selfhold" : "account"];
+  // Selfhold, while the page's wallet is in use: through a request if it's here, else where to add it.
+  if (!selfhold() && (window.lattice || !phone)) methods.push("selfhold");
+  methods.push("request");
+  return methods;
+}
+
 /**
- * Before a purchase, a page of its own: what it costs, whom it pays, the fee
- * and how it's paid, what the account holds, and what follows. Pay is the
- * last step, and the only one that asks a wallet anything.
+ * Before a purchase, a page of its own, as a checkout: what it costs and whom
+ * it pays, then a choice of how to pay, each with its fee and total. Its Pay
+ * is the last step, and the only one that asks a wallet anything.
+ *
+ *   account   the page's passkey account; its fee in coins or in this device's work, through the sponsor
+ *   selfhold  Selfhold: the connected account, or with the page's wallet in use, a request it opens
+ *   request   a lattice://write request, as a QR code, text or a card to drag, for any wallet anywhere
  */
 async function viewBuy(handle, state) {
   const entry = await held(state, handle);
@@ -592,59 +613,181 @@ async function viewBuy(handle, state) {
   if (connected && entry?.owner === connected) return viewMessage(`@${handle} is yours`, "Your account owns it already.", see);
   if (entry?.price === undefined) return viewMessage(`@${handle} isn't for sale`, "Its owner isn't selling it now, or someone just bought it.", see);
   const price = entry.price;
-  const funds = connected ? await inPage.funds(chainPath(), connected).catch(() => null) : null;
+  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null, feeBy: null });
+  const methods = payMethods();
+  const method = methods.includes(checkout.method) ? checkout.method : methods[0];
+  checkout.method = method;
 
-  // The fee, and whether the account has what it takes.
-  let fee;
-  let total = price;
-  let short = false;
-  if (selfhold()) fee = "Selfhold's, as you set it there";
-  else if (!funds) fee = "A small one, from your account or paid with this device's work";
-  else if (funds.fee === 0n) fee = "None";
-  else if (funds.balance >= price + funds.fee) {
-    fee = `${coins(funds.fee)} from your account`;
-    total = price + funds.fee;
-  } else if (funds.balance >= price && settings.sponsor) fee = "Paid with this device's work, in a few seconds";
-  else {
-    fee = `${coins(funds.fee)} from your account`;
-    total = price + funds.fee;
-    short = true;
-  }
-  if (funds && funds.balance < price) short = true;
+  const label = { account: "Your passkey account", selfhold: "Selfhold", request: "Another wallet or device" };
+  const hint = { account: "Here, with your passkey", selfhold: "The browser extension", request: "Scan a code, or copy a request" };
+  const choices = methods.map((m) => `
+        <label class="method">
+          <input type="radio" name="pay" value="${m}"${m === method ? " checked" : ""}>
+          <span><strong>${label[m]}</strong><span class="note">${hint[m]}</span></span>
+        </label>`).join("");
 
-  const rows = [
-    ["Price", `${coins(price)}, paid to its owner, ${accountLink(entry.owner)}`],
-    ["Fee", esc(fee)],
-    ...(total > price ? [["Total", coins(total)]] : []),
-    ...(funds ? [["Your account holds", coins(funds.balance)]] : []),
-  ];
-  // With no account yet, buying starts with one, and the coins it takes.
-  const newcomer = !selfhold() && !connected;
-  const next = selfhold() ? "Selfhold asks you to approve it next." : "";
-  let pay;
-  if (newcomer) {
-    pay = `<p class="note" style="margin: 0">Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.</p>
-       <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
-       <button class="pill big" type="button" data-sign-in>I have a passkey</button>`;
-  } else if (short) {
-    const more = total - funds.balance;
-    pay = `<p class="note" role="status" style="margin: 0">This needs ${coins(more)} more ${more === 1n ? "coin" : "coins"} than your account holds.</p>
-       <button class="pill accent big" type="button" data-fund="${esc(String(total))}">Add coins</button>`;
-  } else pay = `<button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
+  let detail;
+  if (method === "account") detail = await accountPay(handle, entry);
+  else if (method === "selfhold") detail = selfholdPay(handle, entry, await requestFor(handle, entry, state));
+  else detail = requestPay(handle, entry, await requestFor(handle, entry, state));
+
   return `
     <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/@${esc(handle)}" aria-label="Back to @${esc(handle)}">‹</a></div>
-    <main class="col" style="margin-top: 12px">
+    <main class="col stack" style="margin-top: 12px">
       <section class="panel stack" aria-labelledby="buy-title">
         <h1 id="buy-title" style="margin: 0">Buy <span class="mono">@${esc(handle)}</span></h1>
         <dl class="summary">
-          ${rows.map(([term, value]) => `<div><dt>${term}</dt><dd>${value}</dd></div>`).join("")}
+          <div><dt>Price</dt><dd>${coins(price)}, paid to its owner, ${accountLink(entry.owner)}</dd></div>
         </dl>
-        <p style="margin: 0">It becomes yours and points at your account; you can point it elsewhere any time.</p>
-        ${next ? `<p class="note" style="margin: 0">${esc(next)}</p>` : ""}
-        ${pay}
+        <p style="margin: 0">It becomes the paying account's, pointing at it; it can point elsewhere any time.</p>
+      </section>
+      <fieldset class="methods">
+        <legend>Pay with</legend>
+        ${choices}
+      </fieldset>
+      <section class="panel stack" aria-label="${label[method]}">
+        ${detail}
         <a class="pill big" href="#/@${esc(handle)}">Not now</a>
       </section>
     </main>`;
+}
+
+/** The purchase as a lattice://write request, for whichever account the person picks in their wallet; good for 15 minutes. */
+async function requestFor(handle, entry, state) {
+  const expiresAt = new Date(Date.now() + 15 * 60_000);
+  const label = `Buy @${handle}`.length <= 64 ? `Buy @${handle}` : undefined;
+  const uri = writeRequestURI(chainPath(), names.acquire(handle, entry, await state.get(names.pointsKey(handle))), { label, expiresAt });
+  return { uri, expiresAt };
+}
+
+/** Paying from the page's passkey account: its balance, and the fee in coins or in this device's work. */
+async function accountPay(handle, entry) {
+  const price = entry.price;
+  if (!connected) {
+    return `<p style="margin: 0">Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.</p>
+        <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
+        <button class="pill big" type="button" data-sign-in>I have a passkey</button>`;
+  }
+  const funds = await inPage.funds(chainPath(), connected).catch(() => null);
+  if (!funds) return `<p role="alert" style="margin: 0">No host answered for your account's balance.</p><button class="pill big" type="button" data-retry>Try again</button>`;
+  const { balance, fee } = funds;
+  const canCoins = balance >= price + fee;
+  const canWork = fee > 0n && Boolean(settings.sponsor) && balance >= price;
+  let feeBy = fee === 0n ? "coins" : checkout.feeBy;
+  if (feeBy === "work" && !settings.sponsor) feeBy = null;
+  feeBy ??= canCoins || !canWork ? "coins" : "work";
+
+  // A choice only where work can pay it: short of the price, it can't.
+  const feeChoice = fee === 0n || balance < price
+    ? `<dl class="summary"><div><dt>Fee</dt><dd>${fee === 0n ? "None" : `${coins(fee)}, from your account`}</dd></div></dl>`
+    : `<fieldset class="fee-by">
+        <legend>Fee</legend>
+        <label class="check"><input type="radio" name="fee-by" value="coins"${feeBy === "coins" ? " checked" : ""}> ${coins(fee)} from your account</label>
+        ${settings.sponsor ? `<label class="check"><input type="radio" name="fee-by" value="work"${feeBy === "work" ? " checked" : ""}> This device's work instead, a few seconds, through the fee sponsor</label>` : ""}
+      </fieldset>`;
+  const total = price + (feeBy === "coins" ? fee : 0n);
+  const rows = `<dl class="summary">
+        ${total > price ? `<div><dt>Total</dt><dd>${coins(total)}</dd></div>` : ""}
+        <div><dt>Your account holds</dt><dd>${coins(balance)}</dd></div>
+      </dl>`;
+  if (balance < total) {
+    const more = total - balance;
+    return `${feeChoice}${rows}
+        <p class="note" role="status" style="margin: 0">This needs ${coins(more)} more ${more === 1n ? "coin" : "coins"} than your account holds.</p>
+        <button class="pill accent big" type="button" data-fund="${esc(String(total))}">Add coins</button>`;
+  }
+  return `${feeChoice}${rows}
+        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}" data-fee-by="${feeBy}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
+}
+
+/** Paying with Selfhold: the account it connects here, or a request it opens for one you pick; or where to add it. */
+function selfholdPay(handle, entry, { uri }) {
+  const price = entry.price;
+  if (selfhold()) {
+    return `<p style="margin: 0">Selfhold shows the payment and its fee, set there, for you to approve.</p>
+        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} with Selfhold</button>`;
+  }
+  if (window.lattice) {
+    return `<p style="margin: 0">Selfhold opens the purchase for an account you pick there, with its fee, for you to approve.</p>
+        <button class="pill accent big" type="button" data-open-request="${esc(uri)}" data-owner="${esc(entry.owner)}">Open in Selfhold</button>`;
+  }
+  return `<p style="margin: 0">Selfhold is a browser extension that keeps your key and shows each payment before you approve it.</p>
+        <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? "" : " for Chrome"}</a>
+        <p class="note" style="margin: 0">Then come back to this tab, and pay with it here.</p>`;
+}
+
+/** Paying from any wallet, anywhere: the request as a QR code, text to copy, and a card to drag into a wallet's tab. */
+function requestPay(handle, entry, { uri, expiresAt }) {
+  // Medium error correction while the code stays small enough to scan from a screen; past that, low.
+  let svg = encodeQR(uri, "svg", { ecc: "medium", border: 2 });
+  if (Number(/viewBox="0 0 (\d+)/.exec(svg)?.[1] ?? 0) > 110) svg = encodeQR(uri, "svg", { ecc: "low", border: 2 });
+  const until = expiresAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  afterDraw.push({ ticket: drawing, run: () => watchSale({ handle, owner: entry.owner, price: entry.price, expiresAt }) });
+  return `<p style="margin: 0">Scan this with a Lattice wallet on another device, drag it into a wallet open in another tab, or copy it into one. The wallet picks the account, and shows the payment and its fee for you to approve.</p>
+        <div class="request-card" draggable="true" data-request="${esc(uri)}" title="Drag into a wallet's tab">
+          <div class="qr" role="img" aria-label="QR code of the request to buy @${esc(handle)}">${svg}</div>
+        </div>
+        <button class="pill big" type="button" data-copy="${esc(uri)}">Copy the request</button>
+        <p class="note" id="request-status" role="status" style="margin: 0">Waiting for the payment. The request is good until ${esc(until)}.</p>
+        <button class="pill big" type="button" data-retry id="request-again" hidden>Make a new request</button>`;
+}
+
+// Run once the view they belong to is drawn, and only if it is.
+const afterDraw = [];
+let watching = 0;
+
+/** Until the request is paid, or the listing changes, or the request expires: then says so. */
+async function watchSale({ handle, owner, price, expiresAt }) {
+  const mine = ++watching;
+  const here = () => mine === watching && route() === `buy/${handle}` && checkout.method === "request";
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (!here()) return;
+    if (Date.now() > expiresAt.getTime()) {
+      $("#request-status").textContent = "The request has expired: make a new one to pay with it.";
+      $("#request-again").hidden = false;
+      return;
+    }
+    let entry;
+    try {
+      entry = await held(await readState(), handle);
+    } catch {
+      continue;
+    }
+    if (!here()) return;
+    if (entry?.owner === owner && entry.price === price) continue;
+    if (entry && entry.owner !== owner) {
+      toast(entry.owner === connected ? `@${handle} is yours.` : `@${handle} is bought, by ${shortID(entry.owner)}.`);
+      location.hash = `#/@${handle}`;
+    } else render(); // relisted at another price, or no longer for sale
+    return;
+  }
+}
+
+/** Hands Selfhold the request, from the click; then waits for the chain to show the name bought. */
+async function payByRequest(handle, uri, owner) {
+  const label = `Buying @${handle}`;
+  if (acting.has(label)) return;
+  acting.add(label);
+  const progress = toast(`${label}: approve it in Selfhold.`);
+  try {
+    await window.lattice.openRequest(uri);
+    progress.update(`${label}: confirming…`);
+    const deadline = Date.now() + 5 * 60_000;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const entry = await held(await readState(), handle).catch(() => undefined);
+      if (entry && entry.owner !== owner) break;
+      if (Date.now() > deadline) throw new Error("Sent, but not confirmed yet. It may still go through: look again in a minute.");
+    }
+    progress.update(`${label}: done.`);
+    setTimeout(progress.close, 2500);
+    location.hash = `#/@${handle}`;
+  } catch (error) {
+    progress.update(walletMessage(error), { bad: true });
+  } finally {
+    acting.delete(label);
+  }
 }
 
 /** A name offered to your account: take it, for nothing. */
@@ -831,6 +974,7 @@ async function render() {
     }
     if (ticket !== drawing) return;
     app.innerHTML = header() + html + footer();
+    for (const hook of afterDraw.splice(0)) if (hook.ticket === ticket) hook.run();
     // Back to the control that was used, if it is still here; else a new
     // view: its heading, so keyboard and screen reader users start there.
     const again = used && $(used, app);
@@ -888,6 +1032,8 @@ document.addEventListener("click", async (event) => {
   } else if ("getWallet" in d) {
     awaiting(true);
     $("#wallet-wait")?.removeAttribute("hidden");
+  } else if (d.openRequest) {
+    payByRequest(checkout.handle, d.openRequest, d.owner);
   } else if (d.fund) {
     const { balance } = await inPage.funds(chainPath(), connected);
     fundSheet({ address: connected, needed: BigInt(d.fund), balance });
@@ -914,6 +1060,7 @@ document.addEventListener("click", async (event) => {
       },
       async (s, me) => (await held(s, handle))?.owner === me,
       () => (location.hash = `#/@${handle}`),
+      { feeBy: d.feeBy },
     );
   } else if (d.take) {
     if (!(await connectFirst(`take @${d.take}`))) return;
@@ -1075,6 +1222,24 @@ document.addEventListener("submit", async (event) => {
     toast("Settings saved.");
     location.hash = "#/";
   }
+});
+
+document.addEventListener("change", (event) => {
+  const input = event.target;
+  if (input.name !== "pay" && input.name !== "fee-by") return;
+  if (input.name === "pay") checkout.method = input.value;
+  else checkout.feeBy = input.value;
+  used = `input[name="${input.name}"][value="${CSS.escape(input.value)}"]`;
+  render();
+});
+
+// The request card carries the request into a wallet's tab, as Selfhold reads a drop.
+document.addEventListener("dragstart", (event) => {
+  const card = event.target.closest?.("[data-request]");
+  if (!card || !event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("text/plain", card.dataset.request);
+  event.dataTransfer.setData("text/uri-list", card.dataset.request);
 });
 
 window.addEventListener("hashchange", () => {
