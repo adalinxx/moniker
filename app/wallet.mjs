@@ -28,7 +28,7 @@ export class NeedsCoins extends Error {
   /**
    * `sponsor`: why the sponsor didn't pay, if it was asked: "dear", it wants
    * more work than this page will do; "down", it can't now; "most", it pays
-   * fees, but not this much of a price; "fees", it pays fees only.
+   * fees, but not this much of a price.
    */
   constructor({ address, needed, balance, sponsor = null }) {
     super(`Your account needs ${needed} ${needed === 1n ? "coin" : "coins"} for this and holds ${balance}.`);
@@ -45,8 +45,6 @@ class TooMuchWork extends Error {}
 class NoSponsor extends Error {}
 /** The sponsor won't pay this much of a price for work (its --most-pay). */
 class NoPay extends Error {}
-/** The sponsor pays no prices at all: one from before it could. */
-class FeesOnly extends NoPay {}
 
 const saved = () => {
   try {
@@ -260,7 +258,7 @@ export function embeddedWallet({ hosts, sponsor }) {
           sponsored = await sponsorFee(url, build(0n), progress, { wait: !covered, pay: short });
         } catch (error) {
           if (!covered) {
-            const why = error instanceof TooMuchWork ? "dear" : error instanceof NoSponsor ? "down" : error instanceof FeesOnly ? "fees" : error instanceof NoPay ? "most" : null;
+            const why = error instanceof TooMuchWork ? "dear" : error instanceof NoSponsor ? "down" : error instanceof NoPay ? "most" : null;
             if (why) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsor: why });
             throw error;
           }
@@ -322,8 +320,6 @@ async function sponsorFee(url, draft, progress, { wait = true, pay = 0n } = {}) 
   } catch {}
   const sponsored = async () => {
     const answer = await ask(url, "sponsor", { client, transaction: { signatures: {}, body: toWire(draft) }, ...paid });
-    // A sponsor from before `pay` ignores it, and signs the fee alone.
-    if (pay > 0n && BigInt(answer.pay ?? 0) !== pay) throw new FeesOnly("The fee sponsor pays fees only.");
     const { transaction: signed, fee } = answer;
     return { ...check(draft, fromWire(signed.body), BigInt(fee), pay), signatures: signed.signatures };
   };
@@ -360,7 +356,6 @@ async function sponsorFee(url, draft, progress, { wait = true, pay = 0n } = {}) 
       client = null;
       continue;
     }
-    if (pay > 0n && BigInt(work.pay ?? 0) !== pay) throw new FeesOnly("The fee sponsor pays fees only.");
     client = work.client;
     try {
       localStorage.setItem(SPONSOR_CLIENT, client);

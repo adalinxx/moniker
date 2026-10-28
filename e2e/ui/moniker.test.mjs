@@ -1107,30 +1107,6 @@ test("a fee sponsor that changes what it pays the account: the page signs nothin
   expect(await balance(address)).toBe(0n);
 }, { wallet: false, expectedErrors: /status of (400|503)/ });
 
-test("a fee sponsor from before it paid prices ignores the ask: the page sends nothing, and asks for coins, saying so", async ({ page }) => {
-  await page.route("**/api/chain/info?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
-  });
-  const seller = newAccount();
-  await claimAs(seller, "zed_old", { price: 5n });
-  // It answers work for the fee alone, with no `pay`.
-  const sponsor = "http://localhost:27199/sponsor";
-  const asked = [];
-  await page.route(`${sponsor}/*`, (route) => {
-    asked.push(new URL(route.request().url()).pathname);
-    return route.fulfill({ json: { client: "c", assignment: "a", prefixHex: "00", shareTarget: "f".repeat(64), startNonce: "0", count: "4294967296", fee: "1", sharesForFee: "1", expiresInMilliseconds: "30000" } });
-  });
-  await withPasskeys(page, "#/buy/zed_old", { settings: { sponsor } });
-  await page.getByRole("button", { name: "Create a passkey" }).click();
-  await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
-  await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
-  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not prices, so send coins");
-  expect(asked).toEqual(["/sponsor/work"]);
-  await sheetButton(page, "Cancel").click();
-  expect((await held("zed_old")).owner).toBe(seller.address);
-}, { wallet: false });
-
 test("a free name with the GPU's fee service down, and no coins: the page says its fee is usually paid with the GPU, and to try again", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
     const response = await route.fetch();
