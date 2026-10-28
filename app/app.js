@@ -588,7 +588,7 @@ function connectPanel(why, alone = false) {
 // ---------------------------------------------------------------- checkout
 
 // The checkout's choice of how to pay, kept across its redraws.
-const checkout = { handle: null, method: null };
+const checkout = { handle: null, method: null, listAt: "", show: false };
 
 /** The ways to pay here, the first the one to offer first. */
 function payMethods() {
@@ -612,12 +612,16 @@ async function viewBuy(handle, state) {
   const entry = await held(state, handle);
   const see = `<a class="pill big" href="#/@${esc(handle)}" style="margin-top: 20px">See @${esc(handle)}</a>`;
   if (connected && entry?.owner === connected) return viewMessage(`@${handle} is yours`, "Your account owns it already.", see);
-  if (entry?.price === undefined) return viewMessage(`@${handle} isn't for sale`, "Its owner isn't selling it now, or someone just bought it.", see);
-  const price = entry.price;
-  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null });
+  if (entry && entry.price === undefined) return viewMessage(`@${handle} isn't for sale`, "Its owner isn't selling it now, or someone just bought it.", see);
+  // No owner: a claim, for 0.
+  const free = !entry;
+  const price = free ? 0n : entry.price;
+  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null, listAt: "", show: false });
   const methods = payMethods();
   const method = methods.includes(checkout.method) ? checkout.method : methods[0];
   checkout.method = method;
+  // A request names no account, so it can't list the name or show it as one's handle.
+  const plain = free && (checkout.listAt || checkout.show) && (method === "request" || (method === "selfhold" && !selfhold()));
 
   const label = { account: "Your passkey account", selfhold: "Selfhold", request: "Another wallet or device" };
   const hint = { account: "Here, with your passkey", selfhold: "The browser extension", request: "Scan a code, or copy a request" };
@@ -643,11 +647,12 @@ async function viewBuy(handle, state) {
     <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/@${esc(handle)}" aria-label="Back to @${esc(handle)}">‹</a></div>
     <main class="col stack" style="margin-top: 12px">
       <section class="panel stack" aria-labelledby="buy-title">
-        <h1 id="buy-title" style="margin: 0">Buy <span class="mono">@${esc(handle)}</span></h1>
+        <h1 id="buy-title" style="margin: 0">${free ? "Claim" : "Buy"} <span class="mono">@${esc(handle)}</span></h1>
         <dl class="summary">
-          <div><dt>Price</dt><dd>${coins(price)}, paid to its owner, ${accountLink(entry.owner)}</dd></div>
+          <div><dt>Price</dt><dd>${free ? "0: no one owns it yet" : `${coins(price)}, paid to its owner, ${accountLink(entry.owner)}`}</dd></div>
         </dl>
         <p style="margin: 0">It becomes the paying account's, pointing at it; it can point elsewhere any time.</p>
+        ${plain ? `<p class="note" style="margin: 0">A request claims it only: sell it or show it from its page after.</p>` : ""}
       </section>
       <fieldset class="methods">
         <legend>Pay with</legend>
@@ -663,16 +668,19 @@ async function viewBuy(handle, state) {
 /** The purchase as a lattice://write request, for whichever account the person picks in their wallet; good for 15 minutes. */
 async function requestFor(handle, entry, state) {
   const expiresAt = new Date(Date.now() + 15 * 60_000);
-  const label = `Buy @${handle}`.length <= 64 ? `Buy @${handle}` : undefined;
+  const what = `${entry ? "Buy" : "Claim"} @${handle}`;
+  const label = what.length <= 64 ? what : undefined;
   const uri = writeRequestURI(chainPath(), names.acquire(handle, entry, await state.get(names.pointsKey(handle))), { label, expiresAt });
   return { uri, expiresAt };
 }
 
 /** Paying from the page's passkey account: its balance, and its fee, paid with this device's GPU where it can be. */
 async function accountPay(handle, entry) {
-  const price = entry.price;
+  const price = entry?.price ?? 0n;
+  // A claim, or a purchase: its button.
+  const go = entry ? `data-buy="${esc(handle)}" data-price="${price}"` : `data-claim="${esc(handle)}"`;
   if (!connected) {
-    return `<p style="margin: 0">Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.</p>
+    return `<p style="margin: 0">${entry ? `Buying takes coins, so make your account first: a passkey keeps its key. Then add at least ${coins(price)} coins to it, and buy.` : "Make your account first: a passkey keeps its key."}</p>
         <button class="pill accent big" type="button" data-create-account>Create a passkey</button>
         <button class="pill big" type="button" data-sign-in>I have a passkey</button>`;
   }
@@ -692,7 +700,7 @@ async function accountPay(handle, entry) {
   if (byWork && balance < total) {
     return `${rows}
         <p class="note" style="margin: 0">This device's GPU can pay the ${coins(total - balance)} your account is short, as it pays the fee. It takes a little while.</p>
-        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay with this device's GPU</button>
+        <button class="pill accent big" type="button" ${go}>Pay with this device's GPU</button>
         <button class="pill big" type="button" data-fund="${esc(String(total))}">Add coins instead</button>`;
   }
   if (balance < total) {
@@ -702,19 +710,19 @@ async function accountPay(handle, entry) {
         <button class="pill accent big" type="button" data-fund="${esc(String(total))}">Add coins</button>`;
   }
   return `${rows}
-        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
+        <button class="pill accent big" type="button" ${go}>${entry ? `Pay ${coins(price)} and buy` : "Claim"} @${esc(handle)}</button>`;
 }
 
 /** Paying with Selfhold: the account it connects here, or a request it opens for one you pick; or where to add it. */
 function selfholdPay(handle, entry, { uri }) {
-  const price = entry.price;
+  const price = entry?.price ?? 0n;
   if (selfhold()) {
-    return `<p style="margin: 0">Selfhold shows the payment and its fee, set there, for you to approve.</p>
-        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} with Selfhold</button>`;
+    return `<p style="margin: 0">Selfhold shows the ${entry ? "payment" : "claim"} and its fee, set there, for you to approve.</p>
+        <button class="pill accent big" type="button" ${entry ? `data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} with Selfhold` : `data-claim="${esc(handle)}">Claim @${esc(handle)} with Selfhold`}</button>`;
   }
   if (window.lattice) {
-    return `<p style="margin: 0">Selfhold opens the purchase for an account you pick there, with its fee, for you to approve.</p>
-        <button class="pill accent big" type="button" data-open-request="${esc(uri)}" data-owner="${esc(entry.owner)}">Open in Selfhold</button>`;
+    return `<p style="margin: 0">Selfhold opens the ${entry ? "purchase" : "claim"} for an account you pick there, with its fee, for you to approve.</p>
+        <button class="pill accent big" type="button" data-open-request="${esc(uri)}" data-owner="${esc(entry?.owner ?? "")}">Open in Selfhold</button>`;
   }
   return `<p style="margin: 0">Selfhold is a browser extension that keeps your key and shows each payment before you approve it.</p>
         <a class="pill accent big" href="${WALLET_URL}" target="_blank" rel="noopener" data-get-wallet>Add Selfhold${chromium ? "" : " for Chrome"}</a>
@@ -727,10 +735,10 @@ function requestPay(handle, entry, { uri, expiresAt }) {
   let svg = encodeQR(uri, "svg", { ecc: "medium", border: 2 });
   if (Number(/viewBox="0 0 (\d+)/.exec(svg)?.[1] ?? 0) > 110) svg = encodeQR(uri, "svg", { ecc: "low", border: 2 });
   const until = expiresAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  afterDraw.push({ ticket: drawing, run: () => watchSale({ handle, owner: entry.owner, price: entry.price, expiresAt }) });
-  return `<p style="margin: 0">Scan this with a Lattice wallet on another device, drag it into a wallet open in another tab, or copy it into one. The wallet picks the account, and shows the payment and its fee for you to approve.</p>
+  afterDraw.push({ ticket: drawing, run: () => watchSale({ handle, owner: entry?.owner, price: entry?.price, expiresAt }) });
+  return `<p style="margin: 0">Scan this with a Lattice wallet on another device, drag it into a wallet open in another tab, or copy it into one. The wallet picks the account, and shows the ${entry ? "payment" : "claim"} and its fee for you to approve.</p>
         <div class="request-card" draggable="true" data-request="${esc(uri)}" title="Drag into a wallet's tab">
-          <div class="qr" role="img" aria-label="QR code of the request to buy @${esc(handle)}">${svg}</div>
+          <div class="qr" role="img" aria-label="QR code of the request to ${entry ? "buy" : "claim"} @${esc(handle)}">${svg}</div>
         </div>
         <button class="pill big" type="button" data-copy="${esc(uri)}">Copy the request</button>
         <p class="note" id="request-status" role="status" style="margin: 0">Waiting for the payment. The request is good until ${esc(until)}.</p>
@@ -760,7 +768,7 @@ async function watchSale({ handle, owner, price, expiresAt }) {
       continue;
     }
     if (!here()) return;
-    if (entry?.owner === owner && entry.price === price) continue;
+    if (entry ? entry.owner === owner && entry.price === price : !owner) continue;
     if (entry && entry.owner !== owner) {
       toast(entry.owner === connected ? `@${handle} is yours.` : `@${handle} is bought, by ${shortID(entry.owner)}.`);
       location.hash = `#/@${handle}`;
@@ -1050,6 +1058,10 @@ document.addEventListener("click", async (event) => {
   } else if (d.nameMenu) {
     // A menu reads the chain first: if no host answers, say so.
     await nameMenu(d.nameMenu).catch((error) => toast(walletMessage(error), { bad: true }));
+  } else if (d.claim) {
+    if (!(await connectFirst(`claim @${d.claim}`))) return;
+    const handle = d.claim;
+    claim(handle, checkout.handle === handle ? checkout.listAt : "", checkout.handle === handle && checkout.show);
   } else if (d.buy) {
     if (!(await connectFirst(`buy @${d.buy}`))) return;
     const handle = d.buy;
@@ -1209,8 +1221,8 @@ document.addEventListener("submit", async (event) => {
     const show = (typed ? $("#new-show") : $("#claim-show")).checked;
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
     if (price && priceProblem(price)) return toast(`The price: ${priceProblem(price)}`, { bad: true });
-    if (!(await connectFirst(`claim @${handle}`))) return;
-    claim(handle, price, show);
+    Object.assign(checkout, { handle, method: null, listAt: price, show });
+    location.hash = `#/buy/${handle}`;
   } else if (form.id === "settings") {
     event.preventDefault();
     const pageWallet = $("#s-page-wallet") ? $("#s-page-wallet").checked : settings.wallet === "page";
