@@ -719,6 +719,7 @@ test("Settings: a node that is down is skipped, and with none reachable the page
   await openApp(page, null, "#/settings");
   await page.locator("#s-nodes").fill(`${down}\n${stack.node}`);
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await expect(toast(page, "Settings saved.")).toBeVisible();
   await page.goto(stack.app + "#/search/nodefall");
   await expect(page.locator(".result .badge")).toHaveText("Available");
@@ -726,6 +727,7 @@ test("Settings: a node that is down is skipped, and with none reachable the page
   await page.goto(stack.app + "#/settings");
   await page.locator("#s-nodes").fill(down);
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await page.goto(stack.app + "#/search/nodefall");
   await expect(page.locator("#app")).toContainText(`No host is serving ${stack.chain}`);
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
@@ -745,6 +747,7 @@ test("Settings saved for a trial chain follow the move to Moniker, and keep thei
   // A chain of one's own choosing, not the default, is kept.
   await page.locator("#s-chain").fill("Nexus/other-names");
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await page.reload();
   await page.goto(stack.app + "#/settings");
   await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
@@ -1086,6 +1089,7 @@ test("with Selfhold too, Settings switch to the page's wallet and back: each wri
   await page.goto(app + "#/settings");
   await page.getByLabel("Use this page's passkey wallet, not Selfhold").check();
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await page.goto(app + "#/names");
   const asked = page.context().approvals;
   await page.getByRole("button", { name: "Create a passkey" }).click();
@@ -1103,6 +1107,7 @@ test("with Selfhold too, Settings switch to the page's wallet and back: each wri
   await page.goto(app + "#/settings");
   await page.getByLabel("Use this page's passkey wallet, not Selfhold").uncheck();
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await page.goto(app + "#/names");
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
   await expect(row(page, "kit_page")).toHaveCount(0);
@@ -1124,6 +1129,7 @@ test("with the page's wallet in use, the checkout can still pay with Selfhold: i
   const app = await withPasskeys(page, "#/settings");
   await page.getByLabel("Use this page's passkey wallet, not Selfhold").check();
   await page.getByRole("button", { name: "Save" }).click();
+  await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
   await page.goto(app + "#/buy/lou_open");
   await expect(page.getByRole("radio", { name: /^Your passkey account/ })).toBeChecked();
   await page.getByText("Other ways to pay").click();

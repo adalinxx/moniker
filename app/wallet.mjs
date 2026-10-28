@@ -322,6 +322,9 @@ async function sponsorFee(url, draft, progress, { wait = true } = {}) {
       if (error.status !== 402) throw error;
     }
   }
+  // The chip ready first: work is good only until the chain moves on, and a
+  // first shader compile can take seconds.
+  await workDevice();
   const effort = { began: null, hashes: 0 };
   const patience = Date.now() + (wait ? 60_000 : 0);
   // Work refused round after round earns nothing: past this, the sponsor is no help.
