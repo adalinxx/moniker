@@ -319,7 +319,10 @@ async function sponsorFee(url, draft, progress, { wait = true, pay = 0n } = {}) 
     client = localStorage.getItem(SPONSOR_CLIENT);
   } catch {}
   const sponsored = async () => {
-    const { transaction: signed, fee } = await ask(url, "sponsor", { client, transaction: { signatures: {}, body: toWire(draft) }, ...paid });
+    const answer = await ask(url, "sponsor", { client, transaction: { signatures: {}, body: toWire(draft) }, ...paid });
+    // A sponsor from before `pay` ignores it, and signs the fee alone.
+    if (pay > 0n && BigInt(answer.pay ?? 0) !== pay) throw new NoPay("The fee sponsor pays fees only.");
+    const { transaction: signed, fee } = answer;
     return { ...check(draft, fromWire(signed.body), BigInt(fee), pay), signatures: signed.signatures };
   };
   if (client) {
@@ -355,6 +358,7 @@ async function sponsorFee(url, draft, progress, { wait = true, pay = 0n } = {}) 
       client = null;
       continue;
     }
+    if (pay > 0n && BigInt(work.pay ?? 0) !== pay) throw new NoPay("The fee sponsor pays fees only.");
     client = work.client;
     try {
       localStorage.setItem(SPONSOR_CLIENT, client);
