@@ -23,6 +23,19 @@ const DEFAULTS = {
   // Selfhold's window; the tests serve their own.
   walletPage: "https://wallet.selfhold.app/",
 };
+/**
+ * Selfhold's window: its own page, or, for a page served on this computer,
+ * one served on this computer too, as the tests do. Never anywhere else: the
+ * window keeps the account.
+ */
+function walletPageOf(saved) {
+  const local = (host) => host === "localhost" || host === "127.0.0.1";
+  try {
+    const url = new URL(saved);
+    if (url.protocol === "http:" && local(url.hostname) && local(location.hostname) && !url.username && !url.password) return url.href;
+  } catch {}
+  return DEFAULTS.walletPage;
+}
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem("moniker.settings") ?? "{}");
@@ -36,7 +49,7 @@ function loadSettings() {
       sponsor: typeof saved.sponsor === "string" ? saved.sponsor : DEFAULTS.sponsor,
       // Selfhold for Chrome only as chosen in Settings ("selfhold", once); once the default, an older one chose nothing.
       wallet: saved.walletChosen && ["extension", "selfhold"].includes(saved.wallet) ? "extension" : DEFAULTS.wallet,
-      walletPage: typeof saved.walletPage === "string" && /^(https:\/\/|http:\/\/localhost[:/])/.test(saved.walletPage) ? saved.walletPage : DEFAULTS.walletPage,
+      walletPage: walletPageOf(saved.walletPage),
       walletChosen: Boolean(saved.walletChosen),
     };
   } catch {
@@ -46,8 +59,10 @@ function loadSettings() {
 let settings = loadSettings();
 function saveSettings(next) {
   settings = { ...DEFAULTS, ...next };
+  // Selfhold's own window is not stored, so a new default reaches everyone.
+  const { walletPage, ...stored } = settings;
   try {
-    localStorage.setItem("moniker.settings", JSON.stringify(settings));
+    localStorage.setItem("moniker.settings", JSON.stringify(walletPage === DEFAULTS.walletPage ? stored : settings));
   } catch {}
   moniker = null;
 }
@@ -648,8 +663,8 @@ async function requestFor(handle, entry, state) {
  * takes transactions asks: `{ balance, fee }`, read fresh, or null if none answers.
  */
 async function funds(address) {
-  const chain = encodeURIComponent(settings.chain);
-  for (const host of await client().hosts()) {
+  const chain = encodeURIComponent(chainPath().join("/"));
+  for (const host of await client().hosts().catch(() => [])) {
     try {
       const get = async (path) => {
         const response = await fetch(`${host}${path}?chainPath=${chain}`, { cache: "no-store" });
@@ -1008,8 +1023,11 @@ document.addEventListener("click", async (event) => {
     render();
   } else if ("connect" in d) {
     try {
-      if (d.via === "web") await useWeb();
-      await connect();
+      // From the checkout, with Selfhold for Chrome in use: the window becomes the wallet once it connects.
+      if (d.via === "web" && extension()) {
+        await web.connect();
+        await useWeb();
+      } else await connect();
       render();
     } catch (error) {
       toast(walletMessage(error), { bad: true });
@@ -1032,7 +1050,10 @@ document.addEventListener("click", async (event) => {
   } else if (d.copy) {
     navigator.clipboard?.writeText(d.copy).then(() => toast("Copied."), () => toast(d.copy));
   } else if ("reset" in d) {
-    saveSettings({ walletPage: settings.walletPage });
+    // Chosen, so that Selfhold for Chrome, connected here once, doesn't take over again.
+    saveSettings({ walletPage: settings.walletPage, walletChosen: true });
+    // Selfhold's window again, and the account it gave this site, if any.
+    connected = await web.address();
     render();
   } else if (d.nameMenu) {
     // A menu reads the chain first: if no host answers, say so.
@@ -1203,7 +1224,8 @@ document.addEventListener("submit", async (event) => {
     location.hash = `#/buy/${handle}`;
   } else if (form.id === "settings") {
     event.preventDefault();
-    const useExtension = $("#s-extension") ? $("#s-extension").checked : extension();
+    // Selfhold for Chrome not here (yet): the choice stays as it was.
+    const useExtension = $("#s-extension") ? $("#s-extension").checked : settings.wallet === "extension";
     const switched = useExtension !== extension();
     saveSettings({
       nodes: $("#s-nodes").value.split(/\s+/).filter(Boolean).map((n) => n.replace(/\/$/, "")),

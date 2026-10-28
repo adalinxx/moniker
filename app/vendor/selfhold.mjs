@@ -1,4 +1,4 @@
-// selfhold.js from adalinxx/selfhold-wallet (npm run build:web), the client
+// selfhold.js from adalinxx/selfhold-wallet at fc0cb1c (npm run build:web), the client
 // for Selfhold's window at wallet.selfhold.app. MIT, see selfhold.LICENSE.
 // src/web/client.ts
 var CHANNEL = "selfhold";
@@ -121,9 +121,9 @@ function selfhold(options = {}) {
       remember(answer.address);
       return { transactionCID: answer.transactionCID };
     },
-    /** Sign `text`, once the person approves. The signed bytes are "lattice-message:" + this origin + "\n" + text. */
+    /** Sign `text`, once the person approves, as the address given here if any. The signed bytes are "lattice-message:" + this origin + "\n" + text. */
     signMessage: async (params) => {
-      const { publicKey, signature } = answered(await ask({ method: "signMessage", params }));
+      const { publicKey, signature } = answered(await ask({ method: "signMessage", params }, void 0, false, given() ?? void 0));
       return { publicKey, signature };
     }
   });

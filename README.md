@@ -204,11 +204,14 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 cd e2e/ui && npm install
 LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
-  LATTICE_WALLET=<selfhold>/dist npm test
+  LATTICE_WALLET=<selfhold>/dist LATTICE_WALLET_WEB=<selfhold>/dist-web npm test
 ```
 
+`<selfhold>` is selfhold-wallet built with `npm run build` (Selfhold for
+Chrome, `dist/`) and `npm run build:web` (Selfhold's window, `dist-web/`).
+
 The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
-builds both). They grind its shares on the machine's graphics chip; on Linux
+builds both). Selfhold's window grinds its shares on the machine's graphics chip; on Linux
 they give Chromium SwiftShader's, in software, for a machine with none.
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`

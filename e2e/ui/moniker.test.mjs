@@ -45,7 +45,9 @@ const gpuArgs = process.platform === "linux"
   : [];
 
 let browser;
-before(async () => (browser = await chromium.launch({ args: gpuArgs })));
+// Pop-ups blocked as for anyone: Selfhold's window opens only from a click, and a test catches one that doesn't.
+const popupsBlocked = { ignoreDefaultArgs: ["--disable-popup-blocking"] };
+before(async () => (browser = await chromium.launch({ args: gpuArgs, ...popupsBlocked })));
 after(async () => {
   await browser?.close();
   await running.stop();
@@ -132,6 +134,7 @@ async function claimAs(who, handle, { point, price } = {}) {
 async function walletBrowser() {
   const context = await chromium.launchPersistentContext(mkdtempSync(`${tmpdir()}/moniker-ui-browser-`), {
     headless: false,
+    ...popupsBlocked,
     args: ["--headless=new", `--disable-extensions-except=${walletInstalled}`, `--load-extension=${walletInstalled}`],
   });
   const [worker] = context.serviceWorkers().length ? context.serviceWorkers()
@@ -302,7 +305,7 @@ test("a visitor searches: a name no one owns costs 0, and reading needs no walle
   await expect(page).toHaveURL(/#\/search\/nobody$/);
   await expect(page.locator(".result .badge")).toHaveText("Available");
   await expect(page.locator(".result")).toContainText("No one owns it yet, so it costs 0.");
-  // No wallet: Claim all the same; the page's wallet makes the account when it is pressed.
+  // No wallet: Claim all the same; Selfhold's window makes the account when it is pressed.
   await expect(page.getByRole("button", { name: "Claim @nobody" })).toBeVisible();
   // Names close to it, each free.
   await expect(page.getByRole("link", { name: "Claim @nobody_ for 0" })).toBeVisible();
@@ -311,22 +314,21 @@ test("a visitor searches: a name no one owns costs 0, and reading needs no walle
   await page.goto(stack.app + "#/search/no!body");
   await expect(page.locator("#search-note")).toContainText("a name is lowercase letters, digits and _.");
 
-  // Where a key is needed, a passkey makes the account, or Selfhold keeps it; old links go there too.
+  // Where a key is needed, Selfhold's window keeps the account, or Selfhold for Chrome; old links go there too.
   await page.goto(stack.app + "#/profiles");
   await expect(page).toHaveURL(/#\/names$/);
   await expect(page.locator("#get-wallet")).toHaveText("Your names belong to your account's key");
-  await expect(page.getByRole("button", { name: "Create a passkey" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "I have a passkey" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Selfhold" })).toBeVisible();
   const store = page.waitForEvent("popup");
   await page.getByRole("link", { name: /^Add Selfhold/ }).click();
   await (await store).close();
   await expect(page.locator("#wallet-wait")).toBeVisible();
 
-  // A phone can't add Selfhold: it isn't offered there; a passkey is.
+  // A phone can't add Selfhold for Chrome: it isn't offered there; the window is.
   const phone = await browser.newContext({ userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148" });
   const p = await phone.newPage();
   await openApp(p, null, "#/names");
-  await expect(p.getByRole("button", { name: "Create a passkey" })).toBeVisible();
+  await expect(p.getByRole("button", { name: "Continue with Selfhold" })).toBeVisible();
   await expect(p.getByRole("link", { name: /^Add Selfhold/ })).toHaveCount(0);
   await phone.close();
 }, { wallet: false });
@@ -755,7 +757,7 @@ test("Settings saved for a trial chain follow the move to Moniker, and keep thei
   await page.reload();
   await page.goto(stack.app + "#/settings");
   await expect(page.locator("#s-chain")).toHaveValue("Nexus/other-names");
-  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor", wallet: "page", walletChosen: false });
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toEqual({ nodes: [stack.node], chain: "Nexus/other-names", sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor", wallet: "web", walletChosen: false });
 }, { wallet: false, expectedErrors: /status of 404/ }); // the stack's node serves no Nexus/other-names
 
 test("Settings saved with the hosts once named by default find them through Nexus instead", async ({ page }) => {
@@ -826,7 +828,7 @@ async function withSelfhold(page, hash, { settings = {} } = {}) {
   await page.addInitScript((settings) => {
     if (!localStorage.getItem("moniker.settings")) localStorage.setItem("moniker.settings", JSON.stringify(settings));
   }, { nodes: [stack.node], chain: stack.chain, sponsor: "", walletPage: stack.walletPage, ...settings });
-  context.selfhold = new Promise((resolve) => {
+  const arm = () => (context.selfhold = new Promise((resolve) => {
     const opened = async (popup) => {
       if (!(await popup.opener().catch(() => null))) return;
       context.off("page", opened);
@@ -836,10 +838,13 @@ async function withSelfhold(page, hash, { settings = {} } = {}) {
         options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true },
       });
       context.selfholdWindow = popup;
+      // Closed by the page itself (a write with nothing to send, or one it couldn't build): the next request opens another.
+      popup.on("close", () => arm());
       resolve(popup);
     };
     context.on("page", opened);
-  });
+  }));
+  arm();
   await page.goto(stack.app + hash);
 }
 
@@ -1136,12 +1141,13 @@ test("with Selfhold for Chrome too, Settings switch to it and back: each writes 
   await useExtension.check();
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
-  // Settings read the account Selfhold for Chrome connects here, if it remembers one.
+  // Settings read the account Selfhold for Chrome connects here, if it remembers one; else it is asked.
   await page.goto(stack.app + "#/names");
   const connect = page.getByRole("button", { name: "Connect Selfhold" });
   await expect(page.getByRole("heading", { name: "My names" }).or(connect)).toBeVisible();
   if (await connect.isVisible()) await connect.click();
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
+  await expect(page.locator("main")).toContainText(shortAccount(kit.address));
 
   await page.goto(stack.app + "#/settings");
   await useExtension.uncheck();
