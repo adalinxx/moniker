@@ -218,6 +218,8 @@ jobs:
       - if: failure()
         name: The node's logs
         run: |
-          for f in $(find "${RUNNER_TEMP:-/tmp}" /tmp -path '*moniker-*' -name '*.log' 2>/dev/null | sort -u); do
-            echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"
-          done
+          # The stacks' logs, not the browsers' profiles; each path whole, spaces and all.
+          find "${RUNNER_TEMP:-/tmp}" /tmp -path '*moniker-*' -not -path '*moniker-ui-browser-*' -name '*.log' -type f 2>/dev/null | sort -u |
+            while IFS= read -r f; do
+              echo "::group::$f"; tail -n 200 "$f" || true; echo "::endgroup::"
+            done

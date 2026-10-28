@@ -25,15 +25,23 @@ let pace = null; // hashes per millisecond this device last managed
 
 /** A write the account can't pay for: it needs `needed` coins and holds `balance`. */
 export class NeedsCoins extends Error {
-  /** `sponsorTooDear`: a sponsor was asked, and wants more work than this page will do. */
-  constructor({ address, needed, balance, sponsorTooDear = false }) {
+  /**
+   * `sponsor`: why the sponsor didn't pay the fee, if it was asked: "dear",
+   * it wants more work than this page will do; "down", it can't now.
+   */
+  constructor({ address, needed, balance, sponsor = null }) {
     super(`Your account needs ${needed} ${needed === 1n ? "coin" : "coins"} for this and holds ${balance}.`);
-    Object.assign(this, { name: "NeedsCoins", address, needed, balance, sponsorTooDear });
+    Object.assign(this, { name: "NeedsCoins", address, needed, balance, sponsor });
   }
 }
 
+/** What pays a fee in work here: "GPU" where WebGPU runs, else "processor". */
+export const workDevice = async () => ((await gpuGrinder()) ? "GPU" : "processor");
+
 /** The sponsor's price in work is past what this page will do. */
 class TooMuchWork extends Error {}
+/** The sponsor can't pay the fee now: not answering, busy or sold out, or taking no work. */
+class NoSponsor extends Error {}
 
 const saved = () => {
   try {
@@ -116,7 +124,8 @@ export function embeddedWallet({ hosts, sponsor }) {
     for (const host of await hosts()) {
       try {
         const get = async (path) => {
-          const response = await fetch(`${host}${path}${path.includes("?") ? "&" : "?"}chainPath=${encodeURIComponent(chain)}`);
+          // Fresh, never the browser's copy: the hosts let reads be cached for seconds, and a balance or nonce that old signs wrong.
+          const response = await fetch(`${host}${path}${path.includes("?") ? "&" : "?"}chainPath=${encodeURIComponent(chain)}`, { cache: "no-store" });
           if (response.status === 404) return {};
           if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
           return response.json();
@@ -151,6 +160,11 @@ export function embeddedWallet({ hosts, sponsor }) {
   }
 
   return {
+    /** What `address` holds on `chainPath`, and the hosts' relay fee there: `{ balance, fee }`, read, never asked. */
+    async funds(chainPath, address) {
+      const { balance, fee } = await reach(chainPath, address);
+      return { balance, fee };
+    },
     /** The account, without asking for anything: the one this browser remembers, or null. */
     address: async () => saved()?.address ?? null,
     /** How the key is kept: "passkey", "browser", or null with no account. */
@@ -213,6 +227,10 @@ export function embeddedWallet({ hosts, sponsor }) {
      * Signs and sends a Selfhold write request (`{ chainPath, actions,
      * payments?, fee? }`) as the account, paying the hosts' relay floor, or a
      * sponsor in work. `progress(text)` hears what is happening.
+     *
+     * With a sponsor, the fee is paid in work first, so the account spends only
+     * what the write pays; where the sponsor can't help (unreachable, sold out,
+     * or too slow here), from the account's coins if it has them.
      */
     async writeRecords(request, { progress = () => {} } = {}) {
       const record = saved();
@@ -226,17 +244,26 @@ export function embeddedWallet({ hosts, sponsor }) {
       const nonce = at.nonce > sent ? at.nonce : sent;
       const fee = request.fee === undefined ? at.fee : BigInt(request.fee) > at.fee ? BigInt(request.fee) : at.fee;
       const build = (fee) => transaction({ owner, actions: request.actions, payments, fee, nonce, chainPath: request.chainPath });
-      if (at.balance >= paying + fee) return submit(at.host, build(fee));
+      const covered = at.balance >= paying + fee;
       const url = sponsor();
-      if (fee === 0n || at.balance < paying || !url) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
-      let sponsored;
-      try {
-        sponsored = await sponsorFee(url, build(0n), progress);
-      } catch (error) {
-        if (error instanceof TooMuchWork) throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsorTooDear: true });
-        throw error;
+      if (fee > 0n && url && at.balance >= paying) {
+        let sponsored;
+        try {
+          // With coins to fall back on, a busy sponsor isn't waited for.
+          sponsored = await sponsorFee(url, build(0n), progress, { wait: !covered });
+        } catch (error) {
+          if (!covered) {
+            if (error instanceof TooMuchWork || error instanceof NoSponsor) {
+              throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance, sponsor: error instanceof TooMuchWork ? "dear" : "down" });
+            }
+            throw error;
+          }
+        }
+        // Only the sponsor falls back to coins: once sent, a write is never sent again.
+        if (sponsored) return submit(at.host, sponsored.body, sponsored.signatures);
       }
-      return submit(at.host, sponsored.body, sponsored.signatures);
+      if (covered) return submit(at.host, build(fee));
+      throw new NeedsCoins({ address: owner, needed: paying + fee, balance: at.balance });
     },
   };
 }
@@ -245,11 +272,17 @@ export function embeddedWallet({ hosts, sponsor }) {
 
 /** POSTs `body` to the sponsor's `path`; its refusal as an Error with the status. */
 async function ask(url, path, body) {
-  const response = await fetch(new URL(path, url.endsWith("/") ? url : `${url}/`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch(new URL(path, url.endsWith("/") ? url : `${url}/`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    throw new NoSponsor(error.name === "TimeoutError" ? "The fee sponsor didn't answer." : "The fee sponsor can't be reached.");
+  }
   const text = await response.text();
   if (!response.ok) throw Object.assign(new Error(`The fee sponsor: ${text || response.status}`), { status: response.status });
   return JSON.parse(text);
@@ -271,7 +304,7 @@ const canonical = (value) =>
  * fee debit and signature added, nothing else changed. Earns the fee first,
  * grinding the sponsor's shares, when this browser's credit there is short.
  */
-async function sponsorFee(url, draft, progress) {
+async function sponsorFee(url, draft, progress, { wait = true } = {}) {
   const chain = draft.chainPath.join("/");
   let client = null;
   try {
@@ -289,20 +322,27 @@ async function sponsorFee(url, draft, progress) {
       if (error.status !== 402) throw error;
     }
   }
+  // The chip ready first: work is good only until the chain moves on, and a
+  // first shader compile can take seconds.
+  await workDevice();
   const effort = { began: null, hashes: 0 };
-  const patience = Date.now() + 60_000;
+  const patience = Date.now() + (wait ? 60_000 : 0);
+  // Work refused round after round earns nothing: past this, the sponsor is no help.
+  const deadline = Date.now() + LONGEST;
   for (;;) {
+    if (Date.now() > deadline) throw new NoSponsor("The fee sponsor took none of this device's work.");
     let work;
     try {
       work = await ask(url, "work", { ...(client && { client }), chain });
     } catch (error) {
       // Busy, or this block's fees all sold: a block or two from now, it has work again.
       if (error.status === 503 && Date.now() < patience) {
-        progress("the fee sponsor is busy, trying again in a moment…");
+        progress("busy, trying again in a moment…");
         await new Promise((resolve) => setTimeout(resolve, 3000));
         continue;
       }
       // A token from before the sponsor restarted: start over with a new one.
+      if (error.status === 503) throw new NoSponsor(error.message);
       if (!client || error.status !== 400 || !/client token/.test(error.message)) throw error;
       client = null;
       continue;
@@ -337,7 +377,8 @@ async function grind(url, work, effort, progress) {
   // A share is worth 2^256 / (target + 1) hashes, expected.
   const needed = Number(BigInt(work.sharesForFee) * (2n ** 256n / (BigInt(`0x${work.shareTarget}`) + 1n)));
   if (pace && needed / pace > LONGEST) throw new TooMuchWork();
-  if (!effort.began) progress("paying the fee with this device's work…");
+  const device = await workDevice();
+  if (!effort.began) progress(`paying the fee with this device's ${device}…`);
 
   let settle;
   const outcome = new Promise((resolve, reject) => (settle = { resolve, reject }));
@@ -356,6 +397,7 @@ async function grind(url, work, effort, progress) {
         const { credit } = await ask(url, "shares", { assignment: work.assignment, nonce: String(nonce) });
         if (BigInt(credit) >= fee) finish(true);
       } catch (error) {
+        console.info(`[fee] share refused: ${error.message}`);
         // A doubled share earns nothing; expired work, or a full block, calls for new work.
         if (/duplicateShare|missesShareTarget/.test(error.message)) return;
         if (error.status === 400 || error.status === 503) finish(false);
@@ -372,7 +414,7 @@ async function grind(url, work, effort, progress) {
     pace = effort.hashes / spent;
     const expected = needed / pace;
     if (expected > LONGEST) return finish(false, new TooMuchWork());
-    progress(`paying the fee with this device's work, about ${seconds(Math.max(1000, expected - spent))} more…`);
+    progress(`paying the fee with this device's ${device}, about ${seconds(Math.max(1000, expected - spent))} more…`);
   };
 
   const timer = setTimeout(() => finish(false), Number(work.expiresInMilliseconds));

@@ -113,6 +113,24 @@ h1[tabindex="-1"]:focus { outline: none; }
 .choices .pill { justify-content: flex-start; }
 /* A choice to make, not a menu: big buttons, the one to pick first filled. */
 .choices.decide .pill { justify-content: center; min-height: 52px; }
+.summary { margin: 0; display: grid; gap: 10px; }
+.summary div { display: grid; grid-template-columns: minmax(96px, 30%) 1fr; gap: 12px; align-items: baseline; }
+.summary dt { color: var(--soft); font-size: 14px; }
+.summary dd { margin: 0; overflow-wrap: anywhere; }
+.methods { margin: 0; padding: 0; border: 0; display: grid; gap: 8px; min-width: 0; }
+.methods legend { padding: 0; margin-bottom: 8px; font-weight: 600; }
+.method { display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 10px 18px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); cursor: pointer; }
+.method:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.method input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--accent); }
+.method > span { display: grid; gap: 2px; }
+.method .note { margin: 0; }
+.others { display: grid; gap: 8px; }
+.others[open] > summary { margin-bottom: 0; }
+.others > summary { justify-self: start; min-height: 44px; display: flex; align-items: center; padding: 0 4px; color: var(--accent); cursor: pointer; font-weight: 500; }
+.pill[hidden] { display: none; }
+.request-card { align-self: center; padding: 12px; border-radius: 16px; background: #ffffff; border: 1px solid var(--line); cursor: grab; }
+.request-card:active { cursor: grabbing; }
+.request-card .qr svg { display: block; width: min(320px, 76vw); shape-rendering: crispEdges; height: auto; }
 .sheet-detail { font-size: 13px; overflow-wrap: anywhere; background: var(--bg); border-radius: 12px; padding: 10px 12px; color: var(--ink); user-select: all; }
 .pill.bad { color: var(--bad); }
 .pill.danger { background: var(--bad); color: var(--surface); border-color: var(--bad); }

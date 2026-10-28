@@ -6,6 +6,7 @@
     "test": "node --test --test-concurrency=1 moniker.test.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.48.2"
+    "@playwright/test": "1.48.2",
+    "qr": "0.7.2"
   }
 }
