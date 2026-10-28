@@ -451,11 +451,11 @@ test("Alice claims @alice_art, lists it, then reprices it; Bob buys it, and it p
     await bobPage.getByRole("link", { name: "Buy @alice_art for 40" }).click();
     await expect(bobPage.getByRole("heading", { name: "Buy @alice_art" })).toBeVisible();
     await expect(bobPage.locator(".summary")).toContainText("Price40, paid to its owner");
-    // With Selfhold here, it is the way to pay offered first; a request is the other.
+    // With Selfhold the wallet here, it is the way to pay offered first; the passkey account and a request, the others.
     await expect(bobPage.getByRole("radio", { name: /^Selfhold/ })).toBeChecked();
     await bobPage.getByText("Other ways to pay").click();
     await expect(bobPage.getByRole("radio", { name: /^Another wallet or device/ })).not.toBeChecked();
-    await expect(bobPage.getByRole("radio", { name: /^Your passkey account/ })).toHaveCount(0);
+    await expect(bobPage.getByRole("radio", { name: /^Your passkey account/ })).not.toBeChecked();
     await expect(bobPage.getByText("Selfhold shows the payment and its fee, set there, for you to approve.")).toBeVisible();
     expect(bobPage.context().approvals).toBe(asked);
     await bobPage.getByRole("button", { name: "Pay 40 with Selfhold" }).click();
