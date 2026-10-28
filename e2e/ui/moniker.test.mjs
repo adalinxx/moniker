@@ -1071,6 +1071,42 @@ test("an account with no coins buys with this device's GPU: it pays the price an
   expect((await held("yan_dear")).owner).toBe(seller.address);
 }, { wallet: false, expectedErrors: /status of 400/ });
 
+test("a fee sponsor that changes what it pays the account: the page signs nothing, and sends nothing", async ({ page }) => {
+  await page.route("**/api/chain/info?*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), minRelayFee: "1" } });
+  });
+  const seller = newAccount();
+  await claimAs(seller, "yan_bent", { price: 20n });
+  const sponsor = await running.sponsor((address) => fund(address, 1000n));
+  // Its answers, bent: its credit to the account one more than asked, then
+  // paid to someone else.
+  const bends = [
+    (actions) => (actions.at(-2).delta = String(BigInt(actions.at(-2).delta) + 1n)),
+    (actions) => (actions.at(-2).owner = seller.address),
+  ];
+  let bent = 0;
+  await page.route(`${sponsor.url}/sponsor`, async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    if (json.transaction) bends[bent++ % bends.length](json.transaction.body.accountActions);
+    await route.fulfill({ response, json });
+  });
+  await withPasskeys(page, "#/buy/yan_bent", { settings: { sponsor: sponsor.url } });
+  await page.getByRole("button", { name: "Create a passkey" }).click();
+  const { address } = await pageAccount(page);
+  const sellerBefore = await balance(seller.address);
+  for (let i = 0; i < bends.length; i++) {
+    await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
+    await expect(page.getByText("The fee sponsor changed the transaction. Nothing was sent.").first()).toBeVisible({ timeout: 120_000 });
+    expect(bent).toBe(i + 1);
+    expect((await held("yan_bent")).owner).toBe(seller.address);
+    await page.reload();
+  }
+  expect(await balance(seller.address)).toBe(sellerBefore);
+  expect(await balance(address)).toBe(0n);
+}, { wallet: false, expectedErrors: /status of 503/ });
+
 test("a fee sponsor from before it paid prices ignores the ask: the page sends nothing, and asks for coins, saying so", async ({ page }) => {
   await page.route("**/api/chain/info?*", async (route) => {
     const response = await route.fetch();
@@ -1089,7 +1125,7 @@ test("a fee sponsor from before it paid prices ignores the ask: the page sends n
   await page.getByRole("button", { name: "Create a passkey" }).click();
   await page.getByRole("button", { name: "Pay with this device's GPU" }).click();
   await expect(page.locator("#sheet-title")).toHaveText("Add coins to your account");
-  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not a price this high, so send coins");
+  await expect(page.locator("#sheet-body")).toContainText("This device's GPU pays fees here, but not prices, so send coins");
   expect(asked).toEqual(["/sponsor/work"]);
   await sheetButton(page, "Cancel").click();
   expect((await held("zed_old")).owner).toBe(seller.address);

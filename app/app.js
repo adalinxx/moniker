@@ -251,6 +251,7 @@ async function fundSheet({ address, needed, balance, sponsor }) {
     down: " Its fee is usually paid with this device's GPU, but that isn't working right now: try again in a few minutes, or",
     dear: " This device's GPU can't pay for it in reasonable time, so",
     most: " This device's GPU pays fees here, but not a price this high, so",
+    fees: " This device's GPU pays fees here, but not prices, so",
   }[sponsor] ?? "";
   const on = settings.chain === DEFAULTS.chain ? "" : ` on ${settings.chain}`;
   const copy = await sheet({
