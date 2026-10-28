@@ -996,10 +996,8 @@ test("another wallet pays by request: the page draws it as a QR code and text, a
   await claimAs(seller, "vic_qr", { price: 25n });
   await withSelfhold(page, "#/buy/vic_qr");
   const sent = sends(page.context());
-  // Without Selfhold for Chrome, it is offered to add; a request needs no account here at all.
+  // A request needs no account here at all.
   await page.getByText("Other ways to pay").click();
-  await page.getByRole("radio", { name: /^Selfhold for Chrome/ }).check();
-  await expect(page.getByRole("link", { name: /^Add Selfhold/ })).toBeVisible();
   await page.getByRole("radio", { name: /^Another wallet or device/ }).check();
   await expect(page.getByRole("radio", { name: /^Another wallet or device/ })).toBeFocused();
   await expect(page.getByRole("img", { name: "QR code of the request to buy @vic_qr" })).toBeVisible();
@@ -1138,9 +1136,11 @@ test("with Selfhold for Chrome too, Settings switch to it and back: each writes 
   await walletHolds(page.context(), kit);
   await withSelfhold(page, "#/settings");
   const useExtension = page.getByLabel("Use Selfhold for Chrome, not Selfhold's window");
+  await expect(page.getByText("Each keeps its own account.")).toBeVisible();
   await useExtension.check();
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page).toHaveURL(/#\/$/); // Save is done once it goes home
+  await expect(toast(page, "Now Selfhold for Chrome, and its own account")).toBeVisible();
   // Settings read the account Selfhold for Chrome connects here, if it remembers one; else it is asked.
   await page.goto(stack.app + "#/names");
   const connect = page.getByRole("button", { name: "Connect Selfhold" });
@@ -1148,6 +1148,7 @@ test("with Selfhold for Chrome too, Settings switch to it and back: each writes 
   if (await connect.isVisible()) await connect.click();
   await expect(page.getByRole("heading", { name: "My names" })).toBeVisible();
   await expect(page.locator("main")).toContainText(shortAccount(kit.address));
+  await expect(page.locator("main")).toContainText("Kept by Selfhold for Chrome.");
 
   await page.goto(stack.app + "#/settings");
   await useExtension.uncheck();
@@ -1220,22 +1221,18 @@ test("with Selfhold for Chrome in use, the checkout still offers Selfhold's wind
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem("moniker.settings")))).toMatchObject({ wallet: "web", walletChosen: true });
 }, { expectedErrors: /status of (400|503)/ });
 
-test("with Selfhold's window in use, the checkout can still pay with Selfhold for Chrome: it opens a request there, for an account picked there", async ({ page }) => {
-  const lou = newAccount();
-  const seller = newAccount();
-  await fund(lou.address, 100n);
-  await walletHolds(page.context(), lou);
-  await claimAs(seller, "lou_open", { price: 20n });
-  await withSelfhold(page, "#/buy/lou_open");
+test("with Selfhold's window in use, the checkout never offers Selfhold for Chrome, installed or not, and says whose account pays", async ({ page }) => {
+  await walletHolds(page.context(), newAccount());
+  await withSelfhold(page, "#/@lou_one");
+  await page.getByRole("button", { name: "Claim @lou_one" }).click();
+  const address = await newSelfholdAccount(page);
   await expect(page.getByRole("radio", { name: /^Selfhold\s*In a window/ })).toBeChecked();
-  await page.getByText("Other ways to pay").click();
-  await page.getByRole("radio", { name: /^Selfhold for Chrome/ }).check();
-  const asked = page.context().approvals;
-  await page.getByRole("button", { name: "Open in Selfhold" }).click();
-  await expect(page.locator("#exact")).toHaveText("@lou_open", { timeout: 30_000 });
-  expect(page.context().approvals, page.context().walletNotes.join("\n")).toBe(asked + 1);
-  expect((await held("lou_open")).owner).toBe(lou.address);
-  expect(await balance(seller.address)).toBeGreaterThanOrEqual(20n);
+  // The window, and a request for any wallet, folded: nothing else.
+  expect(await page.locator('input[name="pay"]').evaluateAll((inputs) => inputs.map((i) => i.value))).toEqual(["web", "request"]);
+  await expect(page.locator("main")).toContainText(`From${shortAccount(address)}, Selfhold's window's account`);
+  // My names says which wallet keeps it.
+  await page.goto(stack.app + "#/names");
+  await expect(page.locator("main")).toContainText("Kept by Selfhold's window, with your passkey.");
 });
 
 test("without a sponsor the account pays the hosts' relay fee: short of it, the page asks for coins and sends nothing; funded, it pays", async ({ page }) => {

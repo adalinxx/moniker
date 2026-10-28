@@ -108,9 +108,10 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
     account lacks as it earns the fee, from a sponsor that pays prices
     (`--most-pay`). Add coins comes second, and is what remains where the
     sponsor won't pay that much.
-  - *Selfhold for Chrome*: the connected account. With the window in use, a
-    `lattice://write` request Selfhold for Chrome opens for an account picked
-    there; not installed, where to add it.
+  - *Selfhold for Chrome*: only where it is the wallet, the account it
+    connects. Each Selfhold keeps its own account, so the checkout never offers
+    the other's beside it; the checkout, My names and Settings say which
+    wallet keeps the account in use.
   - *Another wallet or device*: the purchase as a `lattice://write` request
     (moniker-sdk's `writeRequestURI`), good for 15 minutes, as a QR code to
     scan, text to copy, and a card to drag into a wallet's tab, as Selfhold
