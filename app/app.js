@@ -8,7 +8,7 @@ import * as names from "../sdk/src/records/names.mjs";
 import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
 import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
 import encodeQR from "./vendor/qr.mjs";
-import { embeddedWallet } from "./wallet.mjs";
+import { embeddedWallet, workDevice } from "./wallet.mjs";
 
 // ---------------------------------------------------------------- settings
 
@@ -16,7 +16,7 @@ const DEFAULTS = {
   // None named: reads go to the hosts Nexus lists for the chain.
   nodes: [],
   chain: "Nexus/moniker",
-  // A fee sponsor paid in work, for accounts in the page's wallet with too few coins for the fee; "" for none.
+  // A fee sponsor: the page's wallet pays it fees in this device's GPU work, before coins; "" for none.
   sponsor: "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor",
   // "selfhold" uses Selfhold where it is installed; "page" uses the page's own wallet even so.
   wallet: "selfhold",
@@ -175,7 +175,7 @@ function walletMessage(error) {
 // The wallet takes one request from a page at a time.
 let walletTurn = Promise.resolve();
 /** Sends `write`, built for account `me`, through the wallet; the page's wallet tells `progress` what it is doing. */
-function send(write, me, progress = () => {}, { feeBy } = {}) {
+function send(write, me, progress = () => {}) {
   const turn = walletTurn.then(async () => {
     // A write is built for one account. If Selfhold was since disconnected
     // from this site, or connected to another account, say so and send nothing.
@@ -186,7 +186,7 @@ function send(write, me, progress = () => {}, { feeBy } = {}) {
       if (!selfhold()) throw new Error("This page's account changed. Look again, then try again.");
       throw new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
     }
-    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress, feeBy });
+    return selfhold() ? wallet().writeRecords(writeRequest(chainPath(), write)) : inPage.writeRecords(writeRequest(chainPath(), write), { progress });
   });
   walletTurn = turn.catch(() => {});
   return turn;
@@ -199,18 +199,17 @@ function send(write, me, progress = () => {}, { feeBy } = {}) {
  */
 const acting = new Set(); // the labels of writes under way, each sent once however often it's pressed
 
-/** `options.feeBy`: for the page's wallet, "coins" or "work" to pay the fee only that way. */
-async function act(label, build, landed, done = render, options = {}) {
+async function act(label, build, landed, done = render) {
   if (acting.has(label)) return;
   acting.add(label);
   try {
-    await acted(label, build, landed, done, options);
+    await acted(label, build, landed, done);
   } finally {
     acting.delete(label);
   }
 }
 
-async function acted(label, build, landed, done, options) {
+async function acted(label, build, landed, done) {
   const me = connected;
   const progress = toast(selfhold() ? `${label}: approve it in your wallet.` : `${label}…`);
   try {
@@ -225,7 +224,7 @@ async function acted(label, build, landed, done, options) {
       setTimeout(progress.close, 2500);
       return;
     }
-    await send(write, me, (text) => progress.update(`${label}: ${text}`), options);
+    await send(write, me, (text) => progress.update(`${label}: ${text}`));
     progress.update(`${label}: confirming…`);
     const deadline = Date.now() + 5 * 60_000;
     for (;;) {
@@ -246,14 +245,16 @@ async function acted(label, build, landed, done, options) {
 }
 
 /** The page's account can't pay for a write: what it needs, and where to send coins. */
-async function fundSheet({ address, needed, balance, sponsorTooDear }) {
-  const sponsorNote = sponsorTooDear
-    ? " The fee sponsor asks more work for it than this device can do in reasonable time."
-    : settings.sponsor ? "" : " Or name a fee sponsor in Settings: it pays fees for a little of this device's work.";
+async function fundSheet({ address, needed, balance, sponsor }) {
+  // Fees are usually paid with this device's GPU: say so when, this time, they can't be.
+  const why = {
+    down: " Its fee is usually paid with this device's GPU, but that isn't working right now: try again in a few minutes, or",
+    dear: " This device's GPU can't pay its fee in reasonable time, so",
+  }[sponsor] ?? "";
   const on = settings.chain === DEFAULTS.chain ? "" : ` on ${settings.chain}`;
   const copy = await sheet({
     title: "Add coins to your account",
-    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}. Send coins${on} to your account ID, then try again.${sponsorNote}`,
+    body: `This needs ${coins(needed)} ${needed === 1n ? "coin" : "coins"}, and your account holds ${coins(balance)}.${why ? `${why} send` : " Send"} coins${on} to your account ID, then try again.`,
     detail: address,
     confirm: "Copy account ID",
   });
@@ -585,9 +586,8 @@ function connectPanel(why, alone = false) {
 
 // ---------------------------------------------------------------- checkout
 
-// The checkout's choices, kept across its redraws: how to pay, and for the
-// page's account, how its fee is paid.
-const checkout = { handle: null, method: null, feeBy: null };
+// The checkout's choice of how to pay, kept across its redraws.
+const checkout = { handle: null, method: null };
 
 /** The ways to pay here, the first the one to offer first. */
 function payMethods() {
@@ -603,7 +603,7 @@ function payMethods() {
  * it pays, then a choice of how to pay, each with its fee and total. Its Pay
  * is the last step, and the only one that asks a wallet anything.
  *
- *   account   the page's passkey account; its fee in coins or in this device's work, through the sponsor
+ *   account   the page's passkey account; its fee paid with this device's GPU, through the sponsor
  *   selfhold  Selfhold: the connected account, or with the page's wallet in use, a request it opens
  *   request   a lattice://write request, as a QR code, text or a card to drag, for any wallet anywhere
  */
@@ -613,18 +613,25 @@ async function viewBuy(handle, state) {
   if (connected && entry?.owner === connected) return viewMessage(`@${handle} is yours`, "Your account owns it already.", see);
   if (entry?.price === undefined) return viewMessage(`@${handle} isn't for sale`, "Its owner isn't selling it now, or someone just bought it.", see);
   const price = entry.price;
-  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null, feeBy: null });
+  if (checkout.handle !== handle) Object.assign(checkout, { handle, method: null });
   const methods = payMethods();
   const method = methods.includes(checkout.method) ? checkout.method : methods[0];
   checkout.method = method;
 
   const label = { account: "Your passkey account", selfhold: "Selfhold", request: "Another wallet or device" };
   const hint = { account: "Here, with your passkey", selfhold: "The browser extension", request: "Scan a code, or copy a request" };
-  const choices = methods.map((m) => `
+  const choice = (m) => `
         <label class="method">
           <input type="radio" name="pay" value="${m}"${m === method ? " checked" : ""}>
           <span><strong>${label[m]}</strong><span class="note">${hint[m]}</span></span>
-        </label>`).join("");
+        </label>`;
+  // The first way leads; the others wait, folded, for whoever wants them.
+  const [first, ...others] = methods;
+  const choices = `${choice(first)}
+        <details class="others"${method !== first ? " open" : ""}>
+          <summary>Other ways to pay</summary>
+          ${others.map(choice).join("")}
+        </details>`;
 
   let detail;
   if (method === "account") detail = await accountPay(handle, entry);
@@ -660,7 +667,7 @@ async function requestFor(handle, entry, state) {
   return { uri, expiresAt };
 }
 
-/** Paying from the page's passkey account: its balance, and the fee in coins or in this device's work. */
+/** Paying from the page's passkey account: its balance, and its fee, paid with this device's GPU where it can be. */
 async function accountPay(handle, entry) {
   const price = entry.price;
   if (!connected) {
@@ -671,33 +678,23 @@ async function accountPay(handle, entry) {
   const funds = await inPage.funds(chainPath(), connected).catch(() => null);
   if (!funds) return `<p role="alert" style="margin: 0">No host answered for your account's balance.</p><button class="pill big" type="button" data-retry>Try again</button>`;
   const { balance, fee } = funds;
-  const canCoins = balance >= price + fee;
-  const canWork = fee > 0n && Boolean(settings.sponsor) && balance >= price;
-  let feeBy = fee === 0n ? "coins" : checkout.feeBy;
-  if (feeBy === "work" && !settings.sponsor) feeBy = null;
-  feeBy ??= canCoins || !canWork ? "coins" : "work";
-
-  // A choice only where work can pay it: short of the price, it can't.
-  const feeChoice = fee === 0n || balance < price
-    ? `<dl class="summary"><div><dt>Fee</dt><dd>${fee === 0n ? "None" : `${coins(fee)}, from your account`}</dd></div></dl>`
-    : `<fieldset class="fee-by">
-        <legend>Fee</legend>
-        <label class="check"><input type="radio" name="fee-by" value="coins"${feeBy === "coins" ? " checked" : ""}> ${coins(fee)} from your account</label>
-        ${settings.sponsor ? `<label class="check"><input type="radio" name="fee-by" value="work"${feeBy === "work" ? " checked" : ""}> This device's work instead, a few seconds, through the fee sponsor</label>` : ""}
-      </fieldset>`;
-  const total = price + (feeBy === "coins" ? fee : 0n);
+  // With a sponsor, this device's GPU pays the fee in work: free, wherever the account holds the price.
+  const byWork = fee > 0n && Boolean(settings.sponsor);
+  const total = byWork ? price : price + fee;
+  const feeText = fee === 0n ? "None" : byWork ? `Free, paid with this device's ${await workDevice()}` : coins(fee);
   const rows = `<dl class="summary">
+        <div><dt>Fee</dt><dd>${feeText}</dd></div>
         ${total > price ? `<div><dt>Total</dt><dd>${coins(total)}</dd></div>` : ""}
         <div><dt>Your account holds</dt><dd>${coins(balance)}</dd></div>
       </dl>`;
   if (balance < total) {
     const more = total - balance;
-    return `${feeChoice}${rows}
+    return `${rows}
         <p class="note" role="status" style="margin: 0">This needs ${coins(more)} more ${more === 1n ? "coin" : "coins"} than your account holds.</p>
         <button class="pill accent big" type="button" data-fund="${esc(String(total))}">Add coins</button>`;
   }
-  return `${feeChoice}${rows}
-        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}" data-fee-by="${feeBy}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
+  return `${rows}
+        <button class="pill accent big" type="button" data-buy="${esc(handle)}" data-price="${price}">Pay ${coins(price)} and buy @${esc(handle)}</button>`;
 }
 
 /** Paying with Selfhold: the account it connects here, or a request it opens for one you pick; or where to add it. */
@@ -895,7 +892,7 @@ function viewSettings() {
       <form id="settings" class="panel stack">
         <div class="field"><label for="s-nodes">Nodes to read from, one per line; leave it empty for the hosts Nexus lists</label><textarea id="s-nodes" rows="3" placeholder="The hosts Nexus lists for the chain">${esc(settings.nodes.join("\n"))}</textarea></div>
         <div class="field"><label for="s-chain">Names chain</label><input id="s-chain" class="mono" value="${esc(settings.chain)}"></div>
-        <div class="field"><label for="s-sponsor">Fee sponsor, paid in this device's work when your account has too few coins for a fee; leave it empty for none</label><input id="s-sponsor" class="mono" value="${esc(settings.sponsor)}" placeholder="No sponsor" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
+        <div class="field"><label for="s-sponsor">Pay fees with this device's GPU, through this service; leave it empty to pay fees in coins</label><input id="s-sponsor" class="mono" value="${esc(settings.sponsor)}" placeholder="Fees paid in coins" autocomplete="off" spellcheck="false" autocapitalize="none"></div>
         ${window.lattice ? `<label class="check"><input type="checkbox" id="s-page-wallet"${settings.wallet === "page" ? " checked" : ""}> Use this page's passkey wallet, not Selfhold</label>` : ""}
         <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap">
           <button class="pill" type="button" data-reset>Defaults</button>
@@ -1060,7 +1057,6 @@ document.addEventListener("click", async (event) => {
       },
       async (s, me) => (await held(s, handle))?.owner === me,
       () => (location.hash = `#/@${handle}`),
-      { feeBy: d.feeBy },
     );
   } else if (d.take) {
     if (!(await connectFirst(`take @${d.take}`))) return;
@@ -1226,9 +1222,8 @@ document.addEventListener("submit", async (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
-  if (input.name !== "pay" && input.name !== "fee-by") return;
-  if (input.name === "pay") checkout.method = input.value;
-  else checkout.feeBy = input.value;
+  if (input.name !== "pay") return;
+  checkout.method = input.value;
   used = `input[name="${input.name}"][value="${CSS.escape(input.value)}"]`;
   render();
 });

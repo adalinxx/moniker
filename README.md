@@ -98,12 +98,12 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   account's last 6 characters, linking to its page); where it points
   ("Points at …", linking to that account) and whether that account shows
   it. A name pointing at you offers Show this handle.
-- **Checkout** (`#/buy/<h>`): the price and whom it pays, then a choice
-  of how to pay, each showing its own fee and total. Only Pay asks a wallet
-  anything, and the name comes pointing at the paying account.
-  - *Your passkey account*: the page's wallet. Its fee comes from the
-    account, or with a fee sponsor set, from this device's work instead;
-    short of coins, it offers Add coins.
+- **Checkout** (`#/buy/<h>`): the price and whom it pays, the way to pay
+  first offered, and the others folded under "Other ways to pay". Only Pay
+  asks a wallet anything, and the name comes pointing at the paying account.
+  - *Your passkey account*: the page's wallet. Its fee reads "Free, paid
+    with this device's GPU", so the account pays the price alone; short of
+    it, the page offers Add coins.
   - *Selfhold*: the connected account. With the page's wallet in use, a
     `lattice://write` request Selfhold opens for an account picked there; not
     installed, where to add it.
@@ -142,18 +142,23 @@ phones included:
   on the page's own domain or `localhost`, not an IP address.
 - **It signs as Selfhold would** and sends to the chain's hosts, paying
   their relay floor (`minRelayFee`, 1 on Moniker's hosts) from the account.
-  An account with too few coins pays a **fee sponsor** instead: by default
-  Moniker's, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
-  (lattice-node's `lattice-sponsor`), changed or turned off in Settings. The
+  With a **fee sponsor** set, every fee is paid in this device's work
+  first, and the page says only that this device's GPU pays it: by default
+  Moniker's sponsor, at `https://lattice-testnet-apps-iad.fly.dev:8650/sponsor`
+  (lattice-node's `lattice-sponsor`), changed or turned off in Settings
+  ("Pay fees with this device's GPU"). Where the sponsor can't help (no
+  answer in 15 s, busy, sold out, taking no work for two minutes, or too slow
+  here), the account's coins pay the fee if it has them, unasked; if not, the
+  page says the fee is usually paid with the GPU, and to try again. The
   page grinds the sponsor's shares on the device's graphics chip through
   WebGPU (`app/share-gpu.mjs`), or where it has none, in Web Workers on its
   processor (`app/share-worker.mjs`); both hash as `app/sha256.mjs` lays out.
   The sponsor then adds the fee and co-signs. The page signs only if the
-  sponsor added that one fee debit and itself as second signer. A sponsor
-  busy or sold out for the block is asked again for up to a minute. Where
-  the fee would take this device more than two minutes at the pace it
-  shows, or with no sponsor, the page asks for coins and shows the account
-  ID to send them to.
+  sponsor added that one fee debit and itself as second signer. With no
+  coins to fall back on, a sponsor busy or sold out for the block is asked
+  again for up to a minute. With no sponsor, or none that can help and too
+  few coins, the page asks for coins and shows the account ID to send them
+  to.
 - Anyone who prefers an extension can still add Selfhold from the account
   panel; back on the tab after adding it, the page reloads at the same place.
 
