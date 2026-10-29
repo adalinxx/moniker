@@ -221,7 +221,7 @@ jobs:
         run: npm ci && npm run build && npm run build:web
       - if: matrix.suite == 'ui'
         name: The page's selfhold.js is the pinned one's
-        run: tail -n +3 app/vendor/selfhold.mjs | cmp - .deps/lattice-wallet/dist-web/selfhold.js
+        run: tail -n +3 app/vendor/selfhold.mjs | cmp - .deps/lattice-wallet/dist-web/v1/selfhold.js
       - if: matrix.suite == 'ui'
         name: Install Playwright
         working-directory: e2e/ui
