@@ -487,13 +487,14 @@ function pointsLabel(n, html = false) {
   return n.pointer === connected ? "points at you" : `points at ${html ? accountRef(n.pointer) : shortID(n.pointer)}`;
 }
 
-/** One name in a list: the handle, linked to its page, and `label` as HTML (by default where it points, and its terms). */
-function handleRow(n, end = "", label = [pointsLabel(n, true), termsOf(n, true)].filter(Boolean).join(" · ")) {
+/** One name in a list: the handle, linked to its page, and `label` as HTML (by default where it points, and its terms), then its actions and its menu. */
+function handleRow(n, end = "", label = [pointsLabel(n, true), termsOf(n, true)].filter(Boolean).join(" · "), menu = "") {
   return `
-    <div class="row">
+    <div class="row name-row">
       <a class="mono" href="#/@${esc(n.handle)}">@${esc(n.handle)}</a>
       <span class="label">${label}</span>
       ${end ? `<div class="end">${end}</div>` : ""}
+      ${menu}
     </div>`;
 }
 
@@ -952,15 +953,15 @@ async function viewNames(state) {
       </section>
       <section class="section stack" aria-label="Your names">
         ${[...underway.keys()].filter((h) => onItsWay(h) && !mine.some((n) => n.handle === h)).map((h) => `
-          <div class="row">
+          <div class="row name-row">
             <a class="mono" href="#/@${esc(h)}">@${esc(h)}</a>
             <span class="label">${esc(underway.get(h).label)}: ${underwayLine(h)}</span>
           </div>`).join("")}
         ${mine.map((n) => handleRow(n, `
           ${n.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take/${n.handle}`))}">Copy link<span class="sr"> to take @${esc(n.handle)}</span></button>` : ""}
-          ${n.pointer === connected && n.handle !== shows ? showButton(n.handle) : ""}
-          <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`,
-          [pointsLabel(n, true), termsOf(n, true), underwayLine(n.handle)].filter(Boolean).join(" · "))).join("")
+          ${n.pointer === connected && n.handle !== shows ? showButton(n.handle) : ""}`.trim(),
+          [pointsLabel(n, true), termsOf(n, true), underwayLine(n.handle)].filter(Boolean).join(" · "),
+          `<button class="pill icon menu" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`)).join("")
           || ([...underway.keys()].some(onItsWay) ? "" : `<p class="note">No names yet.</p>`)}
       </section>
       ${lent.length ? `
@@ -1359,6 +1360,8 @@ document.addEventListener("dragstart", (event) => {
 });
 
 window.addEventListener("hashchange", () => {
+  // Back on a phone leaves the page under an open sheet: it goes too, as cancelled.
+  if ($("#sheet").open) $("#sheet").close("cancel");
   used = null;
   scrollTo(0, 0);
   render();
