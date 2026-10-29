@@ -66,6 +66,15 @@ footer nav a, .quiet { color: var(--muted); font-size: 13px; text-decoration: no
 .box:focus-within { border-color: var(--ink); }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 60px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); padding: 8px 8px 8px 22px; }
 .row .end { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.name-row > .label + .menu { margin-left: auto; }
+/* A name in a list, on a phone: the handle and its menu on top, what it does under it, then its actions. */
+@media (max-width: 560px) {
+  .name-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; padding: 10px 8px 10px 18px; }
+  .name-row > .mono { grid-column: 1; overflow-wrap: anywhere; }
+  .name-row > .label { grid-column: 1; }
+  .name-row > .end { grid-column: 1 / -1; margin: 8px 0 0; justify-content: flex-start; }
+  .name-row > .menu { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+}
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .section { margin-top: 32px; }
 .note { margin: 0 22px; font-size: 14px; color: var(--muted); }
