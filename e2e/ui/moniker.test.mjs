@@ -552,6 +552,32 @@ test("A write asks for no fee: the wallet sets its own, from what the node asks"
   expect(await balance(fia.address)).toBe(100n);
 });
 
+test("A sent claim says this device's part is done, and the name shows it on its way, with no second Claim, until it is yours", async ({ page }) => {
+  const gia = newAccount();
+  await fund(gia.address, 100n);
+  await openApp(page, gia, "#/search/gia");
+  await expect(page.locator(".result .badge")).toHaveText("Available");
+  await page.waitForLoadState("networkidle");
+  // Everything the page says on the way, however briefly: the toasts, and each moment the name shows its write on its way.
+  await page.evaluate(() => {
+    window.seen = { toasts: [], underway: [] };
+    new MutationObserver(() => {
+      const toast = document.querySelector("#toasts, #alerts")?.textContent;
+      if (toast && window.seen.toasts.at(-1) !== toast) window.seen.toasts.push(toast);
+      const line = document.querySelector(".underway-line");
+      if (line) window.seen.underway.push({ line: line.textContent, payable: Boolean(document.querySelector("main button[data-claim], main form.claim, main button.pay")) || [...document.querySelectorAll("main button")].some((b) => /^(Claim|Pay)\b/.test(b.textContent)) });
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Claim @gia" }).click();
+  await claimOnCheckout(page);
+  await expect(page.locator(".result .badge")).toHaveText("Yours");
+  const seen = await page.evaluate(() => window.seen);
+  expect(seen.toasts.some((t) => t.includes("Claiming @gia: sent. Your device's part is done. The network usually records it in about 10 seconds."))).toBe(true);
+  expect(seen.toasts.some((t) => /confirming/i.test(t))).toBe(false);
+  expect(seen.underway.length).toBeGreaterThan(0);
+  expect(seen.underway.every((u) => u.line.includes("Claiming @gia: On its way · usually about 10 seconds") && !u.payable)).toBe(true);
+});
+
 test("Take never pays: an offer turned into a listing before Bob presses Take is refused, and the wallet is asked nothing", async ({ page }) => {
   await claimAs(alice, "alice_switch");
   await writeAs(alice, await names.offerName(await state(), alice.address, "alice_switch", bob.address));
