@@ -1360,6 +1360,8 @@ document.addEventListener("dragstart", (event) => {
 });
 
 window.addEventListener("hashchange", () => {
+  // Back on a phone leaves the page under an open sheet: it goes too, as cancelled.
+  if ($("#sheet").open) $("#sheet").close("cancel");
   used = null;
   scrollTo(0, 0);
   render();
