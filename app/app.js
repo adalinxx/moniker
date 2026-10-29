@@ -195,15 +195,73 @@ const acting = new Set(); // the labels of writes under way, each sent once howe
 async function act(label, build, landed, done = render) {
   if (acting.has(label)) return;
   acting.add(label);
+  // Once late, the person may try again (a write the network dropped never lands): released once, then it's the next try's.
+  let released = false;
+  const release = () => {
+    if (!released) acting.delete(label);
+    released = true;
+  };
   try {
-    await acted(label, build, landed, done);
+    await acted(label, build, landed, done, release);
   } finally {
-    acting.delete(label);
+    release();
   }
 }
 
-async function acted(label, build, landed, done) {
+// What is underway on each name, after its write was sent, until it lands:
+// shown on the name itself, wherever it is listed. handle → { label, kind:
+// "sent" | "slow" | "late" | "failed", message? }.
+const underway = new Map();
+const SLOW_MS = 30_000; // blocks come every 10 s: three blocks, and it is slow
+const LATE_MS = 5 * 60_000; // then it is late: checked less often, and the person may try again
+const GIVE_UP_MS = 30 * 60_000; // then no longer watched
+const LOST_READS = 3; // a lost race, read so on this many checks running (a host may lag, or a block be replaced)
+/** Whether the page open shows `handle`'s state: its page, its checkout, its take link, or My names. */
+const showing = (handle) => [`#/@${handle}`, `#/search/${handle}`, `#/buy/${handle}`, `#/take/${handle}`, "#/names"].includes(location.hash);
+/** Draws the page again for what is underway on `handle`, if the page shows it and no one is typing or answering a sheet. */
+const redraw = (handle) => {
+  if (!showing(handle) || document.activeElement?.matches?.("input, textarea") || document.querySelector("#sheet[open], dialog[open]")) return;
+  render();
+};
+/** What is underway on `handle` for the account here, if anything. */
+const underwayOn = (handle) => {
+  const u = underway.get(handle);
+  return u && u.me === connected ? u : null;
+};
+/** Whether `handle` has a write on its way, so the page offers no second Claim, Pay or Take. */
+const onItsWay = (handle) => ["sent", "slow"].includes(underwayOn(handle)?.kind);
+/** A name's line for what is underway on it, as HTML, or "". */
+function underwayLine(handle) {
+  const u = underwayOn(handle);
+  if (!u) return "";
+  const text = {
+    sent: "On its way · usually about 10 seconds",
+    slow: "Taking longer than usual · it's sent and should still go through",
+    late: "Not recorded yet · it may still go through",
+  }[u.kind] ?? u.message;
+  return `<span class="underway${u.kind === "failed" ? " bad" : ""}">${esc(text)}</span>`;
+}
+/** The line for a name's page and checkout: the action and its state, or, failed, why. */
+const underwayStatus = (handle) => {
+  const u = underwayOn(handle);
+  if (!u) return "";
+  return `<p class="underway-line" role="status">${u.kind === "failed" ? "" : `${esc(u.label)}: `}${underwayLine(handle)}</p>`;
+};
+
+async function acted(label, build, landed, done, release) {
   const me = connected;
+  // Our labels name the handle acted on first (`Claiming @fia`, `Pointing @fia at …`).
+  const handle = /@([a-z0-9_]+)/.exec(label)?.[1];
+  const mine = {}; // this write's, as its marks say
+  const mark = (kind, message) => {
+    if (!handle) return;
+    if (kind) underway.set(handle, { label, kind, message, me, mine });
+    // Only this write's mark: another on the same name may have set its own since.
+    else if (underway.get(handle)?.mine === mine) underway.delete(handle);
+    redraw(handle);
+  };
+  if (handle && underway.get(handle)?.kind === "failed") underway.delete(handle);
+  let sentYet = false;
   const progress = toast(`${label}: approve it in ${extension() ? "your wallet" : "Selfhold's window"}.`);
   try {
     // Read and built while the wallet opens.
@@ -214,18 +272,51 @@ async function acted(label, build, landed, done) {
       setTimeout(progress.close, 2500);
       return;
     }
-    progress.update(`${label}: confirming…`);
-    const deadline = Date.now() + 5 * 60_000;
+    // The wallet's part, and any work this device did for the fee, is over: now the network's.
+    sentYet = true;
+    progress.update(`${label}: sent. Your device's part is done. The network usually records it in about 10 seconds.`);
+    mark("sent");
+    const started = Date.now();
+    const from = location.hash; // where the person was: a late success doesn't take them from elsewhere
+    let kind = "sent";
+    let lost = 0;
+    let now = null; // wakes the wait early: "Check again"
     for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const late = Date.now() - started > LATE_MS;
+      await new Promise((resolve) => {
+        now = resolve;
+        setTimeout(resolve, late ? 15_000 : 2500);
+      });
+      let result = false;
       try {
-        if (await landed(await readState(), me)) break;
+        result = await landed(await readState(), me);
       } catch {}
-      if (Date.now() > deadline) throw new Error("Sent, but not confirmed yet. It may still go through: look again in a minute.");
+      if (result === true) break;
+      // Someone else's write landed first, read so on checks running: this one can't now.
+      lost = typeof result === "string" ? lost + 1 : 0;
+      if (lost >= LOST_READS) throw new Error(result);
+      const waited = Date.now() - started;
+      if (waited > GIVE_UP_MS) {
+        mark(null);
+        return progress.update(`${label}: still not recorded after 30 minutes. It probably didn't go through: check your account, then try again.`, { bad: true });
+      }
+      if (waited > LATE_MS && kind !== "late") {
+        kind = "late";
+        release();
+        progress.update(`${label}: the network hasn't recorded it yet. It may still go through. Check your account before trying again.`,
+          { action: { label: "Check again", run: () => now?.() } });
+        mark("late");
+      } else if (waited > SLOW_MS && kind === "sent") {
+        kind = "slow";
+        progress.update(`${label} is taking longer than usual. It's sent and should still go through. You can leave this page.`);
+        mark("slow");
+      }
     }
+    mark(null);
     progress.update(`${label}: done.`);
     setTimeout(progress.close, 2500);
-    done();
+    if (location.hash === from) done();
+    else redraw(handle);
   } catch (error) {
     // Selfhold's window may have another account now: it forgets this site's, to connect again.
     const now = extension() ? me : await web.address();
@@ -233,6 +324,8 @@ async function acted(label, build, landed, done) {
       connected = now;
       render();
     }
+    // Sent and then refused, or beaten to it: the name keeps the mark, with why.
+    if (sentYet) mark("failed", walletMessage(error));
     if (error.name !== "NeedsCoins") return progress.update(walletMessage(error), { bad: true });
     progress.close();
     fundSheet(error);
@@ -284,6 +377,11 @@ function toast(message, { bad = false } = {}) {
     update(next, options = {}) {
       text.textContent = next;
       box.classList.toggle("bad", Boolean(options.bad));
+      box.querySelector("button.act")?.remove();
+      if (options.action) {
+        const action = Object.assign(document.createElement("button"), { type: "button", className: "act", textContent: options.action.label, onclick: options.action.run });
+        text.after(action);
+      }
       // An error moves to the region read at once.
       if (options.bad && box.parentElement?.id !== "alerts") $("#alerts").replaceChildren(box);
     },
@@ -508,7 +606,9 @@ async function viewSearch(q, state, { near = true } = {}) {
     taken: ["Taken", "Someone owns it and isn't selling it."],
   }[exact.kind];
   let end = "";
-  if (exact.kind === "available") end = claimForm(q);
+  // On its way: no second claim or purchase while the first may still land.
+  if (onItsWay(q)) end = "";
+  else if (exact.kind === "available") end = claimForm(q);
   else if (exact.kind === "sale") {
     end = `<span class="price big">${coins(exact.price)}</span><a class="pill accent" href="#/buy/${esc(q)}">Buy @${esc(q)} for ${coins(exact.price)}</a>`;
   } else if (exact.kind === "offered") end = `<button class="pill accent" type="button" data-take="${esc(q)}">Take @${esc(q)}</button>`;
@@ -520,6 +620,7 @@ async function viewSearch(q, state, { near = true } = {}) {
         <span class="badge">${headline[0]}</span>
         <h1 id="exact" class="mono">@${esc(q)}</h1>
         <p class="lede">${headline[1]}</p>
+        ${underwayStatus(q)}
         ${entry ? `<p class="owned">${ownedBy(entry.owner)}${termsOf(entry) ? ` · ${termsOf(entry, true)}` : ""}</p>` : ""}
         ${end ? `<div class="result-end">${end}</div>` : ""}
       </section>
@@ -626,6 +727,17 @@ async function viewBuy(handle, state) {
           ${others.map(choice).join("")}
         </details>`;
 
+  // Paid, and on its way: the status, never a second Pay button.
+  if (onItsWay(handle)) {
+    return `
+    <main class="col stack" style="margin-top: 12px">
+      <section class="panel stack" aria-labelledby="buy-title">
+        <h1 id="buy-title" style="margin: 0">${free ? "Claim" : "Buy"} <span class="mono">@${esc(handle)}</span></h1>
+        ${underwayStatus(handle)}
+        <a class="pill big" href="#/@${esc(handle)}">See @${esc(handle)}</a>
+      </section>
+    </main>`;
+  }
   let detail;
   if (method === "web") detail = await webPay(handle, entry);
   else if (method === "extension") detail = extensionPay(handle, entry);
@@ -797,7 +909,7 @@ async function viewTake(handle, state) {
       <h1 class="mono">@${esc(handle)}</h1>
       <p class="bio">Its owner is giving it to your account. Take it, and it's yours, pointing at your account.</p>
       <div class="stack" style="width: 100%; margin-top: 28px">
-        <button class="pill accent big" type="button" data-take="${esc(handle)}">Take @${esc(handle)}</button>
+        ${onItsWay(handle) ? underwayStatus(handle) : `<button class="pill accent big" type="button" data-take="${esc(handle)}">Take @${esc(handle)}</button>`}
       </div>
     </main>`;
 }
@@ -839,11 +951,17 @@ async function viewNames(state) {
         ${named ? `<button class="pill" type="button" data-stop-showing style="align-self: flex-start">Stop showing</button>` : ""}
       </section>
       <section class="section stack" aria-label="Your names">
+        ${[...underway.keys()].filter((h) => onItsWay(h) && !mine.some((n) => n.handle === h)).map((h) => `
+          <div class="row">
+            <a class="mono" href="#/@${esc(h)}">@${esc(h)}</a>
+            <span class="label">${esc(underway.get(h).label)}: ${underwayLine(h)}</span>
+          </div>`).join("")}
         ${mine.map((n) => handleRow(n, `
           ${n.offer ? `<button class="pill" type="button" data-copy="${esc(takeLink(`#/take/${n.handle}`))}">Copy link<span class="sr"> to take @${esc(n.handle)}</span></button>` : ""}
           ${n.pointer === connected && n.handle !== shows ? showButton(n.handle) : ""}
-          <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`)).join("")
-          || `<p class="note">No names yet.</p>`}
+          <button class="pill icon" type="button" data-name-menu="${esc(n.handle)}" aria-label="Options for @${esc(n.handle)}">⋯</button>`,
+          [pointsLabel(n, true), termsOf(n, true), underwayLine(n.handle)].filter(Boolean).join(" · "))).join("")
+          || ([...underway.keys()].some(onItsWay) ? "" : `<p class="note">No names yet.</p>`)}
       </section>
       ${lent.length ? `
       <section class="section stack" aria-labelledby="lent-title">
@@ -1047,7 +1165,12 @@ document.addEventListener("click", async (event) => {
         if (entry.price !== shown) throw new Error(`The price of @${handle} just changed. Look again.`);
         return names.buy(state, me, handle, { point: true });
       },
-      async (s, me) => (await held(s, handle))?.owner === me,
+      async (s, me) => {
+        const entry = await held(s, handle);
+        if (entry?.owner === me) return true;
+        // No longer for sale, and not yours: someone bought it first, or its owner stopped selling.
+        return entry && entry.price === undefined ? `Couldn't buy @${handle}: it was sold to someone else, or taken off sale.` : false;
+      },
       () => (location.hash = `#/@${handle}`),
     );
   } else if (d.take) {
@@ -1058,7 +1181,10 @@ document.addEventListener("click", async (event) => {
       // Taken as a gift, for nothing, or not at all: never a purchase under "Take".
       if (entry?.offer !== me || entry.price !== undefined) throw new Error(`@${handle} isn't offered to you anymore. Look again.`);
       return names.buy(state, me, handle, { point: true });
-    }, async (s, me) => (await held(s, handle))?.owner === me, () => {
+    }, async (s, me) => {
+      const entry = await held(s, handle);
+      return entry?.owner === me || (entry && entry.offer !== me ? `Couldn't take @${handle}: it isn't offered to you anymore.` : false);
+    }, () => {
       location.hash = `#/@${handle}`;
       render();
     });
@@ -1170,7 +1296,10 @@ function claim(handle) {
       if (await held(state, handle)) throw new Error(`@${handle} was just taken.`);
       return names.claim(state, me, handle, { point: true });
     },
-    async (s, me) => (await held(s, handle))?.owner === me,
+    async (s, me) => {
+      const entry = await held(s, handle);
+      return entry?.owner === me || (entry ? `Couldn't claim @${handle}: someone else got it first.` : false);
+    },
     () => {
       location.hash = `#/@${handle}`;
       render();

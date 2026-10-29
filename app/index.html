@@ -81,6 +81,10 @@ dialog p { color: var(--soft); }
 dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px); background: var(--ink); color: var(--bg); padding: 12px 18px; border-radius: 14px; display: flex; gap: 12px; align-items: center; z-index: 10; }
 .toast.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+.toast button.act { font-size: inherit; font-weight: 600; text-decoration: underline; white-space: nowrap; }
+.underway { color: var(--muted); }
+.underway.bad { color: var(--bad); }
+.underway-line { margin: 8px 0 0; }
 .toast button { border: 0; background: transparent; color: inherit; min-width: 32px; min-height: 32px; cursor: pointer; font-size: 18px; }
 .empty { color: var(--muted); text-align: center; margin-top: 48px; }
 button.link { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; min-height: 0; }
