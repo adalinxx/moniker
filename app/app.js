@@ -91,9 +91,11 @@ const held = (state, handle) => names.resolve(state, handle);
 
 let connected = null;
 // Selfhold's window: each call that needs the person opens it over the page, from a click.
-const web = selfhold({ wallet: settings.walletPage, hosts: () => client().hosts(), sponsor: () => settings.sponsor });
+const web = selfhold({ use: "window", wallet: settings.walletPage, hosts: () => client().hosts(), sponsor: () => settings.sponsor });
+// Selfhold for Chrome, through the same calls.
+const chrome = selfhold({ use: "extension", hosts: () => client().hosts() });
 /** Selfhold's window, or Selfhold for Chrome where Settings choose it and it is installed. */
-const wallet = () => (settings.wallet === "extension" && window.lattice) || web;
+const wallet = () => (settings.wallet === "extension" && window.lattice ? chrome : web);
 const extension = () => wallet() !== web;
 // Each keeps its own account: the page always says which.
 const WALLET_NAME = { web: "Selfhold's window", extension: "Selfhold for Chrome" };
@@ -154,36 +156,15 @@ function walletMessage(error) {
   return text;
 }
 
-// Selfhold for Chrome takes one request from a page at a time.
-let walletTurn = Promise.resolve();
 /**
  * Sends the write `written` resolves to, built for account `me`, through the
  * wallet; null, nothing to send, resolves to null. Selfhold's window opens at
  * once, in the click, waits for the write, and tells `progress` what it does.
+ * If the wallet was since disconnected from this site, or connected to
+ * another account, nothing is sent.
  */
-async function send(written, me, progress) {
-  // A write is built for one account. If the wallet was since disconnected
-  // from this site, or connected to another account, say so and send nothing.
-  const changed = (now) => {
-    written.catch(() => {});
-    connected = now;
-    render();
-    return new Error(now ? "Selfhold now connects this site to a different account. Look again, then try again." : "Selfhold isn't connected to this site anymore. Connect again, then try again.");
-  };
-  if (!extension()) {
-    const now = await web.address();
-    if (now !== me) throw changed(now);
-    return web.writeRecords(written.then((write) => write && writeRequest(chainPath(), write)), { progress });
-  }
-  const turn = walletTurn.then(async () => {
-    const now = await wallet().address();
-    if (now !== me) throw changed(now);
-    const write = await written;
-    return write && wallet().writeRecords(writeRequest(chainPath(), write));
-  });
-  walletTurn = turn.catch(() => {});
-  return turn;
-}
+const send = (written, me, progress) =>
+  wallet().writeRecords(written.then((write) => write && writeRequest(chainPath(), write)), { progress, account: me });
 
 /**
  * Builds a write on a fresh state (`build(state, me)`), sends it, then waits
@@ -212,10 +193,6 @@ async function act(label, build, landed, done = render) {
 // shown on the name itself, wherever it is listed. handle → { label, kind:
 // "sent" | "slow" | "late" | "failed", message? }.
 const underway = new Map();
-const SLOW_MS = 30_000; // blocks come every 10 s: three blocks, and it is slow
-const LATE_MS = 5 * 60_000; // then it is late: checked less often, and the person may try again
-const GIVE_UP_MS = 30 * 60_000; // then no longer watched
-const LOST_READS = 3; // a lost race, read so on this many checks running (a host may lag, or a block be replaced)
 /** Whether the page open shows `handle`'s state: its page, its checkout, its take link, or My names. */
 const showing = (handle) => [`#/@${handle}`, `#/search/${handle}`, `#/buy/${handle}`, `#/take/${handle}`, "#/names"].includes(location.hash);
 /** Draws the page again for what is underway on `handle`, if the page shows it and no one is typing or answering a sheet. */
@@ -276,41 +253,27 @@ async function acted(label, build, landed, done, release) {
     sentYet = true;
     progress.update(`${label}: sent. Your device's part is done. The network usually records it in about 10 seconds.`);
     mark("sent");
-    const started = Date.now();
     const from = location.hash; // where the person was: a late success doesn't take them from elsewhere
-    let kind = "sent";
-    let lost = 0;
-    let now = null; // wakes the wait early: "Check again"
-    for (;;) {
-      const late = Date.now() - started > LATE_MS;
-      await new Promise((resolve) => {
-        now = resolve;
-        setTimeout(resolve, late ? 15_000 : 2500);
+    try {
+      // Slow after 30 s (blocks come every 10 s), late after 5 min, when the person may try again; given up after 30.
+      await sent.wait({
+        check: async () => landed(await readState(), me),
+        onChange: (kind) => {
+          if (kind === "slow") {
+            progress.update(`${label} is taking longer than usual. It's sent and should still go through. You can leave this page.`);
+            mark("slow");
+          } else if (kind === "late") {
+            release();
+            progress.update(`${label}: the network hasn't recorded it yet. It may still go through. Check your account before trying again.`,
+              { action: { label: "Check again", run: () => sent.checkNow() } });
+            mark("late");
+          }
+        },
       });
-      let result = false;
-      try {
-        result = await landed(await readState(), me);
-      } catch {}
-      if (result === true) break;
-      // Someone else's write landed first, read so on checks running: this one can't now.
-      lost = typeof result === "string" ? lost + 1 : 0;
-      if (lost >= LOST_READS) throw new Error(result);
-      const waited = Date.now() - started;
-      if (waited > GIVE_UP_MS) {
-        mark(null);
-        return progress.update(`${label}: still not recorded after 30 minutes. It probably didn't go through: check your account, then try again.`, { bad: true });
-      }
-      if (waited > LATE_MS && kind !== "late") {
-        kind = "late";
-        release();
-        progress.update(`${label}: the network hasn't recorded it yet. It may still go through. Check your account before trying again.`,
-          { action: { label: "Check again", run: () => now?.() } });
-        mark("late");
-      } else if (waited > SLOW_MS && kind === "sent") {
-        kind = "slow";
-        progress.update(`${label} is taking longer than usual. It's sent and should still go through. You can leave this page.`);
-        mark("slow");
-      }
+    } catch (error) {
+      if (error.code !== "NotRecorded") throw error;
+      mark(null);
+      return progress.update(`${label}: still not recorded after 30 minutes. It probably didn't go through: check your account, then try again.`, { bad: true });
     }
     mark(null);
     progress.update(`${label}: done.`);
@@ -319,7 +282,7 @@ async function acted(label, build, landed, done, release) {
     else redraw(handle);
   } catch (error) {
     // Selfhold's window may have another account now: it forgets this site's, to connect again.
-    const now = extension() ? me : await web.address();
+    const now = await wallet().address();
     if (now !== me) {
       connected = now;
       render();
