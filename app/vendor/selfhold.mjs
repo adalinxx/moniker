@@ -1,4 +1,4 @@
-// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at b077de1 (npm run build:web), the client
+// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at 4d4c0a8 (npm run build:web), the client
 // for Selfhold for Chrome and Selfhold's window at wallet.selfhold.app. MIT, see selfhold.LICENSE.
 // src/web/client.ts
 var PROTOCOL = 1;
@@ -27,14 +27,16 @@ var NeedsCoins = class extends SelfholdError {
     this.sponsor = sponsor;
   }
 };
-var TIMES = { slow: 3e4, late: 3e5, giveUp: 18e5, every: 2500, everyLate: 15e3 };
+var TIMES = { slow: 3e4, late: 3e5, giveUp: 18e5, every: 2500, everyLate: 15e3, read: 2e4 };
 var LOST_READS = 3;
 var CODES = /* @__PURE__ */ new Set(["PopupBlocked", "Closed", "Declined", "Reloaded", "AccountChanged", "NotConnected", "NeedsCoins", "NoWallet", "Lost", "NotRecorded", "Failed"]);
 function asSelfholdError(error) {
   if (error instanceof SelfholdError) return error;
   const text = String(error?.message ?? error);
-  if (/just declined|ask again in a moment/i.test(text)) return new SelfholdError("Declined", "The wallet waits a few seconds after a decline. Try again in a moment.");
-  if (/declined|rejected|denied/i.test(text)) return new SelfholdError("Declined", "You declined it in the wallet. Nothing was sent.");
+  const code = error?.code;
+  if (typeof code === "string" && CODES.has(code)) return new SelfholdError(code, text);
+  if (/^The person just declined/.test(text)) return new SelfholdError("Declined", "The wallet waits a few seconds after a decline. Try again in a moment.");
+  if (/^The person declined/.test(text)) return new SelfholdError("Declined", "You declined it in the wallet. Nothing was sent.");
   return new SelfholdError("Failed", text);
 }
 async function waitFor(landed, { onChange = () => {
@@ -58,7 +60,11 @@ async function waitFor(landed, { onChange = () => {
     if (signal?.aborted) throw signal.reason;
     let result = false;
     try {
-      result = await landed();
+      result = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no answer")), times.read);
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        landed().then(resolve, reject).finally(() => clearTimeout(timer));
+      });
     } catch {
     }
     if (result === true) return;
@@ -71,17 +77,23 @@ async function waitFor(landed, { onChange = () => {
   }
 }
 async function nonceLanded(hosts, account, chainPath, nonce) {
+  let answered = false;
   let error = new Error("No host to read the account from");
   for (const host of hosts) {
     try {
-      const response = await fetch(`${host.replace(/\/+$/, "")}/api/state/account/${account}?chainPath=${chainPath.join("/")}`, { cache: "no-store" });
-      if (response.status === 404) return false;
+      const response = await fetch(`${host.replace(/\/+$/, "")}/api/state/account/${account}?chainPath=${chainPath.join("/")}`, { cache: "no-store", signal: AbortSignal.timeout(15e3) });
+      if (response.status === 404) {
+        answered = true;
+        continue;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return BigInt((await response.json()).nonce ?? 0) > nonce;
+      answered = true;
+      if (BigInt((await response.json()).nonce ?? 0) > nonce) return true;
     } catch (e) {
       error = e;
     }
   }
+  if (answered) return false;
   throw error;
 }
 function selfhold(options = {}) {
@@ -197,6 +209,7 @@ function selfhold(options = {}) {
         if (!landed) {
           if (nonce === void 0) throw new SelfholdError("Failed", "This wallet doesn't say its write's nonce: pass wait() a check.");
           const hosts = [.../* @__PURE__ */ new Set([...host ? [host] : [], ...options.hosts ? await options.hosts() : []])];
+          if (!hosts.length) throw new SelfholdError("Failed", "No host to watch this write at: give selfhold() hosts, or wait() a check.");
           landed = () => nonceLanded(hosts, account, chainPath, BigInt(nonce));
         }
         let now = null;

@@ -22,7 +22,7 @@ env:
   LATTICE_SDK_REPO: 0xLattice/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
-  LATTICE_WALLET_REF: fc0cb1cadd748aa2ff80201bd5b3d04f49a28c60 # Selfhold's window signs only as the site's account (selfhold-wallet#41)
+  LATTICE_WALLET_REF: e46b9ef8e132196e704b8ec37a10a52a7710d1fd # @selfhold/web: writes say their nonce and host (selfhold-wallet#47)
 
 jobs:
   policy:
