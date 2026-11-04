@@ -110,7 +110,7 @@ h1.account { display: flex; flex-direction: column; align-items: center; gap: 2p
 h1.account .label { font-size: 14px; font-weight: 400; color: var(--muted); }
 .account-page > .copy { min-width: 44px; font-family: var(--body); text-decoration: underline; }
 h1.account .mono { font-size: 15px; font-weight: 500; line-height: 1.5; }
-h1.account > svg { border-radius: 12px; margin-bottom: 6px; }
+h1.account > .avatar { margin-bottom: 6px; }
 .acct { display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px; }
 .acct svg { flex: none; border-radius: 4px; }
 .acct-link { text-decoration: none; }
@@ -163,6 +163,26 @@ h1[tabindex="-1"]:focus { outline: none; }
 .check input { width: 20px; height: 20px; margin: 0; }
 button.quiet { min-height: 44px; }
 h1.empty { font-size: 18px; font-weight: 400; }
+/* An account's picture: the photo on its card, else its pattern. */
+.avatar { display: inline-flex; flex: none; border-radius: 22%; overflow: hidden; }
+.avatar img, .photo-preview img { display: block; object-fit: cover; }
+.display-name { margin: 10px 0 0; font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+.links { margin: 10px 0 0; overflow-wrap: anywhere; }
+.links a { display: inline-block; padding: 6px 2px; }
+.profile-card { display: flex; gap: 16px; align-items: flex-start; padding: 16px; }
+.profile-card .profile-text { min-width: 0; }
+.profile-card .display-name { margin: 0; }
+.profile-card .bio { margin: 4px 0 0; }
+.photo-edit { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.photo-preview { display: inline-flex; flex: none; width: 96px; height: 96px; border-radius: 22%; overflow: hidden; background: var(--hair); }
+.note.bad { color: var(--bad); }
+.links-field { border: 0; margin: 0; padding: 0; min-width: 0; }
+.links-field legend { padding: 0; margin-bottom: 6px; }
+.link-rows { gap: 8px; }
+.link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; }
+.link-row input { min-width: 0; }
+/* A link on a phone: its label above its address. */
+@media (max-width: 400px) { .link-row { grid-template-columns: minmax(0, 1fr); } .link-rows { gap: 16px; } }
 </style>
 <script type="module" src="./app.js"></script>
 </head>
