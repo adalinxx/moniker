@@ -11,9 +11,11 @@ hand it to someone else, and only your key can change where it points. Any
 app can know you by it.
 
 Moniker (`Nexus/moniker`, launched 2026-10-24) is the names chain: it holds names, where each one points,
-and the handle each account shows. There are no profiles and no admins:
-an account is the identity, and apps keep their own records (cards
-included) on their own chains, keyed by account.
+the handle each account shows, and each account's default profile card (a
+photo, a display name, a bio, a website and links) that any app can show.
+There are no admins: an account is the identity. Apps may still keep their
+own records, cards included, on their own chains, keyed by account; Moniker's
+card is the default they can fall back on.
 
 ## Names and accounts
 
@@ -43,7 +45,21 @@ pointer; whoever claims it next points it again.
 | `names/<a>/<h>` | `1` while account `<a>` owns `@h`: an account's names in one read | only together with the name it indexes |
 | `points/<h>` | The account `@h` points at | the name's owner, right after the name; written whenever the name comes to a new owner; deleted when it is released |
 | `user/<a>/name` | The handle account `<a>` shows, while it points at `<a>` | `<a>` |
+| `user/<a>/profile` | Account `<a>`'s default card, one JSON value: `{ name, description, avatar, url, links: [{ label, url }] }` (see below) | `<a>` |
 | `user/<a>/...` | An account's other values, such as `key.x25519` or `app.<name>.<field>` | `<a>` |
+
+The card holds no handle: the handle an account shows is `user/<a>/name`
+and its pointer, as above, and a `handle` in an old card is ignored. Its
+`name` is free text shown with every `@` and invisible control taken out, so
+it never looks like a handle; `description` is a bio of at most 280
+characters; `url` and `links` are http or https addresses; `avatar` is the
+CID of a photo kept off the chain, one Volume `{ type, size, bytes }`
+(lattice-storage's file layout), WebP, PNG or JPEG, never SVG, at most 256
+KB. Readers take every card as untrusted and leave out what doesn't parse.
+The photo is kept for good by a storage sponsor
+([lattice-sponsor](https://github.com/0xLattice/lattice-sponsor) with
+`--sell-storage`), paid with the owner's device's work, so a card needs no
+coins either.
 
 A handle is lowercase letters, digits and `_`. The first to claim a free
 name owns it, one claim per transaction. Every node keeps what is written
@@ -79,6 +95,9 @@ await moniker.handleOf(address);                    // "alice" while both sides 
 await moniker.handlesOf(addresses);                 // for a feed, in order, from one read
 await moniker.label(address, card);                 // "Alice @alice"
 await moniker.claim("@alice", { show: true }, { wallet: window.lattice }); // point it at you and show it, in one transaction
+await moniker.profile(address);                     // { name?, description?, avatar?, url?, links? }
+await moniker.photoURL(profile.avatar);             // an object URL for an <img>, checked by CID
+await moniker.setPhoto(file, { wallet });           // kept for good with this device's work, then on the card
 ```
 
 This repo holds the SDK as the submodule `sdk/`; clone with
@@ -126,8 +145,18 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
   each with Show this handle; and Claim a name. A gift is an offer: the
   giver gets a link to send, and the receiver takes it from there.
 - **For sale**: names their owners are selling.
-- **Accounts** (`#/account/<address>`): the handle an account shows, and
-  the names it owns.
+- **Accounts** (`#/account/<address>`): the account's card (photo, name,
+  bio, links), the handle it shows, and the names it owns. A name's page
+  shows the card of the account it points at, while that account shows it.
+- **Profile** (`#/profile`, from My names or your account's page): your
+  card, to edit: name, bio, website and links, and a photo to choose,
+  preview or remove. A chosen photo is cropped square, at most 512 pixels,
+  and kept for good at once by the storage sponsor, paid with this
+  device's GPU ("Keeping it for good: this device's GPU pays with work…
+  42%"); Save writes the card through Selfhold, with the photo once it is
+  kept, the fee paid with the GPU as every write's is. The storage sponsor
+  is `STORAGE_SPONSOR` in `app/app.js`, Moniker's fee sponsor by default
+  (`?storage=` names another).
 
 There is no log in: the page asks the wallet only where a key is needed,
 and only from a click. Its wallet is Selfhold's window, at
@@ -187,6 +216,10 @@ python3 -m http.server 8765   # from the repository root, then open http://local
   the Lattice SDK bundle.
 - `e2e/moniker.mjs`: names against a real node, launched as the launch is,
   with names claimed in the genesis; moniker-sdk included.
+- `e2e/profile.mjs`: a profile card with no coins: an account that holds
+  nothing keeps a photo with its work through `lattice-sponsor
+  --sell-storage`, writes its card with the fee paid with work, and a reader
+  reads back the same card and photo bytes.
 - `e2e/ui/`: the page in headless Chromium with Selfhold for Chrome, or with
   Selfhold's window (selfhold-wallet's `dist-web/`, served on `localhost`)
   and a virtual passkey authenticator.
@@ -202,6 +235,8 @@ LATTICE_SDK_CORE=<lattice-sdk>/packages/core/dist/index.js node --test test/poli
 cd ..
 LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/moniker.mjs
+LATTICE=<lattice-node>/.build/debug/lattice \
+  LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js node e2e/profile.mjs
 cd e2e/ui && npm install
 LATTICE=<lattice-node>/.build/debug/lattice \
   LATTICE_SDK=<lattice-sdk>/packages/sdk/dist/index.js \
@@ -211,8 +246,10 @@ LATTICE=<lattice-node>/.build/debug/lattice \
 `<selfhold>` is selfhold-wallet built with `npm run build` (Selfhold for
 Chrome, `dist/`) and `npm run build:web` (Selfhold's window, `dist-web/`).
 
-The UI tests run `lattice-sponsor` from beside `lattice` (lattice-node
-builds both). Selfhold's window grinds its shares on the machine's graphics chip; on Linux
+The UI tests and `e2e/profile.mjs` run `lattice-sponsor` from beside
+`lattice` (or `LATTICE_SPONSOR`), built from
+[lattice-sponsor](https://github.com/0xLattice/lattice-sponsor); the
+profile test needs one that sells storage. Selfhold's window grinds its shares on the machine's graphics chip; on Linux
 they give Chromium SwiftShader's, in software, for a machine with none.
 
 After building the policy, copy the module to `chain/moniker_policy.wasm`

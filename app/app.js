@@ -2,11 +2,15 @@
 // Selfhold, which asks the owner to approve every change: in its window, over
 // the page, whose key a passkey keeps, or in Selfhold for Chrome. An account
 // (a key) owns names, and points each at an account, any account. An account
-// shows `@h` only while it names h and h points at it. Reading needs no wallet.
+// shows `@h` only while it names h and h points at it. Each account may keep
+// a profile card too, its photo kept for good by a storage sponsor, paid with
+// this device's work. Reading needs no wallet.
 import * as sdk from "../sdk/vendor/lattice-sdk.js";
+import { hasher } from "../sdk/vendor/work/hash.mjs";
 import * as names from "../sdk/src/records/names.mjs";
+import * as profiles from "../sdk/src/records/profile.mjs";
 import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
-import { accountIcon, createMoniker, isAddress, isHandle, shortAccount } from "../sdk/src/index.mjs";
+import { accountIcon, createMoniker, isAddress, isHandle, shortAccount, StorageRefused, StorageStopped } from "../sdk/src/index.mjs";
 import encodeQR from "./vendor/qr.mjs";
 import { selfhold } from "./vendor/selfhold.mjs";
 
@@ -76,10 +80,13 @@ const WALLET_URL = "https://chromewebstore.google.com/detail/amcobhbipbblfjonmoi
 const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 const chromium = Boolean(navigator.userAgentData?.brands?.some((b) => /Chromium/.test(b.brand)));
 
+// The storage sponsor that keeps photos for this device's work, as Murmur uses it; `?storage=` names another.
+const STORAGE_SPONSOR = new URLSearchParams(location.search).get("storage") ?? "https://lattice-testnet-apps-iad.fly.dev:8650/sponsor";
+
 // ---------------------------------------------------------------- reading
 
 let moniker = null;
-const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), freshFor: 0 }));
+const client = () => (moniker ??= createMoniker({ sdk, nodes: settings.nodes, chain: chainPath(), freshFor: 0, sponsor: STORAGE_SPONSOR, hash: hasher }));
 
 /** The names chain's state at the tip of the first host that answers. */
 const readState = () => client().state({ fresh: true });
@@ -468,17 +475,61 @@ async function pointsAt(state, n) {
   return `<p class="note" id="points" style="margin: 0">Points at ${n.pointer === connected ? `<a href="#/account/${esc(n.pointer)}">you</a>` : accountLink(n.pointer)} · ${shown ? `shown as @${esc(n.handle)}` : "not shown there"}</p>`;
 }
 
+/** The card of the account a name points at, while that account shows the name: who @h is, in every app. */
+async function shownCard(state, n) {
+  if (!n.pointer || (await names.handleOf(state, n.pointer)) !== n.handle) return "";
+  const profile = await profiles.profileOf(state, n.pointer);
+  if (!profile) return "";
+  return `
+    <div class="panel profile-card">
+      ${avatar(n.pointer, profile, 56)}
+      <div class="profile-text">${cardText(profile)}</div>
+    </div>`;
+}
+
 /** Show this handle: for the connected account, on a name pointing at it that it doesn't show yet. */
 const showButton = (handle) => `<button class="pill" type="button" data-show="${esc(handle)}">Show this handle<span class="sr"> @${esc(handle)}</span></button>`;
 
-/** An account: its ID, the handle it shows, and its names, so anyone can check who owns what. */
+/** An account's picture: its pattern, and the photo on its card in its place once read (see fillPhotos). */
+const avatar = (address, profile, size) =>
+  `<span class="avatar"${profile?.avatar ? ` data-avatar="${esc(profile.avatar)}" data-size="${size}"` : ""} style="width: ${size}px; height: ${size}px">${accountIcon(address, size)}</span>`;
+
+/** Fills in each photo the page shows, once read and checked by CID; one that can't be read leaves the pattern. */
+function fillPhotos(root) {
+  for (const box of root.querySelectorAll("[data-avatar]")) {
+    client().photoURL(box.dataset.avatar).then((url) => {
+      if (!url || !box.isConnected) return;
+      const img = Object.assign(new Image(), { src: url, alt: "", width: Number(box.dataset.size), height: Number(box.dataset.size) });
+      img.onload = () => box.isConnected && box.replaceChildren(img);
+    });
+  }
+}
+
+/** A link out of the page, from a card: the owner's words, so no referrer and no endorsement. */
+const outLink = (url, text) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer nofollow ugc">${esc(text)}</a>`;
+const hostOf = (url) => new URL(url).host;
+
+/** A card's name, bio and links, as HTML; "" when it has none of them. */
+function cardText(profile) {
+  if (!profile) return "";
+  const links = [...(profile.url ? [outLink(profile.url, hostOf(profile.url))] : []), ...(profile.links ?? []).map((l) => outLink(l.url, l.label))];
+  return [
+    profile.name ? `<p class="display-name">${esc(profile.name)}</p>` : "",
+    profile.description ? `<p class="bio">${esc(profile.description)}</p>` : "",
+    links.length ? `<p class="links">${links.join(" · ")}</p>` : "",
+  ].join("");
+}
+
+/** An account: its card, its ID, the handle it shows, and its names, so anyone can check who owns what. */
 async function viewAccount(address, state) {
   const mine = connected === address;
-  const [owned, shows] = await Promise.all([names.namesOf(state, address), names.handleOf(state, address)]);
+  const [owned, shows, profile] = await Promise.all([names.namesOf(state, address), names.handleOf(state, address), profiles.profileOf(state, address)]);
   return `
     <main class="col card account-page">
-      <h1 class="account">${accountIcon(address, 48)}<span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
+      <h1 class="account">${avatar(address, profile, 72)}<span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
+      ${cardText(profile)}
       <p class="shows">${shows ? `Shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>` : "Shows no handle"}</p>
+      ${mine ? `<a class="pill" href="#/profile" style="margin-top: 12px">Edit profile</a>` : ""}
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
       <p class="bio">${mine ? "An account is a private key. It owns these names, and is never shown on them." : "This key owns these names."}</p>
       <section class="names">
@@ -591,6 +642,7 @@ async function viewSearch(q, state, { near = true } = {}) {
       ${entry ? `
       <section class="section stack" aria-labelledby="points-title">
         <h2 id="points-title">Where it points</h2>
+        ${await shownCard(state, entry)}
         ${await pointsAt(state, entry)}
         ${connected && entry.pointer === connected && (await names.handleOf(state, connected)) !== q ? `<div>${showButton(q)}</div>` : ""}
       </section>` : ""}
@@ -912,7 +964,10 @@ async function viewNames(state) {
         <h2 id="account-title" style="margin: 0">Your account ${accountLink(connected)}</h2>
         <p class="note" style="margin: 0">Kept by ${walletName()}${extension() ? "" : ", with your passkey"}. Your names are this account's: another wallet's account has its own.</p>
         <p id="shows" style="margin: 0">${said}</p>
-        ${named ? `<button class="pill" type="button" data-stop-showing style="align-self: flex-start">Stop showing</button>` : ""}
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          ${named ? `<button class="pill" type="button" data-stop-showing>Stop showing</button>` : ""}
+          <a class="pill" href="#/profile">Edit profile</a>
+        </div>
       </section>
       <section class="section stack" aria-label="Your names">
         ${[...underway.keys()].filter((h) => onItsWay(h) && !mine.some((n) => n.handle === h)).map((h) => `
@@ -938,6 +993,144 @@ async function viewNames(state) {
         <button class="pill accent" type="submit" style="align-self: flex-start">Claim</button>
       </form>
     </main>`;
+}
+
+// ---------------------------------------------------------------- profile
+
+// The photo chosen on the Profile page, kept for good as soon as it is
+// chosen, until the card is saved: { url (its preview), kept: Promise<{ cid }>,
+// note, failed?, stop() }; or `removed`, to take the card's photo off.
+let photoDraft = null;
+
+/** The photo's note, changed in place: progress must not redraw the form being filled in. */
+function photoNote(text, bad = false) {
+  if (photoDraft) Object.assign(photoDraft, { note: text, failed: bad });
+  const note = $("#photo-note");
+  if (!note) return;
+  note.textContent = text;
+  note.classList.toggle("bad", bad);
+}
+
+/** Keeps a chosen picture for good, through the storage sponsor, paid with this device's work, saying how far along it is. */
+async function choosePhoto(file) {
+  photoDraft?.stop?.();
+  const stop = new AbortController();
+  const draft = { url: URL.createObjectURL(file), note: "Getting it ready…", stop: () => stop.abort() };
+  photoDraft = draft;
+  const preview = $("#photo-preview");
+  if (preview) preview.innerHTML = `<img src="${esc(draft.url)}" alt="" width="96" height="96">`;
+  $("[data-remove-photo]")?.removeAttribute("hidden");
+  photoNote(draft.note);
+  const device = await workDevice();
+  draft.kept = client().keepPhoto(file, {
+    signal: stop.signal,
+    progress: ({ stage, done }) => {
+      if (photoDraft !== draft) return;
+      photoNote({
+        prepare: "Getting it ready…",
+        upload: "Sending it to be kept…",
+        work: `Keeping it for good: this device's ${device} pays with a moment of work…`,
+        busy: "The storage sponsor is busy: waiting a moment…",
+        grind: `Keeping it for good: this device's ${device} pays with work… ${Math.round((done ?? 0) * 100)}%`,
+        pin: "Paid. It's being kept…",
+      }[stage] ?? draft.note);
+    },
+  });
+  draft.kept.then(
+    ({ url }) => {
+      if (photoDraft !== draft) return;
+      draft.url = url;
+      photoNote("Kept for good. Save to put it on your card.");
+    },
+    (error) => {
+      if (photoDraft !== draft || error instanceof StorageStopped) return;
+      photoNote(error instanceof StorageRefused ? error.message : `Couldn't keep it: ${error?.message ?? error}`, true);
+    },
+  );
+}
+
+/** A link's row in the Profile form. */
+const linkRow = (link = {}) => `
+  <div class="link-row">
+    <input class="l-label" aria-label="Link label" placeholder="Label" maxlength="${profiles.MAX_LABEL}" value="${esc(link.label ?? "")}" autocomplete="off">
+    <input class="l-url mono" aria-label="Link address" type="url" placeholder="https://…" value="${esc(link.url ?? "")}" autocomplete="off" spellcheck="false" autocapitalize="none">
+  </div>`;
+
+/** Profile: the card any app can show for the connected account, to edit. */
+async function viewProfile(state) {
+  const profile = await profiles.profileOf(state, connected);
+  const links = profile?.links ?? [];
+  const picture = photoDraft?.removed
+    ? accountIcon(connected, 96)
+    : photoDraft?.url
+      ? `<img src="${esc(photoDraft.url)}" alt="" width="96" height="96">`
+      : avatar(connected, profile, 96);
+  const hasPhoto = photoDraft ? !photoDraft.removed : Boolean(profile?.avatar);
+  return `
+    <div class="col top" style="justify-content: flex-start"><a class="pill icon" href="#/names" aria-label="Back">‹</a></div>
+    <main class="col" style="margin-top: 12px">
+      <h1 style="margin: 0">Profile</h1>
+      <p class="lede" style="margin-top: 8px">The card any app can show for your account: a photo, a name, a few words and your links. It never shows a handle: the handle beside it is the one your account shows.</p>
+      <form id="profile" class="panel stack section" novalidate>
+        <div class="photo-edit">
+          <span id="photo-preview" class="photo-preview">${picture}</span>
+          <div class="stack" style="gap: 8px">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <label class="pill" for="p-photo">${hasPhoto ? "Change photo" : "Choose a photo"}</label>
+              <input id="p-photo" class="sr" type="file" accept="image/*">
+              <button class="pill" type="button" data-remove-photo${hasPhoto ? "" : " hidden"}>Remove photo</button>
+            </div>
+            <p id="photo-note" class="note${photoDraft?.failed ? " bad" : ""}" role="status" style="margin: 0">${esc(photoDraft?.note ?? "Cropped square. Kept for good, paid with this device's GPU.")}</p>
+          </div>
+        </div>
+        <div class="field"><label for="p-name">Name</label><input id="p-name" maxlength="${profiles.MAX_NAME}" value="${esc(profile?.name ?? "")}" autocomplete="name"></div>
+        <div class="field"><label for="p-bio">Bio</label><textarea id="p-bio" rows="3" maxlength="${profiles.MAX_DESCRIPTION}">${esc(profile?.description ?? "")}</textarea></div>
+        <div class="field"><label for="p-url">Website</label><input id="p-url" class="mono" type="url" placeholder="https://…" value="${esc(profile?.url ?? "")}" autocomplete="url" spellcheck="false" autocapitalize="none"></div>
+        <fieldset class="field links-field">
+          <legend class="label">Links</legend>
+          <div id="p-links" class="stack link-rows">${[...links, ...(links.length < profiles.MAX_LINKS ? [{}] : [])].map(linkRow).join("")}</div>
+          <button class="pill" type="button" data-add-link style="align-self: flex-start"${links.length + 1 >= profiles.MAX_LINKS ? " hidden" : ""}>Add a link</button>
+        </fieldset>
+        <p class="note" style="margin: 0">Anyone can read your card. Only your account can change it.</p>
+        <button class="pill accent" type="submit" style="align-self: flex-start">Save</button>
+      </form>
+    </main>`;
+}
+
+/** The card the Profile form says, as `setProfile` takes it, or a problem to show. */
+function profileForm() {
+  const links = [...document.querySelectorAll("#p-links .link-row")]
+    .map((row) => ({ label: $(".l-label", row).value.trim(), url: $(".l-url", row).value.trim() }))
+    .filter((l) => l.label || l.url);
+  if (links.some((l) => !l.label || !l.url)) return { problem: "A link needs a label and an address." };
+  if (links.some((l) => !profiles.isWebURL(l.url))) return { problem: "A link's address starts with https:// (or http://)." };
+  const url = $("#p-url").value.trim();
+  if (url && !profiles.isWebURL(url)) return { problem: "Your website's address starts with https:// (or http://)." };
+  return { card: { name: $("#p-name").value, description: $("#p-bio").value, url, links } };
+}
+
+/** Saves the card: once a chosen photo is kept, it goes on the card too, all in one write through the wallet. */
+function saveProfile() {
+  const { card, problem } = profileForm();
+  if (problem) return toast(problem, { bad: true });
+  const draft = photoDraft;
+  if (draft?.failed) return toast("Your photo wasn't kept. Choose it again, or remove it.", { bad: true });
+  let wanted;
+  act(
+    draft?.kept ? "Saving your profile and photo" : "Saving your profile",
+    async (state, me) => {
+      // A photo still being kept: the wallet's window waits for it.
+      const photo = draft?.removed ? { avatar: undefined } : draft?.kept ? { avatar: (await draft.kept).cid } : {};
+      const write = await profiles.setProfile(state, me, { ...card, ...photo });
+      wanted = write.actions[0]?.newValue;
+      return write;
+    },
+    async (s, me) => (await s.get(profiles.profileKey(me))) === wanted,
+    () => {
+      if (photoDraft === draft) photoDraft = null;
+      if (location.hash === "#/profile") render();
+    },
+  );
 }
 
 /** Names their owners are selling. */
@@ -1014,24 +1207,26 @@ async function render() {
   try {
     let html;
     const [page, arg = ""] = r.split(/\/(.*)/s);
-    // Old links: profiles are each app's now.
+    // Old links: the names an account owns.
     if (["me", "profiles", "edit"].includes(page)) return void location.replace("#/names");
     if (page === "bought" && isHandle(arg)) return void location.replace(`#/@${arg}`);
     if (isAddress(r)) return void location.replace(`#/account/${r}`);
     if (r === "settings") html = viewSettings();
     else {
       // Selfhold connects only within a click, so ask now, before the read, if this render came from one.
-      const needs = page === "names" || page === "take";
+      const needs = page === "names" || page === "take" || page === "profile";
       if (needs && !connected && extension() && navigator.userActivation?.isActive) await connect();
       const state = await readState();
       // Your key is asked for only where it is needed.
       const take = isHandle(arg) ? `To take @${arg}` : "To take a name";
       if (needs && !connected && !extension()) {
-        html = `<main class="col stack" style="margin-top: 24px">${accountPanel(page === "take" ? `${take}, make your account` : "Your names belong to your account's key", true)}</main>`;
+        const why = { take: `${take}, make your account`, profile: "Your profile belongs to your account's key" }[page] ?? "Your names belong to your account's key";
+        html = `<main class="col stack" style="margin-top: 24px">${accountPanel(why, true)}</main>`;
       } else if (needs && !connected) {
-        const why = page === "take" ? `${take}, connect Selfhold` : "Your names belong to your wallet's key";
+        const why = { take: `${take}, connect Selfhold`, profile: "Your profile belongs to your wallet's key" }[page] ?? "Your names belong to your wallet's key";
         html = `<main class="col stack" style="margin-top: 24px">${connectPanel(why, true)}</main>`;
       } else if (r === "names") html = await viewNames(state);
+      else if (r === "profile") html = await viewProfile(state);
       else if (page === "take" && isHandle(arg)) html = await viewTake(arg, state);
       else if (page === "buy" && isHandle(arg)) html = await viewBuy(arg, state);
       else if (r === "market") html = await viewMarket(state);
@@ -1045,6 +1240,7 @@ async function render() {
     }
     if (ticket !== drawing) return;
     app.innerHTML = header() + html + footer();
+    fillPhotos(app);
     for (const hook of afterDraw.splice(0)) if (hook.ticket === ticket) hook.run();
     // Back to the control that was used, if it is still here; else a new
     // view: its heading, so keyboard and screen reader users start there.
@@ -1155,6 +1351,17 @@ document.addEventListener("click", async (event) => {
   } else if (d.show) {
     const handle = d.show;
     act(`Showing @${handle}`, (s, me) => names.showName(s, me, handle), async (s, me) => (await names.handleOf(s, me)) === handle);
+  } else if ("removePhoto" in d) {
+    photoDraft?.stop?.();
+    photoDraft = { removed: true, note: "Save to take the photo off your card." };
+    $("#photo-preview").innerHTML = accountIcon(connected, 96);
+    el.hidden = true;
+    photoNote(photoDraft.note);
+  } else if ("addLink" in d) {
+    const rows = $("#p-links");
+    rows.insertAdjacentHTML("beforeend", linkRow());
+    if (rows.children.length >= profiles.MAX_LINKS) el.hidden = true;
+    rows.lastElementChild.querySelector("input").focus();
   } else if ("stopShowing" in d) {
     act("Showing no handle", (s, me) => names.stopShowing(s, me), async (s, me) => (await names.getField(s, me, "name")) === undefined);
   }
@@ -1285,6 +1492,10 @@ document.addEventListener("submit", async (event) => {
     if (!isHandle(handle)) return toast("A name is lowercase letters, digits and _.", { bad: true });
     Object.assign(checkout, { handle, method: null });
     location.hash = `#/buy/${handle}`;
+  } else if (form.id === "profile") {
+    event.preventDefault();
+    if (!(await connectFirst("save your profile"))) return;
+    saveProfile();
   } else if (form.id === "settings") {
     event.preventDefault();
     // Selfhold for Chrome not here (yet): the choice stays as it was.
@@ -1307,6 +1518,11 @@ document.addEventListener("submit", async (event) => {
 
 document.addEventListener("change", (event) => {
   const input = event.target;
+  if (input.id === "p-photo") {
+    if (input.files?.[0]) choosePhoto(input.files[0]);
+    input.value = "";
+    return;
+  }
   if (input.name !== "pay") return;
   checkout.method = input.value;
   used = `input[name="${input.name}"][value="${CSS.escape(input.value)}"]`;
