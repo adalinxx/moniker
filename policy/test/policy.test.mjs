@@ -93,6 +93,18 @@ test("nobody writes or deletes another account's records", () => {
   assert.ok(!signedBy([ALICE], [{ key: `user/${ALICE}/a`, newValue: "x" }, { key: `user/${BOB}/a`, newValue: "x" }]));
 });
 
+test("an account writes its own profile card, and nobody else's", () => {
+  const card = JSON.stringify({ name: "Alice", description: "Hi", avatar: ALICE, url: "https://alice.example", links: [{ label: "Site", url: "https://alice.example" }] });
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/profile`, newValue: card }]));
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/profile`, oldValue: card, newValue: "{}" }]));
+  assert.ok(signedBy([ALICE], [{ key: `user/${ALICE}/profile`, oldValue: "{}" }]));
+  // Its fee paid by a sponsor, which signs too.
+  assert.ok(signedBy([ALICE, BOB], [{ key: `user/${ALICE}/profile`, newValue: card }]));
+  assert.ok(!signedBy([BOB], [{ key: `user/${ALICE}/profile`, newValue: card }]));
+  assert.ok(!signedBy([BOB], [{ key: `user/${ALICE}/profile`, oldValue: card, newValue: "{}" }]));
+  assert.ok(!signedBy([BOB], [{ key: `user/${ALICE}/profile`, oldValue: card }]));
+});
+
 test("keys outside the shapes are rejected", () => {
   for (const key of ["user", "user/", ALICE, `index/topic/${ALICE}`, `users/${ALICE}`, `/user/${ALICE}`, "name", "name/", `names/${P}/alice`, `names/${ALICE}`, "points", "points/", "points/Alice", "points/al-ice", "point/alice", `card/${P}`]) {
     assert.ok(!signedBy([ALICE], [{ key, newValue: "1" }]), key);
