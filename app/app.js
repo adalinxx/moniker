@@ -1021,7 +1021,9 @@ async function choosePhoto(file) {
   if (preview) preview.innerHTML = `<img src="${esc(draft.url)}" alt="" width="96" height="96">`;
   $("[data-remove-photo]")?.removeAttribute("hidden");
   photoNote(draft.note);
-  const device = await workDevice();
+  // Set at once, so a Save pressed now waits for this photo.
+  let device = "GPU";
+  workDevice().then((d) => (device = d));
   draft.kept = client().keepPhoto(file, {
     signal: stop.signal,
     progress: ({ stage, done }) => {
@@ -1059,6 +1061,7 @@ const linkRow = (link = {}) => `
 /** Profile: the card any app can show for the connected account, to edit. */
 async function viewProfile(state) {
   const profile = await profiles.profileOf(state, connected);
+  formFrom = profile ?? {};
   const links = profile?.links ?? [];
   const picture = photoDraft?.removed
     ? accountIcon(connected, 96)
@@ -1097,6 +1100,12 @@ async function viewProfile(state) {
     </main>`;
 }
 
+// The card the Profile form was filled from: Save writes only the fields
+// changed since, so an edit made elsewhere meanwhile is kept.
+let formFrom = {};
+const formValue = (field, value) =>
+  field === "links" ? JSON.stringify(value ?? []) : field === "name" ? (names.displayName(value) ?? "") : String(value ?? "").trim();
+
 /** The card the Profile form says, as `setProfile` takes it, or a problem to show. */
 function profileForm() {
   const links = [...document.querySelectorAll("#p-links .link-row")]
@@ -1106,7 +1115,8 @@ function profileForm() {
   if (links.some((l) => !profiles.isWebURL(l.url))) return { problem: "A link's address starts with https:// (or http://)." };
   const url = $("#p-url").value.trim();
   if (url && !profiles.isWebURL(url)) return { problem: "Your website's address starts with https:// (or http://)." };
-  return { card: { name: $("#p-name").value, description: $("#p-bio").value, url, links } };
+  const card = { name: $("#p-name").value, description: $("#p-bio").value, url, links };
+  return { card: Object.fromEntries(Object.entries(card).filter(([field, value]) => formValue(field, value) !== formValue(field, formFrom[field]))) };
 }
 
 /** Saves the card: once a chosen photo is kept, it goes on the card too, all in one write through the wallet. */

@@ -302,14 +302,10 @@ try {
     ["Bob writes Dana's card", [{ key: profileKey(dana.address), oldValue: value, newValue: JSON.stringify({ name: "Not Dana" }) }]],
     ["Bob deletes Dana's card", [{ key: profileKey(dana.address), oldValue: value }]],
   ]) {
-    let result;
-    try {
-      result = await send(bob, { actions });
-    } catch (error) {
-      // The sponsor's own checks may refuse it first; either way nothing lands.
-      result = { ok: false, status: error.status, text: error.message };
-    }
+    // The sponsor signs it; the node's policy must be what refuses it.
+    const result = await send(bob, { actions });
     assert.ok(!result.ok, `${label} was admitted`);
+    assert.ok(result.status >= 400 && result.status < 500, `${label}: refused for the wrong reason (${result.status} ${result.text})`);
     console.log(`  refused: ${label} (${result.status} ${String(result.text).trim().slice(0, 120)})`);
   }
 
