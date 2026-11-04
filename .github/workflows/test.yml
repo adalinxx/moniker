@@ -16,9 +16,9 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
   NODE_VERSION: "24"
   LATTICE_NODE_REPO: 0xLattice/lattice-node
-  LATTICE_NODE_REF: 47c57ae7643363ecf64fa417c4f178bb6775dab7 # the node lattice-sponsor builds on
+  LATTICE_NODE_REF: 9abd15b1bb05a0d4305e83f64c4676a6e296071f # the node lattice-sponsor builds on
   LATTICE_SPONSOR_REPO: 0xLattice/lattice-sponsor
-  LATTICE_SPONSOR_REF: 986f23eceaacbf63f30ff1279e48aa9c186427f7 # pays a purchase for work (lattice-sponsor#1)
+  LATTICE_SPONSOR_REF: 24d8c4def3bd47c45b4cd10115762894e5185ea5 # pays a purchase for work (#1), keeps files for work (--sell-storage)
   LATTICE_SDK_REPO: 0xLattice/lattice-sdk
   LATTICE_SDK_REF: 72157a68271e97ad55571ae08387f0c814758acf
   LATTICE_WALLET_REPO: adalinxx/selfhold-wallet
@@ -207,6 +207,9 @@ jobs:
       - if: matrix.suite == 'protocol'
         name: Moniker against a real node
         run: node e2e/moniker.mjs
+      - if: matrix.suite == 'protocol'
+        name: Profile cards and photos with no coins, through a sponsor
+        run: node e2e/profile.mjs
 
       - if: matrix.suite == 'ui'
         uses: actions/checkout@v4
