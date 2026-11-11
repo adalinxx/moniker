@@ -11,6 +11,7 @@ import * as names from "../sdk/src/records/names.mjs";
 import * as profiles from "../sdk/src/records/profile.mjs";
 import { writeRequest, writeRequestURI } from "../sdk/src/records/wallet.mjs";
 import { accountIcon, createMoniker, isAddress, isHandle, shortAccount, StorageRefused, StorageStopped } from "../sdk/src/index.mjs";
+import { defineMonikerTip } from "../sdk/src/element.mjs";
 import encodeQR from "./vendor/qr.mjs";
 import { selfhold } from "./vendor/selfhold.mjs";
 
@@ -97,16 +98,25 @@ const held = (state, handle) => names.resolve(state, handle);
 // ---------------------------------------------------------------- wallet
 
 let connected = null;
+// Moniker's hosts, for a write on Moniker or a chain above it (each runs those too); for a tip on any
+// other chain, none: the wallet finds that chain's hosts through Nexus.
+const hostsFor = (chain) => (!chain || `${client().chain.join("/")}/`.startsWith(`${chain.join("/")}/`) ? client().hosts() : []);
 // Selfhold's window: each call that needs the person opens it over the page, from a click.
-const web = selfhold({ use: "window", wallet: settings.walletPage, hosts: () => client().hosts(), sponsor: () => settings.sponsor });
+// The fee sponsor prices Moniker's writes: a tip on another chain pays its fee in coins.
+const web = selfhold({ use: "window", wallet: settings.walletPage, hosts: hostsFor, sponsor: (chain) => (!chain || chain.join("/") === client().chain.join("/") ? settings.sponsor : "") });
 // Selfhold for Chrome, through the same calls.
-const chrome = selfhold({ use: "extension", hosts: () => client().hosts() });
+const chrome = selfhold({ use: "extension", hosts: hostsFor });
 /** Selfhold's window, or Selfhold for Chrome where Settings choose it and it is installed. */
 const wallet = () => (settings.wallet === "extension" && window.lattice ? chrome : web);
 const extension = () => wallet() !== web;
 // Each keeps its own account: the page always says which.
 const WALLET_NAME = { web: "Selfhold's window", extension: "Selfhold for Chrome" };
 const walletName = () => WALLET_NAME[extension() ? "extension" : "web"];
+
+// <moniker-tip>: tips from the wallet in use, over whichever client Settings make now.
+defineMonikerTip({ get chain() { return client().chain; }, tip: (...args) => client().tip(...args) }, { wallet: () => wallet() });
+/** A Tip button for `to` (@handle or account): Moniker's coins, or Nexus's. */
+const tipButton = (to) => `<moniker-tip to="${esc(to)}" chains="${esc([...new Set([client().chain.join("/"), "Nexus"])].join(" "))}"></moniker-tip>`;
 
 /**
  * Selfhold for Chrome, for whoever connected it to this site while it was
@@ -529,7 +539,7 @@ async function viewAccount(address, state) {
       <h1 class="account">${avatar(address, profile, 72)}<span class="label">${mine ? "Your account" : "Account"}</span> <span class="mono">${esc(address)}</span></h1>
       ${cardText(profile)}
       <p class="shows">${shows ? `Shown as <a class="mono" href="#/@${esc(shows)}">@${esc(shows)}</a>` : "Shows no handle"}</p>
-      ${mine ? `<a class="pill" href="#/profile" style="margin-top: 12px">Edit profile</a>` : ""}
+      ${mine ? `<a class="pill" href="#/profile" style="margin-top: 12px">Edit profile</a>` : `<div style="margin-top: 12px">${tipButton(address)}</div>`}
       <button class="copy" type="button" data-copy="${esc(address)}">Copy account ID</button>
       <p class="bio">${mine ? "An account is a private key. It owns these names, and is never shown on them." : "This key owns these names."}</p>
       <section class="names">
@@ -644,6 +654,7 @@ async function viewSearch(q, state, { near = true } = {}) {
         <h2 id="points-title">Where it points</h2>
         ${await shownCard(state, entry)}
         ${await pointsAt(state, entry)}
+        ${entry.pointer && entry.pointer !== connected && (await names.handleOf(state, entry.pointer)) === q ? `<div>${tipButton(`@${q}`)}</div>` : ""}
         ${connected && entry.pointer === connected && (await names.handleOf(state, connected)) !== q ? `<div>${showButton(q)}</div>` : ""}
       </section>` : ""}
       ${more.length ? `

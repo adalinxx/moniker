@@ -148,6 +148,10 @@ See the [asset guide](app/brand/README.txt) for colors, spacing, and usage.
 - **Accounts** (`#/account/<address>`): the account's card (photo, name,
   bio, links), the handle it shows, and the names it owns. A name's page
   shows the card of the account it points at, while that account shows it.
+- **Tips**: a name's page, while an account shows the name, and every
+  account's page but your own, have Tip (moniker-sdk's `<moniker-tip>`):
+  pick an amount and whose coins, Moniker's or Nexus's, and Send. It pays
+  that account from your coins, with nothing written.
 - **Profile** (`#/profile`, from My names or your account's page): your
   card, to edit: name, bio, website and links, and a photo to choose,
   preview or remove. A chosen photo is cropped square, at most 512 pixels,
