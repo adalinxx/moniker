@@ -1029,6 +1029,54 @@ test("Selfhold's window buys from a page that shows the price, whom it pays, the
   expect(sent).toHaveLength(1);
 }, { wallet: false });
 
+test("a visitor tips @tia_tips from Selfhold's window, in Moniker's coins or Nexus's: a payment from their coins, writing nothing", async ({ page }) => {
+  const tia = newAccount();
+  await claimAs(tia, "tia_tips", { point: true });
+  await writeAs(tia, await names.showName(await state(), tia.address, "tia_tips"));
+  await until("@tia_tips shown", async () => (await names.handleOf(await state(), tia.address)) === "tia_tips");
+  const onNexus = async (address) => BigInt((await (await fetch(`${stack.node}/api/state/account/${address}?chainPath=Nexus`)).json()).balance ?? 0);
+
+  await withSelfhold(page, "#/names");
+  const address = await newSelfholdAccount(page);
+  await fund(address, 100n);
+  const minerNonce = BigInt((await (await fetch(`${stack.node}/api/state/account/${stack.miner}?chainPath=Nexus`)).json()).nonce ?? 0);
+  await submit(minerAccount, sdk.buildTransfer({ from: stack.miner, to: address, amount: 50n, fee: 1n, nonce: minerNonce, chainPath: ["Nexus"] }));
+  await until("Nexus coins", async () => (await onNexus(address)) >= 50n);
+  const [tiaHere, tiaNexus] = [await balance(tia.address), await onNexus(tia.address)];
+  const records = async () => {
+    let n = 0;
+    for await (const _ of (await state()).list("")) n++;
+    return n;
+  };
+  const before = await records();
+
+  // Shown by Tia's account: a Tip on the name's page.
+  await page.goto(stack.app + "#/@tia_tips");
+  await page.getByRole("button", { name: "Tip", exact: true }).click();
+  await page.getByRole("button", { name: "5 coins" }).click();
+  await expect(page.getByRole("combobox", { name: "Whose coins" })).toHaveValue(stack.chain);
+  await approveInSelfhold(page, page.getByRole("button", { name: "Send 5" }));
+  await expect(page.locator("moniker-tip").getByRole("status")).toHaveText("Sent 5 coins. Thank you!");
+  await until("the tip", async () => (await balance(tia.address)) === tiaHere + 5n);
+  expect(await balance(address)).toBe(95n); // these hosts ask no fee
+  expect(await records()).toBe(before);
+
+  // In Nexus's coins, from the account page.
+  await page.goto(stack.app + `#/account/${tia.address}`);
+  await page.getByRole("button", { name: "Tip", exact: true }).click();
+  await page.getByRole("combobox", { name: "Whose coins" }).selectOption("Nexus");
+  await page.getByRole("button", { name: "10 coins" }).click();
+  await approveInSelfhold(page, page.getByRole("button", { name: "Send 10" }));
+  await expect(page.locator("moniker-tip").getByRole("status")).toHaveText("Sent 10 coins. Thank you!");
+  await until("the Nexus tip", async () => (await onNexus(tia.address)) === tiaNexus + 10n);
+  expect(await onNexus(address)).toBe(40n);
+
+  // Your own account shows no Tip.
+  await page.goto(stack.app + `#/account/${address}`);
+  await expect(page.getByRole("link", { name: "Edit profile" })).toBeVisible();
+  await expect(page.locator("moniker-tip")).toHaveCount(0);
+}, { wallet: false });
+
 test("another wallet pays by request: the page draws it as a QR code and text, and follows the chain to the purchase", async ({ page }) => {
   const seller = newAccount();
   const buyer = newAccount();

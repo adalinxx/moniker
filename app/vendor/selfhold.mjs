@@ -1,15 +1,19 @@
-// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at 4d4c0a8 (npm run build:web), the client
+// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at 62d5f18 (npm run build:web), the client
 // for Selfhold for Chrome and Selfhold's window at wallet.selfhold.app. MIT, see selfhold.LICENSE.
 // src/web/client.ts
 var PROTOCOL = 1;
 var CHANNEL = "selfhold";
 var ADDRESS = "selfhold.web.address";
+var ERRORS_URL = "https://selfhold.app/docs/errors.html";
 var SelfholdError = class extends Error {
   code;
+  /** This code's entry in the docs: its cause, and what to do. For the developer; `message` is for the person. */
+  docUrl;
   constructor(code, message) {
     super(message);
     this.name = "SelfholdError";
     this.code = code;
+    this.docUrl = `${ERRORS_URL}#${code}`;
   }
 };
 var NeedsCoins = class extends SelfholdError {
@@ -163,7 +167,7 @@ function selfhold(options = {}) {
               opened.close();
               return finish({ ok: true, nothing: true });
             }
-            const hosts = route && options.hosts ? await options.hosts() : void 0;
+            const hosts = route && options.hosts ? await options.hosts(asked.params.chainPath) : void 0;
             const sponsor = route && options.sponsor ? await options.sponsor() : void 0;
             if (settled) return;
             opened.postMessage({ channel: CHANNEL, v: PROTOCOL, id, call: asked, ...route ? { route: { ...hosts && { hosts }, ...sponsor && { sponsor } } } : {}, ...account && { account } }, page.origin);
@@ -208,7 +212,7 @@ function selfhold(options = {}) {
         let landed = check;
         if (!landed) {
           if (nonce === void 0) throw new SelfholdError("Failed", "This wallet doesn't say its write's nonce: pass wait() a check.");
-          const hosts = [.../* @__PURE__ */ new Set([...host ? [host] : [], ...options.hosts ? await options.hosts() : []])];
+          const hosts = [.../* @__PURE__ */ new Set([...host ? [host] : [], ...options.hosts ? await options.hosts(chainPath) : []])];
           if (!hosts.length) throw new SelfholdError("Failed", "No host to watch this write at: give selfhold() hosts, or wait() a check.");
           landed = () => nonceLanded(hosts, account, chainPath, BigInt(nonce));
         }
@@ -301,6 +305,7 @@ function selfhold(options = {}) {
   });
 }
 export {
+  ERRORS_URL,
   NeedsCoins,
   PROTOCOL,
   SelfholdError,
