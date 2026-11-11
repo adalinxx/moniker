@@ -1052,6 +1052,7 @@ test("a visitor tips @tia_tips from Selfhold's window, in Moniker's coins or Nex
 
   // Shown by Tia's account: a Tip on the name's page.
   await page.goto(stack.app + "#/@tia_tips");
+  await expect(page.locator("#exact")).toHaveText("@tia_tips");
   await page.getByRole("button", { name: "Tip", exact: true }).click();
   await page.getByRole("button", { name: "5 coins", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Whose coins" })).toHaveValue(stack.chain);
@@ -1063,6 +1064,8 @@ test("a visitor tips @tia_tips from Selfhold's window, in Moniker's coins or Nex
 
   // In Nexus's coins, from the account page.
   await page.goto(stack.app + `#/account/${tia.address}`);
+  // Only the hash changes: wait for the account page, or Tip may be the last page's, still open.
+  await expect(page.locator(".account-page")).toBeVisible();
   await page.getByRole("button", { name: "Tip", exact: true }).click();
   await page.getByRole("combobox", { name: "Whose coins" }).selectOption("Nexus");
   await page.getByRole("button", { name: "10 coins", exact: true }).click();
