@@ -1,4 +1,4 @@
-// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at 62d5f18 (npm run build:web), the client
+// selfhold.js (@selfhold/web) from adalinxx/selfhold-wallet at c6cdb70 (npm run build:web), the client
 // for Selfhold for Chrome and Selfhold's window at wallet.selfhold.app. MIT, see selfhold.LICENSE.
 // src/web/client.ts
 var PROTOCOL = 1;
@@ -168,7 +168,7 @@ function selfhold(options = {}) {
               return finish({ ok: true, nothing: true });
             }
             const hosts = route && options.hosts ? await options.hosts(asked.params.chainPath) : void 0;
-            const sponsor = route && options.sponsor ? await options.sponsor() : void 0;
+            const sponsor = route && options.sponsor ? await options.sponsor(asked.params.chainPath) : void 0;
             if (settled) return;
             opened.postMessage({ channel: CHANNEL, v: PROTOCOL, id, call: asked, ...route ? { route: { ...hosts && { hosts }, ...sponsor && { sponsor } } } : {}, ...account && { account } }, page.origin);
           } catch (error) {

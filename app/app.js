@@ -102,7 +102,8 @@ let connected = null;
 // other chain, none: the wallet finds that chain's hosts through Nexus.
 const hostsFor = (chain) => (!chain || `${client().chain.join("/")}/`.startsWith(`${chain.join("/")}/`) ? client().hosts() : []);
 // Selfhold's window: each call that needs the person opens it over the page, from a click.
-const web = selfhold({ use: "window", wallet: settings.walletPage, hosts: hostsFor, sponsor: () => settings.sponsor });
+// The fee sponsor prices Moniker's writes: a tip on another chain pays its fee in coins.
+const web = selfhold({ use: "window", wallet: settings.walletPage, hosts: hostsFor, sponsor: (chain) => (!chain || chain.join("/") === client().chain.join("/") ? settings.sponsor : "") });
 // Selfhold for Chrome, through the same calls.
 const chrome = selfhold({ use: "extension", hosts: hostsFor });
 /** Selfhold's window, or Selfhold for Chrome where Settings choose it and it is installed. */
